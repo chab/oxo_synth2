@@ -22,7 +22,7 @@ Formats: macOS VST3 + AUv2, iPad AUv3. Currently working on the Windows version.
 Official builds are published on the Oxo Music website:
 
 - macOS 14+ (VST3 + AU, signed and notarized): <https://oxo-music.com/products/oxo_synth2>
-- iPad (AUv3): App Store (link coming)
+- iPad (AUv3): <https://apps.apple.com/us/app/oxo-synth2/id6829692180>
 
 ## Relationship to Synth1
 
