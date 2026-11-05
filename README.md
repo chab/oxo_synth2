@@ -76,6 +76,12 @@ DEVELOPMENT_TEAM = <your Team ID>
 Your Team ID is shown at developer.apple.com > Account > Membership details.
 The file is gitignored, so it stays on your machine.
 
+
+### Windows (VST3)
+
+5 november 2026: In progress.
+
+
 ### Tests
 
 ```sh
