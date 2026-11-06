@@ -133,6 +133,9 @@ struct KnobView: View {
     @State private var dragStart: Int?
     @State private var dragAccum: CGFloat = 0
     @State private var lastY: CGFloat = 0
+    /// A double-tap reset landed during this touch: the drag's later changes
+    /// (finger jitter, touch-up) must not put the old value back (iPad).
+    @State private var resetHeld = false
     @State private var wheelRemainder: Double = 0
 
     var body: some View {
@@ -162,8 +165,12 @@ struct KnobView: View {
             .contentShape(Circle().scale(1.3))
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { g in
+                    guard !resetHeld else { return }
+                    // The live value, not the body's `v`: right after a
+                    // double-tap reset the closure may still hold the old one.
+                    let current = model.values[id]
                     if dragStart == nil {
-                        dragStart = v
+                        dragStart = current
                         dragAccum = 0
                         lastY = g.translation.height
                         model.begin(id)
@@ -173,13 +180,17 @@ struct KnobView: View {
                     lastY = g.translation.height
                     let span = CGFloat(max(1, r.max - r.min))
                     dragAccum += dy * span / (shiftHeld() ? 900 : 180)
-                    model.set(id, (dragStart ?? v) + Int(dragAccum.rounded()))
+                    model.set(id, (dragStart ?? current) + Int(dragAccum.rounded()))
                 }
                 .onEnded { _ in
                     dragStart = nil
+                    resetHeld = false
                     model.end(id)
                 })
-            .simultaneousGesture(TapGesture(count: 2).onEnded { model.setOnce(id, r.def) })
+            .simultaneousGesture(TapGesture(count: 2).onEnded {
+                model.setOnce(id, r.def)
+                if dragStart != nil { resetHeld = true }
+            })
             #if os(macOS)
             .onMouseWheel { event in
                 guard !model.showBrowser, !model.learnActive else { return false }
