@@ -15,6 +15,8 @@ Synth2 aims to keep those sounds playable on modern computers. Open source, so t
 - **Import patches:** All Synth1 patches (`.sy1` files and zip banks) load just like in Synth1.
 - **Carefully modeled with Claude:** Opus 5.5 generated ~ 3 GB of measurement data before modeling every parameter one by one.
 
+Note: the original Synth1 was studied only through its audio output. The binary was never disassembled or decompiled (see the clean-room rule in [AGENTS.md](AGENTS.md#rules)).
+
 Formats: macOS VST3 + AUv2, iPad AUv3. Currently working on the Windows version. Linux ports are welcome: if you're a developer on Linux, fork the repository and open a pull request.
 
 ## Download
