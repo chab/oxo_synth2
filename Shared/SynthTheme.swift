@@ -120,6 +120,11 @@ struct ThemePalette: Equatable {
             "knobBody": "#1B1B1B", "knobGradient": "#181818", "knobDial": "#B5B6B9", "button": "#363630",
             "led": "#FAFFF2", "radio": "#F5FBF3", "displayText": "#C2D3E1", "displayTop": "#161A1A",
             "displayBottom": "#0D100C"])),
+        ("JP-8000 Dark", ThemePalette(hexMap: [
+            "panel": "#191D25", "header": "#24262C", "headerText": "#C6772D", "label": "#E4E7EC",
+            "knobBody": "#1B1B1B", "knobGradient": "#181818", "knobDial": "#B5B6B9", "button": "#363630",
+            "led": "#FAFFF2", "radio": "#F5FBF3", "displayText": "#C2D3E1", "displayTop": "#161A1A",
+            "displayBottom": "#0D100C"])),
         ("Synth1", ThemePalette(hexMap: [
             "panel": "#C7C786", "header": "#3B3B38", "headerText": "#E6E0B8", "label": "#1A1A0F",
             "knobBody": "#171717", "knobGradient": "#212121", "knobDial": "#FF2D2D", "button": "#363630",
