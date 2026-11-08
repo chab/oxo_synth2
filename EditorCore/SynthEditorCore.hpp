@@ -12,6 +12,10 @@
 #include "EditorCore/OxoSynth2Bridge.h"
 #include "EditorCore/Trash.hpp"
 
+#if defined(_WIN32)
+#include "Windows_Build/Source/WindowsPresetIndex.hpp"
+#endif
+
 #include <algorithm>
 #include <fstream>
 #include <string>
@@ -45,6 +49,15 @@ public:
                           const std::string &build = {}) {
         library_.Configure(root, factory, build);
         library_.SetTrash(MoveToTrash);
+#if defined(_WIN32)
+        // Restore the bank index immediately; the browser's Refresh command
+        // still performs a full authoritative filesystem scan on demand.
+        std::vector<s2::PatchBank> cached;
+        if (winindex::Load(root.parent_path(),root,factory,cached)) {
+            library_.AdoptIndex(std::move(cached));
+            savedIndexRevision_ = library_.Revision();
+        }
+#endif
     }
     s2::PatchManager &Library() { return library_; }
 
@@ -195,8 +208,20 @@ public:
         h.rescanLibrary = [](void *c) { C(c)->library_.Rescan(); };
         h.startLibraryScan = [](void *c) { C(c)->library_.StartRescan(); };
         h.libraryRevision = [](void *c) {
-            C(c)->library_.PollRescan();
-            return int32_t(C(c)->library_.Revision());
+            auto* editor = C(c);
+            editor->library_.PollRescan();
+#if defined(_WIN32)
+            const int revision = editor->library_.Revision();
+            if (revision > 0 && revision != editor->savedIndexRevision_) {
+                // Writes, imports and explicit refreshes update the index.
+                // Even when cache writing fails, don't retry every 50ms.
+                editor->savedIndexRevision_ = revision;
+                winindex::Save(editor->library_.Root().parent_path(),
+                               editor->library_.Root(),editor->library_.Factory(),
+                               editor->library_.Library().Banks());
+            }
+#endif
+            return int32_t(editor->library_.Revision());
         };
         h.libraryScanning = [](void *c) { return int32_t(C(c)->library_.Scanning()); };
         h.libraryNotice = [](void *c) { return C(c)->Keep(C(c)->library_.TakeNotice()); };
@@ -241,6 +266,9 @@ public:
 protected:
     std::string ProgramBank(size_t bank) const { return s2::ProgramBank(library_.Library(), library_.Root(), bank); }
 
+#if defined(_WIN32)
+    int savedIndexRevision_ = 0;
+#endif
     std::string patchName_ = "Init";
     std::string patchColor_ = "default";
     int32_t serial_ = 0;

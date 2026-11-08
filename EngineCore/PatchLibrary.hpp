@@ -275,6 +275,10 @@ public:
         names_[key] = {size, time, name};
         return true;
     }
+    void Forget(const std::filesystem::path &path) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        names_.erase(path.string());
+    }
 
 private:
     struct Entry {
@@ -322,6 +326,12 @@ public:
     }
 
     const std::vector<PatchBank> &Banks() const { return banks_; }
+
+#if defined(_WIN32)
+    // Restore a previously scanned Windows-only preset index. The index
+    // contains names and paths, never preset bytes or synthesis parameters.
+    void AdoptIndex(std::vector<PatchBank> banks) { banks_ = std::move(banks); }
+#endif
 
     int FindBySource(const std::string &source) const {
         for (size_t i = 0; i < banks_.size(); ++i)
@@ -756,6 +766,15 @@ public:
     const std::filesystem::path &Factory() const { return factory_; }
     const PatchLibrary &Library() const { return lib_; }
 
+#if defined(_WIN32)
+    void AdoptIndex(std::vector<PatchBank> banks) {
+        if (scanned_) return;
+        lib_.AdoptIndex(std::move(banks));
+        scanned_ = true;
+        ++revision_;
+    }
+#endif
+
     void Rescan() {
         EnsureRoot();
         ++generation_;
@@ -861,7 +880,11 @@ public:
             const std::filesystem::path temp = dir / (".oxo_move_" + std::to_string(s) + ".tmp");
             std::filesystem::rename(file, temp, ec);
             ok = !ec;
-            if (ok) renames.push_back({temp, final});
+            if (ok) {
+                PatchNameCache::Shared().Forget(file);
+                PatchNameCache::Shared().Forget(final);
+                renames.push_back({temp, final});
+            }
         }
         for (const auto &[temp, final] : renames) {
             std::filesystem::rename(temp, final, ec);

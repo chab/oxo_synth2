@@ -8,7 +8,11 @@
 #include "EngineCore/PatchLibrary.hpp"
 
 #include <cstdlib>
+#if defined(_WIN32)
+#include "Windows_Build/Source/WindowsStorage.hpp"
+#else
 #include <dlfcn.h>
+#endif
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -17,24 +21,36 @@
 namespace oxo::storage {
 
 inline std::filesystem::path Root() {
+#if defined(_WIN32)
+    return win::Chosen().data;
+#else
     const char *home = std::getenv("HOME");
     return std::filesystem::path(home ? home : "") / "Library/Application Support" / OXO_DATA_FOLDER;
+#endif
 }
 
 #ifdef OXO_LIBRARY_FOLDER
 // mac bank library: ~/Music/<OXO_LIBRARY_FOLDER> (Oxo Drums' "~/Music/Oxo
 // Music/<product>" convention), the only folder read; banks get in by Import.
 inline std::filesystem::path LibraryRoot() {
+#if defined(_WIN32)
+    return win::Chosen().library;
+#else
     const char *home = std::getenv("HOME");
     return std::filesystem::path(home ? home : "") / "Music" / OXO_LIBRARY_FOLDER;
+#endif
 }
 
 // The factory bank: <this bundle>/Contents/Resources/Synth2 Factory, found
 // from our own binary (the VST3, or the copy nested in the AUv2 component).
 inline std::filesystem::path FactoryRoot() {
+#if defined(_WIN32)
+    return win::Factory();
+#else
     Dl_info info{};
     if (!dladdr(reinterpret_cast<const void *>(&FactoryRoot), &info) || !info.dli_fname) return {};
     return std::filesystem::path(info.dli_fname).parent_path().parent_path() / "Resources" / s2::kFactoryBankName;
+#endif
 }
 #endif
 
