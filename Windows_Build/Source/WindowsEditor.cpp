@@ -181,62 +181,6 @@ void darkButton(Graphics& g, Color face, float x,float y,float w,float h, bool h
     Pen edge(Color(170,0,0,0),1.f); // Identical outline when hovered.
     g.DrawPath(&edge,&path);
 }
-// A compact parser for PatchManager::Json(). Only fields used by the browser
-// are consumed, all other JSON values are skipped. No third-party dependency.
-struct Reader {
-    const std::string& s;
-    size_t p=0;
-    void ws() { while(p<s.size() && (s[p]==' '||s[p]=='\n'||s[p]=='\r'||s[p]=='\t')) ++p; }
-    bool eat(char c) { ws(); if(p<s.size() && s[p]==c) {++p; return true;} return false; }
-    static void appendUtf8(std::string& out, unsigned v) {
-        if (v<0x80) out+=char(v);
-        else if(v<0x800) {out+=char(0xc0|(v>>6));out+=char(0x80|(v&63));}
-        else {out+=char(0xe0|(v>>12));out+=char(0x80|((v>>6)&63));out+=char(0x80|(v&63));}
-    }
-    bool str(std::string& out) {
-        out.clear(); if(!eat('"')) return false;
-        while(p<s.size()) {
-            char c=s[p++]; if(c=='"') return true;
-            if(c!='\\') {out+=c;continue;}
-            if(p==s.size()) return false;
-            char e=s[p++];
-            switch(e) {
-                case '"': out+='"';break; case '\\':out+='\\';break;
-                case '/':out+='/';break;case 'n':out+='\n';break;case 'r':out+='\r';break;case 't':out+='\t';break;
-                case 'u': {
-                    if(p+4>s.size()) return false;
-                    unsigned u=0;
-                    for(int i=0;i<4;i++) {char d=s[p++];u<<=4;
-                        if(d>='0'&&d<='9') u+=d-'0';
-                        else if(d>='A'&&d<='F') u+=d-'A'+10;
-                        else if(d>='a'&&d<='f') u+=d-'a'+10;
-                        else return false;
-                    }
-                    appendUtf8(out,u);break;
-                }
-                default:return false;
-            }
-        }
-        return false;
-    }
-    bool skip() {
-        ws(); if(p>=s.size()) return false;
-        if(s[p]=='"') {std::string unused;return str(unused);}
-        if(eat('{')) {
-            if(eat('}')) return true;
-            do {std::string key;if(!str(key)||!eat(':')||!skip())return false;} while(eat(','));
-            return eat('}');
-        }
-        if(eat('[')) {
-            if(eat(']')) return true;
-            do {if(!skip())return false;} while(eat(','));
-            return eat(']');
-        }
-        while(p<s.size() && s[p]!=',' && s[p]!=']' && s[p]!='}' && s[p]!=' ' && s[p]!='\n') ++p;
-        return true;
-    }
-};
-
 // ThemeStore.shared: one themes.json per process, shared by every editor.
 // remember() writes once the edit settles (the theme editor streams edits).
 struct SharedThemes {
@@ -295,6 +239,7 @@ WindowsEditor::WindowsEditor(OxoSynth2Controller* controller)
     for(size_t i=0;i<colors_.size();++i) colors_[i]=rgb(int(theme_[i]));
     if(hooks_.setThemeText) hooks_.setThemeText(hooks_.ctx,themes::StateText(theme_).c_str());
     favouritesReadable_=winfav::Load(storage::Root(),favourites_);
+    favouritesChanged();
 }
 WindowsEditor::~WindowsEditor() {
     sharedThemes().flush(true);
@@ -1010,55 +955,35 @@ void WindowsEditor::refreshBanks() {
     if(knownRevision_<=0 || !hooks_.libraryJSON) return;
     const char* data=hooks_.libraryJSON(hooks_.ctx);
     if(!data) return;
-    const std::string json(data);
-    Reader r{json};
-    if(!r.eat('{')) return;
+    json::Value root;
+    if(!json::Parse(data,root) || !root.IsObject()) return;
     std::vector<Bank> scanned;
     std::string libraryRoot;
-    do {
-        if(r.eat('}')) break;
-        std::string key;
-        if(!r.str(key)||!r.eat(':')) return;
-        if(key=="root") {if(!r.str(libraryRoot))return;}
-        else if(key!="banks") {if(!r.skip())return;}
-        else {
-            if(!r.eat('['))return;
-            while(!r.eat(']')) {
-                if(!r.eat('{'))return;
-                Bank b;
-                do {
-                    if(r.eat('}'))break;
-                    std::string k;
-                    if(!r.str(k)||!r.eat(':'))return;
-                    if(k=="name") {if(!r.str(b.name))return;}
-                    else if(k=="source") {if(!r.str(b.source))return;}
-                    else if(k=="readOnly") {
-                        r.ws();
-                        if(json.compare(r.p,4,"true")==0){b.readOnly=true;r.p+=4;}
-                        else if(json.compare(r.p,5,"false")==0){r.p+=5;}
-                        else return;
-                    } else if(k=="slots") {
-                        if(!r.eat('['))return;
-                        while(!r.eat(']')) {
-                            std::string slot;
-                            if(!r.str(slot))return;
-                            b.slots.push_back(std::move(slot));
-                            if(!r.eat(',')) {if(!r.eat(']'))return;break;}
-                        }
-                    } else if(!r.skip())return;
-                    if(!r.eat(',')){if(!r.eat('}'))return;break;}
-                } while(true);
-                scanned.push_back(std::move(b));
-                if(!r.eat(',')){if(!r.eat(']'))return;break;}
-            }
+    if(const auto* v=root.Find("root"); v && v->IsString()) libraryRoot=v->string;
+    if(const auto* list=root.Find("banks"); list && list->type==json::Value::Type::Array) {
+        for(const auto& item:list->array) {
+            Bank b;
+            if(const auto* v=item.Find("name"); v && v->IsString()) b.name=v->string;
+            if(const auto* v=item.Find("source"); v && v->IsString()) b.source=v->string;
+            if(const auto* v=item.Find("readOnly")) b.readOnly=v->type==json::Value::Type::Bool && v->boolean;
+            if(const auto* v=item.Find("slots"); v && v->type==json::Value::Type::Array)
+                for(const auto& slot:v->array) b.slots.push_back(slot.IsString() ? slot.string : std::string());
+            scanned.push_back(std::move(b));
         }
-        if(!r.eat(',')){if(!r.eat('}'))return;break;}
-    } while(true);
+    }
     // Backend order/indices remain unchanged. Natural sort is UI-only, so
     // the .sy1 slot numbers, host state and bank hook indices are untouched.
     const std::string previousSelection = selectedBank_>=0 ? bankKey(selectedBank_) : std::string();
     libraryRoot_=std::move(libraryRoot);
     banks_=std::move(scanned);
+    // Keys and sort names once per refresh, not per painted row.
+    bankByKey_.clear();
+    for(size_t i=0;i<banks_.size();++i) {
+        auto& b=banks_[i];
+        b.key=winfav::BankKey(std::filesystem::path(libraryRoot_),std::filesystem::path(b.source),b.readOnly);
+        b.wideName=toWide(b.name.c_str());
+        bankByKey_.emplace(b.key,int(i));
+    }
     if(!previousSelection.empty()) {
         selectedBank_=-1;
         for(size_t i=0;i<banks_.size();i++)
@@ -1071,8 +996,7 @@ void WindowsEditor::refreshBanks() {
         // Keep the real read-only factory bank immediately after Favourites.
         if(a==0 && banks_[size_t(a)].readOnly) return true;
         if(b==0 && banks_[size_t(b)].readOnly) return false;
-        return winfav::NaturalLess(toWide(banks_[size_t(a)].name.c_str()),
-                                   toWide(banks_[size_t(b)].name.c_str()));
+        return winfav::NaturalLess(banks_[size_t(a)].wideName,banks_[size_t(b)].wideName);
     });
     int loadedBank=-1,loadedSlot=-1;
     if(hooks_.loadedProgram) hooks_.loadedProgram(hooks_.ctx,&loadedBank,&loadedSlot);
@@ -1112,26 +1036,24 @@ int WindowsEditor::displayBankNumber(int bank) const {
     return it==bankOrder_.end()?bank+1:int(it-bankOrder_.begin())+1;
 }
 std::string WindowsEditor::bankKey(int bank) const {
-    if(bank<0 || bank>=int(banks_.size()))return {};
-    const auto& b=banks_[size_t(bank)];
-    return winfav::BankKey(std::filesystem::path(libraryRoot_),
-                           std::filesystem::path(b.source),b.readOnly);
+    return bank<0 || bank>=int(banks_.size()) ? std::string() : banks_[size_t(bank)].key;
+}
+std::string WindowsEditor::favouriteKey(const std::string& bank,int slot) {
+    return bank+'\n'+std::to_string(slot);
+}
+void WindowsEditor::favouritesChanged() {
+    favouriteKeys_.clear();
+    for(const auto& f:favourites_) favouriteKeys_.insert(favouriteKey(f.bank,f.slot));
 }
 bool WindowsEditor::resolveFavourite(const winfav::Item& f,int& bank,int& slot) const {
-    for(size_t b=0;b<banks_.size();b++) {
-        if(bankKey(int(b))!=f.bank)continue;
-        if(f.slot<0 || f.slot>=int(banks_[b].slots.size()) || banks_[b].slots[size_t(f.slot)].empty())
-            return false;
-        bank=int(b);slot=f.slot;return true;
-    }
-    return false;
+    const auto it=bankByKey_.find(f.bank);
+    if(it==bankByKey_.end())return false;
+    const auto& slots=banks_[size_t(it->second)].slots;
+    if(f.slot<0 || f.slot>=int(slots.size()) || slots[size_t(f.slot)].empty())return false;
+    bank=it->second;slot=f.slot;return true;
 }
 bool WindowsEditor::isFavourite(int bank,int slot) const {
-    if(bank<0 || slot<0)return false;
-    const auto key=bankKey(bank);
-    return std::any_of(favourites_.begin(),favourites_.end(),[&](const winfav::Item& f){
-        return f.bank==key && f.slot==slot;
-    });
+    return bank>=0 && slot>=0 && favouriteKeys_.count(favouriteKey(bankKey(bank),slot));
 }
 void WindowsEditor::toggleFavourite() {
     if(!favouritesReadable_) {
@@ -1150,6 +1072,7 @@ void WindowsEditor::toggleFavourite() {
                         L"Synth2 Favourites",MB_OK|MB_ICONWARNING);return;
         }
         favourites_=std::move(revised);
+        favouritesChanged();
         selectedSlot_=std::min(selectedSlot_,int(favourites_.size())-1);
         repaint();return;
     }
@@ -1177,6 +1100,7 @@ void WindowsEditor::toggleFavourite() {
                     L"Synth2 Favourites",MB_OK|MB_ICONWARNING);return;
     }
     favourites_=std::move(revised);
+    favouritesChanged();
     repaint();
 }
 void WindowsEditor::showAbout() {

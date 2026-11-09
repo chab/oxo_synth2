@@ -11,6 +11,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 #ifdef _WIN32
 #include <windows.h>
@@ -136,6 +137,7 @@ struct Parser {
 
 inline bool Parse(const std::string& json,std::vector<Item>& items) {
     Parser r{json};std::vector<Item> result;
+    std::unordered_set<std::string> seen; // duplicates dropped in O(1), not by rescanning the list
     bool hasEntries=false,hasFormat=false;
     if(!r.eat('{'))return false;
     if(!r.eat('}'))do {
@@ -157,7 +159,7 @@ inline bool Parse(const std::string& json,std::vector<Item>& items) {
                 // Handle a final closing } when the last key had no comma.
                 if(r.p>0 && json[r.p-1]!='}' && !r.eat('}'))return false;
                 if(!bank || !slot || it.bank.empty() || it.slot<0 || it.slot>=128)return false;
-                if(std::none_of(result.begin(),result.end(),[&](const Item& x){return x.bank==it.bank&&x.slot==it.slot;}))
+                if(seen.insert(it.bank+'\n'+std::to_string(it.slot)).second)
                     result.push_back(std::move(it));
                 if(result.size()>100000)return false;
             }while(r.eat(',') && !r.eat(']'));

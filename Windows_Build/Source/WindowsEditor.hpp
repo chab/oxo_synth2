@@ -10,6 +10,8 @@
 #include <vector>
 #include <array>
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
 #include "EditorCore/Themes.hpp"
 #include "WindowsFavourites.hpp"
 #include "WindowsModule.hpp"
@@ -47,6 +49,8 @@ private:
         std::string source;
         bool readOnly = false;
         std::vector<std::string> slots;
+        std::string key;      // winfav::BankKey, computed once per refresh
+        std::wstring wideName; // for the natural sort
     };
     void constructLayout();
     void knob(int id, const wchar_t* label, float sx, float sy, float x, float y, float size = 24);
@@ -95,6 +99,8 @@ private:
     std::string bankKey(int bank) const;
     bool resolveFavourite(const winfav::Item& favourite,int& bank,int& slot) const;
     bool isFavourite(int bank,int slot) const;
+    static std::string favouriteKey(const std::string& bank, int slot);
+    void favouritesChanged();
     void setValueOnce(int id, int value);
     void cycle(int id, int step);
     void mouseDown(float x, float y, bool doubleClick);
@@ -165,6 +171,8 @@ private:
     std::vector<int> bankOrder_;
     std::string libraryRoot_;
     std::vector<winfav::Item> favourites_;
+    std::unordered_set<std::string> favouriteKeys_;  // favouriteKey of each favourite
+    std::unordered_map<std::string, int> bankByKey_; // bank key -> index in banks_
     bool favouritesReadable_ = true;
     mutable int loadedBankForPaint_ = -1;
     mutable int loadedSlotForPaint_ = -1;
