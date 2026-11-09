@@ -102,7 +102,7 @@ VC++ redistributable needed), validates it and packs it with
 `README.pdf`, raw bundle). The installer puts the plugin in `C:\Program
 Files\Common Files\VST3`; `--help` lists the options.
 
-Per-user files: settings, themes and favourites in
+Per-user files: settings and themes in
 `%APPDATA%\Oxo Music\Oxo Synth2\`, the bank library in
 `Documents\Oxo Music\Oxo Synth2\`. Themes are saved in `themes.json` (the
 same format as on the Mac); theme files dropped into a `Themes\` folder

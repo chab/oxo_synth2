@@ -64,7 +64,7 @@ Synth2"; iPad (iOS 17, iPad only) app `com.oxo.music.oxosynth2`, appex
 `group.com.oxo.music.oxosynth2`. The panel title reads "Synth2".
 Per-user settings: mac `~/Library/Application Support/Oxo Music/Oxo Synth2`
 (`midi_mappings.json`, `themes.json`, `settings.json`), iPad the appex's
-container, Windows `%APPDATA%\Oxo Music\Oxo Synth2` (+ `favourites.json`,
+container, Windows `%APPDATA%\Oxo Music\Oxo Synth2` (+
 `preset_index.bin`, theme files `Themes\*.json`: one flat hex map each,
 listed after the saved themes, never written). Bank library: mac `~/Music/Oxo Music/Oxo Synth2`, iPad
 `<app group>/Synth2`, Windows `Documents\Oxo Music\Oxo Synth2`. Windows
@@ -157,7 +157,8 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   `WindowsTrash.cpp` (Recycle Bin; false where Windows cannot recycle),
   `WindowsStorage.hpp` / `StorageSelection.hpp` (folders, portable mode),
   `WindowsPresetIndex.hpp` (bank index cache, rescanned in the background
-  on every editor / browser open), favourites, zoom, `WindowsPrompt.hpp`.
+  on every editor / browser open), zoom, `WindowsPrompt.hpp`. The browser
+  is the mac's (no favourites: removed), incl. drag and drop.
   Windows-only code in shared files stays under `#if defined(_WIN32)` /
   `SMTG_OS_WINDOWS`.
 - `docs/images/` — README pictures (`synth2_preview.jpg`).
@@ -217,14 +218,23 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   notarization is the default. Under a sandbox `pkgbuild` prints `write:
   Permission denied` lines but succeeds. While testing the pkg, remove the
   ~/Library dev copies (same UIDs twice).
-- UPDATE CHECK (mac): menu > "Check for updates…" fetches
-  `https://<OXO_VENDOR_WEBSITE>/releases.json` (`{ products: { <slug>: {
-  page, mac: { version, build, url }, win: … } } }`), looks up
-  `OXO_UPDATE_PRODUCT` (empty = no menu entry: forks, iPad, tools) +
-  `mac`, compares with CFBundleShortVersionString / CFBundleVersion: newer
-  = higher BUILD only (the version is only shown), absent entry = latest.
-  In-panel `UpdateDialog`. Releasing an official mac build = bump
-  `oxo_synth2: mac:` in the oxo-music.com site's `config/releases.yml`.
+- UPDATE CHECK (mac + Windows): menu > "Check for updates…" (after a
+  divider) fetches `https://<OXO_VENDOR_WEBSITE>/releases.json` (`{
+  products: { <slug>: { page, mac: { version, build, url }, win: … } } }`),
+  looks up `OXO_UPDATE_PRODUCT` (empty = no menu entry: forks, iPad, tools)
+  + its platform (`mac` / `win`), compares with this build: newer = higher
+  BUILD only (the version is only shown), absent entry = latest. Mac: Swift
+  `UpdateCheck` (CFBundleShortVersionString / CFBundleVersion), in-panel
+  `UpdateDialog`. Windows: `EditorCore/UpdateCheck.hpp` (same rules and
+  texts, `UpdateCheckTests` compares them with the Swift file) +
+  `Windows_Build/Source/WindowsHttp.hpp` (WinHTTP GET on a worker that
+  closing the editor cancels and joins: no thread outlives the plugin), LCD
+  "Checking…", then a message box ("Open the download page?").
+  RELEASES: one version line for every platform (Identity.xcconfig; one
+  build number = one commit, tag it, never reused); releasing a platform =
+  set THAT platform's entry (`oxo_synth2: mac:` / `win:`) in the
+  oxo-music.com site's `config/releases.yml`, leave the others: platforms
+  may sit on different builds, each check reads only its own entry.
 
 ## Parameters and state
 
@@ -354,7 +364,12 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   full (LCD: "Bank is full (128 patches): cannot add a patch"), -2 =
   refused. The browser stays on the source bank (favorites workflow).
   Factory patches are draggable for copying only (no move / drop inside
-  the factory bank, never a copy into it).
+  the factory bank, never a copy into it). Windows: the same in its own
+  window (`dragMove` / `dragEnd`: a patch click acts on RELEASE so a press
+  can become a drag past SM_CXDRAG; label under the pointer; cursors =
+  arrow for a move, arrow + "+" (`makeCopyCursor`, drawn: no stock one) for
+  a copy, IDC_NO elsewhere; Esc / capture loss cancel; indices found again
+  by bank source at the drop).
 - DELETE (`PatchManager::DeleteBank`, hook `deleteBank`; patches: Swift
   `deleteSlot`): mac moves to the Trash, iPad deletes (`Trash.hpp` returns
   false on iOS: a container Trash nobody can empty). A bank = its folder,
@@ -369,8 +384,8 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   (`libraryMenu`): mac right click = [Export bank…,] Show in Finder[,
   Delete / Delete bank…]; iPad long press = [Export bank…,] [Delete /
   Delete bank…] (no delete on the factory bank); Windows right click = the
-  mac's menu with "Show in Explorer" (`showLibraryMenu`; a favourite: Show
-  only; bank delete = MessageBox confirmation, Recycle Bin). Rename banks =
+  mac's menu with "Show in Explorer" (`showLibraryMenu`; bank delete =
+  MessageBox confirmation, Recycle Bin). Rename banks =
   Finder (mac only).
 - SCAN SPEED (measured on 150 banks x 128 = 19,200 .sy1): `PatchNameCache`
   (process-wide, path + size + mtime) → only new / changed files are

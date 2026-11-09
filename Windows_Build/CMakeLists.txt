@@ -88,7 +88,7 @@ target_include_directories(OxoSynth2VST3 PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 # Native GDI+ renders the same SwiftUI design coordinates without introducing
 # a separate plugin framework or changing Steinberg's controller architecture.
-target_link_libraries(OxoSynth2VST3 PRIVATE sdk zlibstatic shell32 ole32 gdiplus user32 gdi32 comdlg32)
+target_link_libraries(OxoSynth2VST3 PRIVATE sdk zlibstatic shell32 ole32 gdiplus user32 gdi32 comdlg32 winhttp)
 
 # Match the original plugin's bundled factory and starter banks (unaltered).
 file(GLOB OXO_FACTORY_PATCHES CONFIGURE_DEPENDS "${OXO_ROOT}/Shared/Resources/Synth2 Factory/*.sy1")

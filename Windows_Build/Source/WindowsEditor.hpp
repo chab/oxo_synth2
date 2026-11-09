@@ -10,11 +10,10 @@
 #include <vector>
 #include <array>
 #include <memory>
-#include <unordered_map>
-#include <unordered_set>
+#include <filesystem>
 #include "EditorCore/Themes.hpp"
-#include "WindowsFavourites.hpp"
 #include "WindowsModule.hpp"
+#include "WindowsHttp.hpp"
 
 namespace oxo {
 class OxoSynth2Controller;
@@ -49,7 +48,6 @@ private:
         std::string source;
         bool readOnly = false;
         std::vector<std::string> slots;
-        std::string key;      // winfav::BankKey, computed once per refresh
         std::wstring wideName; // for the natural sort
     };
     void constructLayout();
@@ -84,6 +82,8 @@ private:
     void showMainMenu(int x, int y);
     void showThemeMenu(int x, int y);
     void showThemeEditor();
+    void checkForUpdates();
+    void updateArrived(); // kUpdateMessage: releases.json came (or not)
     void appendThemes(HMENU menu, std::vector<themes::Palette>& picks) const;
     bool pickTheme(int command, const std::vector<themes::Palette>& picks);
     void setTheme(const themes::Palette& palette, bool fromThemeEditor = false);
@@ -93,14 +93,14 @@ private:
     void showFileDialog(bool save);
     void showImportDialog(int screenX, int screenY);
     void refreshBanks();
-    void toggleFavourite();
     static bool isVersionBox(float x, float y);
     int displayBankNumber(int bank) const;
-    std::string bankKey(int bank) const;
-    bool resolveFavourite(const winfav::Item& favourite,int& bank,int& slot) const;
-    bool isFavourite(int bank,int slot) const;
-    static std::string favouriteKey(const std::string& bank, int slot);
-    void favouritesChanged();
+    int bankRowOf(int bank) const;       // its row in the bank list, -1 = not listed
+    void scrollBankIntoView(int bank);
+    int bankBySource(const std::string& source) const; // -1 = none
+    int bankNow(const std::string& source); // the same, after adopting a newer scan
+    void adoptLibrary();
+    std::wstring slotText(int bank, int slot) const; // "NNN:name"
     void setValueOnce(int id, int value);
     void cycle(int id, int step);
     void mouseDown(float x, float y, bool doubleClick);
@@ -109,9 +109,14 @@ private:
     void mouseUp();
     void wheel(int direction, float x, float y);
     void browserClick(float x, float y, bool doubleClick);
+    void slotClick(int index, bool doubleClick);
+    void dragMove(float x, float y);
+    void dragEnd(bool drop); // false = cancelled
+    Gdiplus::RectF dragLabelRect() const;
+    HCURSOR dragCursor();
     void openBrowser(bool writing);
     void closeBrowser();
-    int bankRowAt(float x, float y) const; // bank (or kFavouritesBank / kNewUserBank) under a point, -1 = none
+    int bankRowAt(float x, float y) const; // bank (or kNewUserBank) under a point, -1 = none
     int slotAt(float x, float y) const;    // slot of the shown bank under a point, -1 = none
     bool showLibraryMenu(float x, float y, int screenX, int screenY); // false = not over a row
     void revealInExplorer(const std::string& utf8Path) const;
@@ -171,15 +176,16 @@ private:
     int dragId_ = -1;
     float dragStartY_ = 0;
     int dragStartValue_ = 0;
+    static constexpr UINT kUpdateMessage = WM_APP + 1;
+    win::HttpGet updateCheck_; // "Check for updates": releases.json in the background
     std::wstring flashText_;
     ULONGLONG flashUntil_ = 0; // GetTickCount64 deadline, 0 = no flash
-    static constexpr int kFavouritesBank = -2;
     // Write dialog: the proposed "User" bank the library lacks (a last row;
     // the write creates the folder). Never passed to a hook.
     static constexpr int kNewUserBank = -3;
     int userBank() const;           // the library's "User" bank, -1 = none
     bool offersNewUserBank() const; // write dialog shows the kNewUserBank row
-    int bankRowCount() const;       // browser bank rows incl. Favourites (+ new User)
+    int bankRowCount() const;       // browser bank rows (+ new User)
     int selectedBank_ = -1;
     int selectedSlot_ = -1;
     int bankScroll_ = 0;
@@ -197,10 +203,18 @@ private:
     std::vector<Bank> banks_;
     std::vector<int> bankOrder_;
     std::string libraryRoot_;
-    std::vector<winfav::Item> favourites_;
-    std::unordered_set<std::string> favouriteKeys_;  // favouriteKey of each favourite
-    std::unordered_map<std::string, int> bankByKey_; // bank key -> index in banks_
-    bool favouritesReadable_ = true;
+    // A press on a patch in the browser: a click on release, or a drag.
+    struct SlotPress {
+        bool active = false, dragging = false;
+        int bank = -1, slot = -1;
+        std::string source;  // the bank's: found again after a rescan
+        POINT start{};       // screen, for the drag threshold
+        float x = 0, y = 0;  // the pointer, design coordinates
+        std::wstring label;  // "NNN:name", drawn under the pointer
+    };
+    SlotPress press_;
+    int dropSlot_ = -1, dropBank_ = -1; // the drag's move / copy target
+    HCURSOR copyCursor_ = nullptr;      // made on first use
     mutable int loadedBankForPaint_ = -1;
     mutable int loadedSlotForPaint_ = -1;
 };
