@@ -96,7 +96,8 @@ private:
     void showFileDialog(bool save);
     void showImportDialog(int screenX, int screenY);
     void refreshBanks();
-    static bool isVersionBox(float x, float y);
+    bool isVersionBox(float x, float y) const;
+    float versionLeft_ = 593.f; // the version box's left edge, sized to its text in drawStatic
     int displayBankNumber(int bank) const;
     int bankRowOf(int bank) const;       // its row in the bank list, -1 = not listed
     void scrollBankIntoView(int bank);

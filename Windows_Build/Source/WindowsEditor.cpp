@@ -994,11 +994,18 @@ void WindowsEditor::drawStatic(Graphics& g) {
     fill(g,p[kPanel],0,0,kDesignWidth,kDesignHeight);
     text(g,L"Synth2",8,5,94,23,20,p[kLabel],true);
     text(g,L"Virtual Analog",84,7,135,20,12,muted(p[kLabel],.75f));
-    fill(g,rgb(0xAD0F0C),593,5,168,20);
-    stroke(g,rgb(0x101010),593,5,168,20);
-    // SynthPanelView's version box; the version comes from Identity.xcconfig only.
-    text(g,L"V"+toWide(OXO_VERSION)+L"  a Synth1 recreation",
-         596,6,163,18,10,rgb(0xFFFFFF),true,true);
+    // SynthPanelView's version box: "V1.1.2(6)  a Synth1 recreation" (the
+    // build only when known), from Identity.xcconfig; sized to its text
+    // (10 px each side), right edge fixed.
+    const int build=std::atoi(OXO_BUILD_NUMBER);
+    const std::wstring version=L"V"+toWide(OXO_VERSION)+(build>0 ? L"("+std::to_wstring(build)+L")" : L"")+
+        L"  a Synth1 recreation";
+    const float ink=textCache_ ? textCache_->get(version,10.8f,400.f,false).ink.Width : 160.f; // text()'s size for 10
+    const float boxWidth=std::clamp(ink+20.f,168.f,400.f);
+    versionLeft_=761.f-boxWidth;
+    fill(g,rgb(0xAD0F0C),versionLeft_,5,boxWidth,20);
+    stroke(g,rgb(0x101010),versionLeft_,5,boxWidth,20);
+    text(g,version,versionLeft_+3,6,boxWidth-6,18,10,rgb(0xFFFFFF),true,true);
     struct Section {float x,y,w,h;const wchar_t* name;};
     static constexpr Section sections[]={
         {6,34,312,240,L"Oscillators"},{6,278,312,130,L"LFO"},
@@ -1394,8 +1401,8 @@ int WindowsEditor::displayBankNumber(int bank) const {
     const int row=bankRowOf(bank);
     return row>=0 ? row : bank;
 }
-bool WindowsEditor::isVersionBox(float x,float y) {
-    return x>=593.f && x<762.f && y>=2.f && y<31.f;
+bool WindowsEditor::isVersionBox(float x,float y) const {
+    return x>=versionLeft_ && x<762.f && y>=2.f && y<31.f;
 }
 
 void WindowsEditor::updateEditControl() {
