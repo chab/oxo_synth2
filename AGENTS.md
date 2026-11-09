@@ -424,7 +424,10 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   defaults).
 - Bottom LCD: line 1 "NNN:name" (click = browser) + ◀ ▶ (next / previous
   NON-EMPTY slot, rolls over banks), line 2 = bank "NN:name" or a 1.5 s
-  readout ("filter freq: 64", learn / library messages). write = write
+  readout ("filter freq: 64", learn / library messages). Windows: the
+  same (`WindowsEditor::show` / `flash`: panel edits only, learn, write,
+  delete, export, import, all notes off, the library notice 10 s, worded
+  "Recycle Bin"). write = write
   dialog; menu = Initialize patch | Load / Save patch file… | MIDI Learn |
   Themes… | Check for updates… (mac). The version box in the title band
   opens the GitHub project (`SynthPanelView.projectURL`).

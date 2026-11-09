@@ -832,7 +832,11 @@ public:
             for (const auto &x : v) s += (s.empty() ? "" : ", ") + x;
             return s;
         };
+#if defined(_WIN32)
+        if (!trashed_.empty()) n = list(trashed_) + " imported and moved to the Recycle Bin";
+#else
         if (!trashed_.empty()) n = list(trashed_) + " imported and moved to Trash";
+#endif
         if (!removed_.empty()) n += (n.empty() ? "" : "; ") + list(removed_) + " imported (zip removed)";
         trashed_.clear(), removed_.clear();
         return n;

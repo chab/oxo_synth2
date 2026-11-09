@@ -335,11 +335,16 @@ std::wstring WindowsEditor::formatted(int id) const {
     return toWide(hooks_.formatValue(hooks_.ctx,id,value(id)));
 }
 std::wstring WindowsEditor::patchName() const { return toWide(hooks_.patchName ? hooks_.patchName(hooks_.ctx) : "Init"); }
-std::wstring WindowsEditor::readout() const {
-    if(selectedId_ < 0) return L"";
-    std::wstring out = toWide(hooks_.displayName ? hooks_.displayName(hooks_.ctx,selectedId_) : "");
-    out+=L":  "; out+=formatted(selectedId_);
-    return out;
+void WindowsEditor::flash(const std::wstring& text,unsigned milliseconds) {
+    if(text.empty() && flashText_.empty()) return;
+    flashText_=text;
+    flashUntil_=text.empty() ? 0 : GetTickCount64()+milliseconds;
+    invalidate(kLcdRect);
+}
+// SynthModel.show: an edit from the panel names the param and its value
+// for 1.5 s (host automation shows nothing).
+void WindowsEditor::show(int id) {
+    flash(toWide(hooks_.displayName ? hooks_.displayName(hooks_.ctx,id) : "")+L":  "+formatted(id));
 }
 
 void WindowsEditor::knob(int id,const wchar_t* name,float sx,float sy,float x,float y,float size) {
@@ -603,7 +608,6 @@ void WindowsEditor::invalidate(const RectF& r) const {
 // is the selected one, the voice grid for voice mode / polyphony.
 void WindowsEditor::invalidateParam(int id) const {
     for(const auto& c:controls_) if(c.id==id) invalidate(bounds(c));
-    if(id==selectedId_) invalidate(kLcdRect);
     if(id==38 || id==94) invalidate(kGridRect);
 }
 void WindowsEditor::valueChanged(int id) {
@@ -983,7 +987,7 @@ void WindowsEditor::drawDynamic(Graphics& g) {
         if(prefix) std::swprintf(formattedNumber,16,L"%03d: ",prefix);
         else std::wcscpy(formattedNumber,L"---: ");
         text(g,std::wstring(formattedNumber)+patchName(),60,489,330,25,17,rgb(0xDFFAFF),true,false,true);
-        std::wstring second=readout();
+        std::wstring second=flashText_;
         if(second.empty()) {
             if(loadedBank>=0 && loadedBank<int(banks_.size())) {
                 wchar_t num[16];std::swprintf(num,16,L"%02d: ",displayBankNumber(loadedBank));
@@ -1038,6 +1042,12 @@ void WindowsEditor::refreshBanks() {
     if(knownRevision_<=0 || !hooks_.libraryJSON) return;
     const char* data=hooks_.libraryJSON(hooks_.ctx);
     if(!data) return;
+    std::string json=data; // the hooks share one scratch buffer
+    // SynthModel.loadLibrary: a zip found in the library was imported
+    // ("X.zip imported and moved to the Recycle Bin"), shown 10 s.
+    if(const char* notice=hooks_.libraryNotice ? hooks_.libraryNotice(hooks_.ctx) : nullptr; notice && *notice)
+        flash(toWide(notice),10000);
+    data=json.c_str();
     json::Value root;
     if(!json::Parse(data,root) || !root.IsObject()) return;
     std::vector<Bank> scanned;
@@ -1178,6 +1188,7 @@ bool WindowsEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
     // modal loops in which the timer still runs, and a background scan
     // landing meanwhile renumbers the banks.
     std::string source,slotFile;
+    std::wstring slotLabel; // "NNN:name", for the LCD
     HMENU menu=CreatePopupMenu();
     if(!menu) return true;
     if(const int row=bankRowAt(x,y); row>=0 && row<int(banks_.size())) {
@@ -1199,6 +1210,8 @@ bool WindowsEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
            b>=0 && b<int(banks_.size()) && !banks_[size_t(b)].slots[size_t(s)].empty() &&
            hooks_.slotPath) {
             slotFile=hooks_.slotPath(hooks_.ctx,b,s);
+            wchar_t number[8];std::swprintf(number,8,L"%03d:",s+1);
+            slotLabel=number+toWide(banks_[size_t(b)].slots[size_t(s)].c_str());
             AppendMenuW(menu,MF_STRING,kReveal,L"Show in Explorer");
             if(!favouriteView && !banks_[size_t(b)].readOnly) {
                 AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
@@ -1229,7 +1242,10 @@ bool WindowsEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
         const int bank=bankNow();
         const std::string made=bank>=0 && hooks_.exportBank ? hooks_.exportBank(hooks_.ctx,bank,toUtf8(dir).c_str()) : "";
         if(made.empty()) MessageBoxW(window_,L"Unable to export this bank.",L"Synth2",MB_ICONWARNING);
-        else revealInExplorer(made);
+        else {
+            flash(L"bank exported as "+std::filesystem::path(toWide(made.c_str())).filename().wstring(),4000);
+            revealInExplorer(made);
+        }
         break;
     }
     case kDeleteBank: {
@@ -1238,12 +1254,14 @@ bool WindowsEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
         if(bank<0) break;
         const Bank& b=banks_[size_t(bank)];
         const auto count=std::count_if(b.slots.begin(),b.slots.end(),[](const std::string& s){return !s.empty();});
-        const std::wstring detail=L"\u201C"+toWide(b.name.c_str())+L"\u201D ("+std::to_wstring(count)+
+        const std::wstring name=toWide(b.name.c_str()); // b may not survive the box's modal loop
+        const std::wstring detail=L"\u201C"+name+L"\u201D ("+std::to_wstring(count)+
             (count==1?L" patch":L" patches")+L") will be moved to the Recycle Bin.";
         if(MessageBoxW(window_,detail.c_str(),L"Delete bank?",MB_YESNO|MB_ICONWARNING|MB_DEFBUTTON2)!=IDYES) break;
         bank=bankNow();
         if(bank<0 || !hooks_.deleteBank || !hooks_.deleteBank(hooks_.ctx,bank))
             MessageBoxW(window_,L"Unable to delete this bank.",L"Synth2",MB_ICONWARNING);
+        else flash(L"bank "+name+L" moved to the Recycle Bin");
         adopt();
         break;
     }
@@ -1253,7 +1271,8 @@ bool WindowsEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
         if(slotFile.empty()) break;
         const std::filesystem::path file(toWide(slotFile.c_str()));
         std::error_code ec;
-        if(!MoveToTrash(file)) std::filesystem::remove(file,ec);
+        if(MoveToTrash(file)) flash(slotLabel+L" moved to the Recycle Bin");
+        else flash(std::filesystem::remove(file,ec) ? slotLabel+L" deleted" : std::wstring(L"delete failed"));
         if(hooks_.rescanLibrary) hooks_.rescanLibrary(hooks_.ctx);
         adopt();
         break;
@@ -1505,12 +1524,12 @@ void WindowsEditor::setValueOnce(int id,int v) {
     int low=0,high=127,def=0;
     hooks_.paramInfo(hooks_.ctx,id,&low,&high,&def);
     v=std::clamp(v,low,high);
+    const bool changed=v!=value(id); // SynthModel.set: no change, no readout
     hooks_.beginEdit(hooks_.ctx,id);
     hooks_.setValue(hooks_.ctx,id,v);
     hooks_.endEdit(hooks_.ctx,id);
-    selectedId_=id;
     valueChanged(id);
-    invalidate(kLcdRect);
+    if(changed) show(id);
 }
 void WindowsEditor::cycle(int id,int step) {
     int low=0,high=127,def=0;
@@ -1531,7 +1550,7 @@ void WindowsEditor::stepPatch(int direction) {
         const int next=(slot+(direction>0?i:-i)+count*2)%count;
         if(items[size_t(next)].empty())continue;
         if(hooks_.loadLibraryPatch && hooks_.loadLibraryPatch(hooks_.ctx,bank,next)) {
-            selectedBank_=bank;selectedSlot_=next;selectedId_=-1;
+            selectedBank_=bank;selectedSlot_=next;
             refreshBanks();
         }
         break;
@@ -1559,7 +1578,14 @@ void WindowsEditor::browserClick(float x,float y,bool doubleClick) {
                     return;
                 }
                 if(hooks_.writeLibraryPatch && hooks_.writeLibraryPatch(hooks_.ctx,bank,selectedSlot_,toUtf8(name).c_str())) {
+                    const int slot=selectedSlot_;
                     closeBrowser();refreshBanks();
+                    if(bank<int(banks_.size())) { // SynthModel.write
+                        wchar_t where[24];
+                        std::swprintf(where,24,L"written to %02d:",displayBankNumber(bank));
+                        wchar_t number[8];std::swprintf(number,8,L" %03d",slot+1);
+                        flash(where+toWide(banks_[size_t(bank)].name.c_str())+number);
+                    }
                 } else MessageBoxW(window_,L"Cannot write that preset. Check the library folder is writable.",L"Synth2",MB_ICONWARNING);
                 return;
             }
@@ -1622,7 +1648,6 @@ void WindowsEditor::browserClick(float x,float y,bool doubleClick) {
                 !newUserView && !banks_[size_t(bank)].slots[size_t(slot)].empty();
             if(!writing_ && valid && hooks_.loadLibraryPatch) {
                 hooks_.loadLibraryPatch(hooks_.ctx,bank,slot);
-                selectedId_=-1;
                 if(doubleClick)closeBrowser();
             }
             repaint();
@@ -1712,15 +1737,16 @@ void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
         if(doubleClick) {
             // The first click of the pair armed it: the mac's double tap
             // leaves the selection as it was.
-            if(learnCC_[size_t(id)] && hooks_.setMidiCC) hooks_.setMidiCC(hooks_.ctx,id,0);
+            if(learnCC_[size_t(id)] && hooks_.setMidiCC) {
+                hooks_.setMidiCC(hooks_.ctx,id,0);
+                flash(L"MIDI LEARN: "+toWide(hooks_.paramName ? hooks_.paramName(hooks_.ctx,id) : "")+L" cleared");
+            }
             learnCC_[size_t(id)]=0;
             learnSelect(learnPrevTarget_);
             invalidate(learnRects_[size_t(id)]);
         } else {
             learnPrevTarget_=learnTarget_;
             learnSelect(id);
-            selectedId_=id; // the LCD names it
-            invalidate(kLcdRect);
         }
         return;
     }
@@ -1728,7 +1754,6 @@ void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
         const auto& c=*it;
         if(x<c.x || x>=c.x+c.w || y<c.y || y>=c.y+c.h)continue;
         if(c.id<0)continue;
-        selectedId_=c.id;
         // WM_LBUTTONDBLCLK is delivered for the SECOND rapid click.
         // Only knobs and non-cycling value displays reset on a double click,
         // exactly as in SwiftUI. Cycle buttons, LEDs, waveform selectors and
@@ -1749,7 +1774,7 @@ void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
             }
             dragId_=c.id;dragStartY_=y;dragStartValue_=value(c.id);
             if(hooks_.beginEdit)hooks_.beginEdit(hooks_.ctx,c.id);
-            SetCapture(window_);invalidate(kLcdRect);return;
+            SetCapture(window_);return;
         case Kind::Toggle:
         case Kind::Badge: setValueOnce(c.id,value(c.id)?0:1);return;
         case Kind::Cycle: cycle(c.id,1);return;
@@ -1776,8 +1801,10 @@ void WindowsEditor::mouseMove(float x, float y) {
     const bool fine=(GetKeyState(VK_SHIFT)&0x8000)!=0;
     const float pixels=(fine?900.f:180.f);
     int newValue=std::clamp(dragStartValue_+int(std::lround((dragStartY_-y)*span/pixels)),low,high);
+    if(newValue==value(dragId_)) return;
     if(hooks_.setValue)hooks_.setValue(hooks_.ctx,dragId_,newValue);
     valueChanged(dragId_);
+    show(dragId_);
 }
 void WindowsEditor::mouseUp() {
     if(resizeDragging_) {
@@ -1826,7 +1853,6 @@ void WindowsEditor::wheel(int direction,float x,float y) {
         const int current=value(id);
         const int listStep=direction>0?-1:1; // Down = next item as displayed in menus.
         const int numericStep=direction>0?1:-1; // Up = increase on continuous values.
-        selectedId_=id;
 
         if(c.kind==Kind::Radio || c.kind==Kind::Wave) {
             // LED groups and waveform selectors intentionally wrap around.
@@ -1914,10 +1940,14 @@ void WindowsEditor::showImportDialog(int screenX,int screenY) {
     } else if(!pickFolder(L"Choose a folder containing Synth1 .sy1 presets",path)) return;
     const std::string bytes=toUtf8(path);
     const char* imported=hooks_.importItems(hooks_.ctx,bytes.c_str());
-    if(!imported || !*imported)
+    // newline-separated added items (SynthModel.importItems)
+    const std::string added=imported ? imported : "";
+    if(added.empty())
         MessageBoxW(window_,L"No new preset bank was imported. The files may already exist or may not contain valid .sy1 presets.",
                     L"Synth2",MB_ICONINFORMATION);
     refreshBanks();
+    if(!added.empty())
+        flash(L"imported "+std::to_wstring(std::count(added.begin(),added.end(),'\n')+(added.back()=='\n'?0:1))+L" item(s)");
 }
 
 void WindowsEditor::showFileDialog(bool save) {
@@ -1938,7 +1968,7 @@ void WindowsEditor::showFileDialog(bool save) {
             MessageBoxW(window_,L"Unable to save this patch.",L"Synth2",MB_ICONWARNING);
     } else {
         if(hooks_.loadPatchFile && hooks_.loadPatchFile(hooks_.ctx,path.c_str())) {
-            knownSerial_=-1;selectedId_=-1;
+            knownSerial_=-1;
             refreshBanks();
         } else MessageBoxW(window_,L"Unable to load this .sy1 patch.",L"Synth2",MB_ICONWARNING);
     }
@@ -1995,12 +2025,11 @@ void WindowsEditor::showMainMenu(int x,int y) {
     switch(selected) {
         case 10:
             if(hooks_.initializePatch)hooks_.initializePatch(hooks_.ctx);
-            selectedId_=-1;
             break;
         case 11: showFileDialog(false);break;
         case 12: showFileDialog(true);break;
         case 13: setLearn(!midiLearn_);break;
-        case 14: if(hooks_.allNotesOff)hooks_.allNotesOff(hooks_.ctx);break;
+        case 14: if(hooks_.allNotesOff) {hooks_.allNotesOff(hooks_.ctx);flash(L"all notes off");} break;
         case 15: showThemeEditor();break;
         default: pickTheme(selected,picks);break;
     }
@@ -2046,11 +2075,12 @@ void WindowsEditor::showParameterMenu(int id,int x,int y) {
 }
 void WindowsEditor::tick() {
     sharedThemes().flush(false);
+    if(flashUntil_ && GetTickCount64()>=flashUntil_) flash({});
     bool dirty=false;
     if(hooks_.patchSerial) {
         const int serial=hooks_.patchSerial(hooks_.ctx);
         if(serial!=knownSerial_) {
-            knownSerial_=serial;syncTheme();selectedId_=-1;dirty=true;
+            knownSerial_=serial;syncTheme();dirty=true;
         }
     }
     // Poll even with the browser closed: the first full scan must finish
@@ -2072,6 +2102,8 @@ void WindowsEditor::tick() {
                 hooks_.setMidiCC(hooks_.ctx,learnTarget_,cc);
                 learnCC_[size_t(learnTarget_)]=cc;
                 invalidate(learnRects_[size_t(learnTarget_)]);
+                flash(L"MIDI LEARN: "+toWide(hooks_.paramName ? hooks_.paramName(hooks_.ctx,learnTarget_) : "")+
+                      L" = CC "+std::to_wstring(cc));
             }
         }
     }

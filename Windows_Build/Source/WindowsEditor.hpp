@@ -132,7 +132,10 @@ private:
     int value(int id) const;
     std::wstring formatted(int id) const;
     std::wstring patchName() const;
-    std::wstring readout() const;
+    void show(int id);
+    // SynthModel.flash: a timed message on LCD line 2 (instead of the
+    // bank); an empty text clears it.
+    void flash(const std::wstring& text, unsigned milliseconds = 1500);
     static std::wstring toWide(const char* utf8);
     static std::string toUtf8(const std::wstring& wide);
 
@@ -168,7 +171,8 @@ private:
     int dragId_ = -1;
     float dragStartY_ = 0;
     int dragStartValue_ = 0;
-    int selectedId_ = -1;
+    std::wstring flashText_;
+    ULONGLONG flashUntil_ = 0; // GetTickCount64 deadline, 0 = no flash
     static constexpr int kFavouritesBank = -2;
     // Write dialog: the proposed "User" bank the library lacks (a last row;
     // the write creates the folder). Never passed to a hook.
