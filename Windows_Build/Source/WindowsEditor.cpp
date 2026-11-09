@@ -1,6 +1,7 @@
 #include "WindowsEditor.hpp"
 #include "OxoSynth2VST3/source/OxoSynth2Controller.h"
 #include "pluginterfaces/gui/iplugview.h"
+#include "pluginterfaces/base/keycodes.h"
 #include "OxoSynth2Identity.h"
 #include "EditorCore/Storage.hpp"
 #include "EditorCore/Trash.hpp"
@@ -1410,8 +1411,13 @@ void WindowsEditor::updateEditControl() {
             WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL|WS_TABSTOP,
             int(300*sx),int(38*sy),int(200*sx),int(19*sy),
             window_,nullptr,win::ModuleInstance(),nullptr);
-        if(editName_) SendMessageW(editName_,WM_SETFONT,
-            WPARAM(GetStockObject(DEFAULT_GUI_FONT)),TRUE);
+        if(editName_) {
+            SendMessageW(editName_,WM_SETFONT,WPARAM(GetStockObject(DEFAULT_GUI_FONT)),TRUE);
+            // Return / Esc in the field: write / cancel (nameFieldProc); the
+            // previous procedure is kept first, before any message comes.
+            SetWindowLongPtrW(editName_,GWLP_USERDATA,GetWindowLongPtrW(editName_,GWLP_WNDPROC));
+            SetWindowLongPtrW(editName_,GWLP_WNDPROC,LONG_PTR(&WindowsEditor::nameFieldProc));
+        }
     } else MoveWindow(editName_,int(300*sx),int(38*sy),int(200*sx),int(19*sy),TRUE);
 }
 
@@ -1530,58 +1536,146 @@ void WindowsEditor::cycle(int id,int step) {
     const int v=value(id)+step;
     setValueOnce(id,v>high?low:v<low?high:v);
 }
+// < > (SynthModel.step): the next / previous non-empty slot, rolling into
+// the neighbouring banks (list order) at the ends.
 void WindowsEditor::stepPatch(int direction) {
     if(banks_.empty()) refreshBanks();
+    const int n=int(bankOrder_.size());
+    if(n==0) return;
     int bank=-1,slot=-1;
-    if(hooks_.loadedProgram) hooks_.loadedProgram(hooks_.ctx,&bank,&slot);
-    if(bank<0 || bank>=int(banks_.size()))bank=selectedBank_>=0?selectedBank_:0;
-    if(bank<0 || bank>=int(banks_.size()))return;
-    const auto& items=banks_[size_t(bank)].slots;
-    const int count=int(items.size());
-    if(!count)return;
-    for(int i=1;i<=count;i++) {
-        const int next=(slot+(direction>0?i:-i)+count*2)%count;
-        if(items[size_t(next)].empty())continue;
-        if(hooks_.loadLibraryPatch && hooks_.loadLibraryPatch(hooks_.ctx,bank,next)) {
-            selectedBank_=bank;selectedSlot_=next;
-            refreshBanks();
-        }
-        break;
+    if(knownRevision_>0 && hooks_.loadedProgram) hooks_.loadedProgram(hooks_.ctx,&bank,&slot);
+    int row=bankRowOf(bank);
+    if(row<0 || row>=n) {
+        row=std::clamp(bankRowOf(selectedBank_),0,n-1);
+        slot=-1;
     }
+    int p=slot>=0 ? slot : direction>0 ? -1 : int(banks_[size_t(bankOrder_[size_t(row)])].slots.size());
+    for(int guard=0;guard<n*s2::kBankSlots+1;guard++) {
+        const auto& slots=banks_[size_t(bankOrder_[size_t(row)])].slots;
+        p+=direction>0?1:-1;
+        if(p>=int(slots.size())) {row=(row+1)%n;p=-1;continue;}
+        if(p<0) {row=(row-1+n)%n;p=int(banks_[size_t(bankOrder_[size_t(row)])].slots.size());continue;}
+        if(!slots[size_t(p)].empty()) {loadSlot(bankOrder_[size_t(row)],p);return;}
+    }
+}
+
+// The write dialog's Write (its button, Return / Enter, or the bottom bar's
+// write clicked again: PatchBrowserView.commitWrite).
+void WindowsEditor::commitWrite() {
+    if(!browser_ || !writing_) return;
+    const bool newUser=selectedBank_==kNewUserBank;
+    if(selectedSlot_<0)return;
+    if(!newUser && (selectedBank_<0 || selectedBank_>=int(banks_.size()) ||
+                    banks_[size_t(selectedBank_)].readOnly))return;
+    std::wstring name=patchName();
+    if(editName_) {const int n=GetWindowTextLengthW(editName_);name.resize(size_t(n)+1);
+        GetWindowTextW(editName_,name.data(),n+1);name.resize(size_t(n));}
+    // The proposed User bank is made now, by the write (newBank
+    // rescans: its index is valid for the write right away).
+    int bank=selectedBank_;
+    if(newUser && (!hooks_.newBank || (bank=hooks_.newBank(hooks_.ctx,s2::kUserBankName))<0)) {
+        MessageBoxW(window_,L"Cannot create the User bank. Check the library folder is writable.",
+                    L"Synth2",MB_ICONWARNING);
+        return;
+    }
+    if(hooks_.writeLibraryPatch && hooks_.writeLibraryPatch(hooks_.ctx,bank,selectedSlot_,toUtf8(name).c_str())) {
+        const int slot=selectedSlot_;
+        closeBrowser();refreshBanks();
+        if(bank<int(banks_.size())) { // SynthModel.write
+            wchar_t where[24];
+            std::swprintf(where,24,L"written to %02d:",displayBankNumber(bank));
+            wchar_t number[8];std::swprintf(number,8,L" %03d",slot+1);
+            flash(where+toWide(banks_[size_t(bank)].name.c_str())+number);
+        }
+    } else MessageBoxW(window_,L"Cannot write that preset. Check the library folder is writable.",L"Synth2",MB_ICONWARNING);
+}
+
+// Keys (SynthModel.browserKey, fed by WM_KEYDOWN and IPlugView::onKeyDown):
+// Esc cancels a drag / closes the browser / leaves MIDI learn; with the
+// browser open, up / down = previous / next patch (rolling into the
+// neighbouring banks, as < >), left / right = the neighbouring column
+// (nearest patch), Return / Enter close; in the write dialog Return /
+// Enter write. With Ctrl / Alt / Win held: the host's. False = not ours.
+bool WindowsEditor::keyDown(UINT key) {
+    if((GetKeyState(VK_CONTROL)|GetKeyState(VK_MENU)|GetKeyState(VK_LWIN)|GetKeyState(VK_RWIN))&0x8000) return false;
+    if(key==VK_ESCAPE) {
+        if(press_.active) dragEnd(false);
+        else if(browser_) closeBrowser();
+        else if(midiLearn_) setLearn(false);
+        else return false;
+        return true;
+    }
+    if(!browser_) {
+        // the closed panel: left / right = < >
+        if(key!=VK_LEFT && key!=VK_RIGHT) return false;
+        stepPatch(key==VK_LEFT?-1:1);
+        return true;
+    }
+    if(key==VK_RETURN) {
+        if(writing_) commitWrite(); else closeBrowser();
+        return true;
+    }
+    if(writing_ || (key!=VK_UP && key!=VK_DOWN && key!=VK_LEFT && key!=VK_RIGHT)) return false;
+    if(selectedBank_<0 || selectedBank_>=int(banks_.size())) return true;
+    const auto& slots=banks_[size_t(selectedBank_)].slots;
+    int loadedBank=-1,loadedSlot=-1;
+    if(knownRevision_>0 && hooks_.loadedProgram) hooks_.loadedProgram(hooks_.ctx,&loadedBank,&loadedSlot);
+    if(loadedBank!=selectedBank_ || loadedSlot<0) { // another bank shown: its first patch
+        const auto first=std::find_if(slots.begin(),slots.end(),[](const std::string& s){return !s.empty();});
+        if(first!=slots.end()) loadSlot(selectedBank_,int(first-slots.begin()));
+        return true;
+    }
+    if(key==VK_UP || key==VK_DOWN) {stepPatch(key==VK_DOWN?1:-1);return true;}
+    const int count=int(slots.size()), rows=std::max(1,(count+3)/4);
+    const int col=loadedSlot/rows+(key==VK_RIGHT?1:-1);
+    if(col<0 || col*rows>=count) return true;
+    const int wanted=col*rows+loadedSlot%rows;
+    int best=-1;
+    for(int s=col*rows;s<std::min((col+1)*rows,count);s++)
+        if(!slots[size_t(s)].empty() && (best<0 || std::abs(s-wanted)<std::abs(best-wanted))) best=s;
+    if(best>=0) loadSlot(selectedBank_,best);
+    return true;
+}
+tresult PLUGIN_API WindowsEditor::onKeyDown(char16 key,int16 keyCode,int16 modifiers) {
+    (void)key;
+    if(modifiers&(kAlternateKey|kCommandKey|kControlKey)) return kResultFalse;
+    UINT vk=0;
+    switch(keyCode) {
+    case KEY_UP: vk=VK_UP;break;       case KEY_DOWN: vk=VK_DOWN;break;
+    case KEY_LEFT: vk=VK_LEFT;break;   case KEY_RIGHT: vk=VK_RIGHT;break;
+    case KEY_RETURN: case KEY_ENTER: vk=VK_RETURN;break;
+    case KEY_ESCAPE: vk=VK_ESCAPE;break;
+    default: return kResultFalse;
+    }
+    return keyDown(vk) ? kResultTrue : kResultFalse;
+}
+// The write dialog's name field: Return / Enter and Esc go to keyDown (by
+// a posted message: Esc / a write destroy this field), no beep.
+LRESULT CALLBACK WindowsEditor::nameFieldProc(HWND field,UINT msg,WPARAM wp,LPARAM lp) {
+    const auto previous=reinterpret_cast<WNDPROC>(GetWindowLongPtrW(field,GWLP_USERDATA));
+    if(msg==WM_KEYDOWN && (wp==VK_RETURN || wp==VK_ESCAPE)) {
+        PostMessageW(GetParent(field),kFieldKeyMessage,wp,0);
+        return 0;
+    }
+    if(msg==WM_CHAR && (wp==L'\r' || wp==0x1B)) return 0;
+    return CallWindowProcW(previous,field,msg,wp,lp);
+}
+// SynthModel.load: the browser follows the loaded patch.
+void WindowsEditor::loadSlot(int bank,int slot) {
+    if(!hooks_.loadLibraryPatch || !hooks_.loadLibraryPatch(hooks_.ctx,bank,slot)) return;
+    if(bank!=selectedBank_) slotScroll_=0;
+    selectedBank_=bank;selectedSlot_=slot;
+    scrollBankIntoView(bank);
+    const int rows=std::max(1,(int(banks_[size_t(bank)].slots.size())+3)/4), row=slot%rows;
+    if(row<slotScroll_) slotScroll_=row; else if(row>=slotScroll_+20) slotScroll_=row-19;
+    repaint();
 }
 
 void WindowsEditor::browserClick(float x,float y,bool doubleClick) {
     if(y>=37 && y<=61) {
         if(x>=690 && x<760) {closeBrowser();return;}
         if(writing_) {
-            if(x>=514 && x<601) {
-                const bool newUser=selectedBank_==kNewUserBank;
-                if(selectedSlot_<0)return;
-                if(!newUser && (selectedBank_<0 || selectedBank_>=int(banks_.size()) ||
-                                banks_[size_t(selectedBank_)].readOnly))return;
-                std::wstring name=patchName();
-                if(editName_) {const int n=GetWindowTextLengthW(editName_);name.resize(size_t(n)+1);
-                    GetWindowTextW(editName_,name.data(),n+1);name.resize(size_t(n));}
-                // The proposed User bank is made now, by the write (newBank
-                // rescans: its index is valid for the write right away).
-                int bank=selectedBank_;
-                if(newUser && (!hooks_.newBank || (bank=hooks_.newBank(hooks_.ctx,s2::kUserBankName))<0)) {
-                    MessageBoxW(window_,L"Cannot create the User bank. Check the library folder is writable.",
-                                L"Synth2",MB_ICONWARNING);
-                    return;
-                }
-                if(hooks_.writeLibraryPatch && hooks_.writeLibraryPatch(hooks_.ctx,bank,selectedSlot_,toUtf8(name).c_str())) {
-                    const int slot=selectedSlot_;
-                    closeBrowser();refreshBanks();
-                    if(bank<int(banks_.size())) { // SynthModel.write
-                        wchar_t where[24];
-                        std::swprintf(where,24,L"written to %02d:",displayBankNumber(bank));
-                        wchar_t number[8];std::swprintf(number,8,L" %03d",slot+1);
-                        flash(where+toWide(banks_[size_t(bank)].name.c_str())+number);
-                    }
-                } else MessageBoxW(window_,L"Cannot write that preset. Check the library folder is writable.",L"Synth2",MB_ICONWARNING);
-                return;
-            }
+            if(x>=514 && x<601) {commitWrite();return;}
             if(x>=604 && x<680) {
                 // SynthModel.newBank: a uniquely named folder, then write into it.
                 std::wstring name=L"New Bank";
@@ -1795,7 +1889,9 @@ void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
     if(midiLearn_ && x>=558.f && x<744.f && y>=488.f && y<512.f) {setLearn(false);return;}
     if(y>=484 && y<=554) {
         if(x>=492 && x<542) {
-            if(y<518) {openBrowser(true);return;}
+            // write again while the write dialog is open = its Write (save
+            // in place: click, click)
+            if(y<518) {if(browser_ && writing_) commitWrite(); else openBrowser(true);return;}
             POINT p;GetCursorPos(&p);showMainMenu(p.x,p.y);return;
         }
         if(x>=420 && x<473 && y<520) {stepPatch(x<448?-1:1);return;}
@@ -2368,13 +2464,11 @@ LRESULT WindowsEditor::windowMessage(UINT msg,WPARAM wp,LPARAM lp) {
         }
         return 0;
     }
+    case WM_GETDLGCODE: return DLGC_WANTALLKEYS|DLGC_WANTARROWS; // hosts with dialog-style windows
     case WM_KEYDOWN:
-        if(wp==VK_ESCAPE && press_.active) {dragEnd(false);return 0;}
-        if(wp==VK_ESCAPE && browser_) {closeBrowser();return 0;}
-        if(wp==VK_ESCAPE && midiLearn_) {setLearn(false);return 0;}
-        if(wp==VK_LEFT) {stepPatch(-1);return 0;}
-        if(wp==VK_RIGHT) {stepPatch(1);return 0;}
-        return 0;
+        if(keyDown(UINT(wp))) return 0;
+        return DefWindowProcW(window_,msg,wp,lp);
+    case kFieldKeyMessage:keyDown(UINT(wp));return 0;
     case WM_CONTEXTMENU: {
         POINT p{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};
         if(p.x!=-1 || p.y!=-1) { // -1, -1 = from the keyboard

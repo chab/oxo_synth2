@@ -33,6 +33,9 @@ public:
     Steinberg::tresult PLUGIN_API onSize(Steinberg::ViewRect* r) override;
     void attachedToParent() override;
     void removedFromParent() override;
+    // Keys from hosts that deliver them to the view (else WM_KEYDOWN).
+    Steinberg::tresult PLUGIN_API onKeyDown(Steinberg::char16 key, Steinberg::int16 keyCode,
+                                            Steinberg::int16 modifiers) override;
 
 private:
     enum class Kind { Knob, Toggle, Cycle, Display, Wave, Radio, Badge, Label };
@@ -110,6 +113,11 @@ private:
     void wheel(int direction, float x, float y);
     void browserClick(float x, float y, bool doubleClick);
     void slotClick(int index, bool doubleClick);
+    void commitWrite();
+    bool keyDown(UINT key); // true = handled
+    void loadSlot(int bank, int slot);
+    static LRESULT CALLBACK nameFieldProc(HWND field, UINT message, WPARAM w, LPARAM l);
+    static constexpr UINT kFieldKeyMessage = WM_APP + 2; // name field: Return / Esc (wParam)
     void dragMove(float x, float y);
     void dragEnd(bool drop); // false = cancelled
     Gdiplus::RectF dragLabelRect() const;

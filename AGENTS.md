@@ -450,7 +450,13 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   down = ◀ ▶, left / right = next column, nearest non-empty slot), Return /
   Enter / Esc close (write dialog: Esc only), Esc closes the logo menu.
   Routed by `Synth2HostingView`: local NSEvent monitor + own keyDown; Logic
-  fallback = editor is the front window.
+  fallback = editor is the front window. Windows: `WindowsEditor::keyDown`
+  (WM_KEYDOWN + `IPlugView::onKeyDown`, WM_GETDLGCODE wants all keys; Ctrl
+  / Alt / Win = the host's): the same keys, plus Return / Enter in the
+  write dialog = Write (the name field forwards Return / Esc); < > and up /
+  down roll over banks in list order. Both: the bottom bar's write clicked
+  again while the write dialog is open = its Write (save in place: click,
+  click).
 - MIDI LEARN: menu > MIDI Learn → every control wears a hotspot (dim =
   unlearned, bright = armed, blue + CC badge = learned); tap arms,
   double-tap clears, the next CC (any channel, 1..127) is assigned, one CC
