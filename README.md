@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/images/synth2_preview.png" width="400" alt="The Synth2 panel"></p>
+<p align="center"><img src="docs/images/synth2_preview.jpg" width="400" alt="The Synth2 panel"></p>
 
 # Synth2
 
