@@ -79,26 +79,33 @@ Your Team ID is shown at developer.apple.com > Account > Membership details.
 The file is gitignored, so it stays on your machine.
 
 
-### Windows (VST3, x64 — development port)
+### Windows (VST3, x64)
 
-To build on Windows, use Visual Studio 2026 with its C++ build tools, the
-repository's Steinberg VST3 SDK submodule, and the contributor's shared
-CMake 4.4.4 folder at `../_Tools/cmake/_4.4.4/bin/`.
-Double-click `- Build.bat` to compile. The script does **not** install the VST3.
-Its output is under `Windows_Build/build/VST3/Release/OxoSynth2.vst3`.
-The batch file force-closes `PolyHostInterface.exe` before building, so save
-any unsaved PHI work first. This is a contributor-specific build workflow;
-it is not a general Windows installer.
+In development. Needs Windows 10 / 11 x64, Visual Studio 2022 or later with
+the "Desktop development with C++" workload (it includes CMake), and the
+submodules (see above).
 
-In a normal Windows installation, settings, presets and themes use the same
-folder: `%APPDATA%\Oxo Music\Oxo Synth2\`. Preset banks go in `Presets\`
-and theme files go in `Themes\`, alongside files such as `settings.json`
-and `favourites.json`.
+```bat
+build_windows.bat
+```
 
-For portable operation, create `Synth2_Data\` **beside the `OxoSynth2.vst3`
-bundle**. Put the same `Presets\`, `Themes\` and settings files in that folder.
-If `Synth2_Data` exists, the Windows port prefers it without converting
-presets or renaming files.
+It builds `Windows_Build\build\VST3\Release\OxoSynth2.vst3` and runs the
+storage tests; nothing is installed (to use the plugin, copy the
+`OxoSynth2.vst3` folder into `C:\Program Files\Common Files\VST3`).
+`--no-pause` skips the final pause; the `CMAKE` and `CMAKE_GENERATOR`
+environment variables override the CMake found and its generator.
+
+Per-user files: settings, themes and favourites in
+`%APPDATA%\Oxo Music\Oxo Synth2\`, the bank library in
+`Documents\Oxo Music\Oxo Synth2\`.
+
+Portable mode: create a `Synth2_Data` folder **next to the `OxoSynth2.vst3`
+bundle** (in a folder you can write to). When it exists, the plugin keeps
+everything there instead: settings in it, banks in `Synth2_Data\Presets\`.
+Nothing is converted or renamed.
+
+On a mac, `tools/win_check/check.sh` compile-checks the Windows sources with
+mingw-w64 (`brew install mingw-w64`).
 
 ### Tests
 
@@ -114,6 +121,7 @@ make -C EngineCoreTests test
 | `EditorCore/` | Editor services shared by the VST3 and the AUv3 (C bridge to the UI, state, per-user files) |
 | `Shared/` | The SwiftUI panel (mac and iPad) |
 | `OxoSynth2VST3/` | VST3 plugin (+ the SDK's AUv2 wrapper), CMake |
+| `Windows_Build/` | Windows VST3: CMake project, native Win32 / GDI+ editor, vendored zlib |
 | `OxoSynth2.xcodeproj`, `OxoSynth2/`, `OxoSynth2AudioUnit/` | iPad app (an "open it in a host" screen) + AUv3 extension |
 | `EngineCoreTests/` | Engine unit tests |
 | `tools/s1ref/` | Black-box harness for the original Synth1 + the measurement / fitting scripts |

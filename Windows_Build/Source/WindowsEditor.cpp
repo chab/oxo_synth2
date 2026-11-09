@@ -41,7 +41,6 @@ constexpr int kThemeCommand=1000; // theme menu items: kThemeCommand + index int
 constexpr int kLcdText=0xE0FFFF;
 // Regions redrawn on their own (design coordinates).
 const RectF kLcdRect(50,484,432,70), kGridRect(548,505,216,28), kBrowserRect(6,34,758,444);
-constexpr const wchar_t kWindowsDevBuild[] = L"19.3";
 
 Color rgb(int rgbValue) { return Color(255, (rgbValue>>16)&255, (rgbValue>>8)&255, rgbValue&255); }
 Color muted(const Color& c, float factor) {
@@ -845,7 +844,8 @@ void WindowsEditor::drawStatic(Graphics& g) {
     text(g,L"Virtual Analog",84,7,135,20,12,muted(p[kLabel],.75f));
     fill(g,rgb(0xAD0F0C),593,5,168,20);
     stroke(g,rgb(0x101010),593,5,168,20);
-    text(g,L"V"+toWide(OXO_VERSION)+L"  Windows dev v"+std::wstring(kWindowsDevBuild),
+    // SynthPanelView's version box; the version comes from Identity.xcconfig only.
+    text(g,L"V"+toWide(OXO_VERSION)+L"  a Synth1 recreation",
          596,6,163,18,10,rgb(0xFFFFFF),true,true);
     struct Section {float x,y,w,h;const wchar_t* name;};
     static constexpr Section sections[]={
@@ -1106,13 +1106,13 @@ void WindowsEditor::toggleFavourite() {
     repaint();
 }
 void WindowsEditor::showAbout() {
-    const std::wstring info=std::wstring(L"A Synth1 recreation by\nOxo Synth2 V")+toWide(OXO_VERSION)+
-        (L"\nWindows x64 VST3 - development build v"+std::wstring(kWindowsDevBuild)+L"\n\n")+
+    const std::wstring info=toWide(OXO_PRODUCT_NAME)+L" "+toWide(OXO_VERSION)+L" (build "+toWide(OXO_BUILD_NUMBER)+
+        L"), Windows x64 VST3\n\n"
         L"Original Synth1: Daichi Laboratory\n"
         L"Synth2 recreation: Oxo Music\n"
         L"Windows port: sl23\n\n"
         L"Synth1 and Synth2 remain credited to their respective developers.";
-    MessageBoxW(window_,info.c_str(),L"About Synth2 - Windows port",MB_OK|MB_ICONINFORMATION);
+    MessageBoxW(window_,info.c_str(),L"About Synth2",MB_OK|MB_ICONINFORMATION);
 }
 
 void WindowsEditor::updateEditControl() {
