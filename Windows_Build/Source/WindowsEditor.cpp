@@ -6,6 +6,7 @@
 #include "WindowsZoomSettings.hpp"
 #include "WindowsFavourites.hpp"
 #include "WindowsThemeEditor.hpp"
+#include "WindowsPrompt.hpp"
 #include <shellapi.h>
 #include <shlobj.h>
 #include <commdlg.h>
@@ -1298,8 +1299,19 @@ void WindowsEditor::browserClick(float x,float y,bool doubleClick) {
                 return;
             }
             if(x>=604 && x<680) {
-                MessageBoxW(window_,L"The native New Bank naming dialog is not yet implemented.\nExisting writable banks can be used now.",
-                            L"Synth2 Windows editor - work in progress",MB_OK|MB_ICONINFORMATION);
+                // SynthModel.newBank: a uniquely named folder, then write into it.
+                std::wstring name=L"New Bank";
+                if(!hooks_.newBank || !win::AskText(window_,L"New bank",L"Bank name:",name)) return;
+                const int bank=hooks_.newBank(hooks_.ctx,toUtf8(name).c_str());
+                if(bank<0) {
+                    MessageBoxW(window_,L"Cannot create that bank. Check the library folder is writable.",
+                                L"Synth2",MB_ICONWARNING);
+                    return;
+                }
+                if(hooks_.libraryRevision) knownRevision_=hooks_.libraryRevision(hooks_.ctx);
+                refreshBanks();
+                if(bank<int(banks_.size())) {selectedBank_=bank;selectedSlot_=0;slotScroll_=0;}
+                repaint();
                 return;
             }
         } else {
