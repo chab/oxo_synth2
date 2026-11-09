@@ -11,6 +11,7 @@
 #include <array>
 #include <memory>
 #include "WindowsFavourites.hpp"
+#include "WindowsModule.hpp"
 
 namespace oxo {
 class OxoSynth2Controller;
@@ -96,6 +97,7 @@ private:
     void tick();
     LRESULT windowMessage(UINT message, WPARAM w, LPARAM l);
     static LRESULT CALLBACK wndProc(HWND window, UINT message, WPARAM w, LPARAM l);
+    static win::WindowClass& windowClass();
     void repaint() const;
     int value(int id) const;
     std::wstring formatted(int id) const;

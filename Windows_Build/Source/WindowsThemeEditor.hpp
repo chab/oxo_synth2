@@ -2,6 +2,7 @@
 // Windows-only, modeless JSON theme editor. All changes are explicit:
 // Preview updates the current plugin view; Save writes the selected JSON file.
 #include "WindowsThemes.hpp"
+#include "WindowsModule.hpp"
 #include <windows.h>
 #include <commdlg.h>
 #include <array>
@@ -30,21 +31,12 @@ public:
         root_=root;
         preview_=std::move(preview);
         index_=selected>=0?selected:0;
-        static const bool registered=[] {
-            WNDCLASSW wc{};
-            wc.lpfnWndProc=&ThemeEditorWindow::Proc;
-            wc.hInstance=GetModuleHandleW(nullptr);
-            wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
-            wc.hbrBackground=GetSysColorBrush(COLOR_BTNFACE);
-            wc.lpszClassName=L"OxoSynth2ThemeEditorWindow";
-            return RegisterClassW(&wc)!=0 || GetLastError()==ERROR_CLASS_ALREADY_EXISTS;
-        }();
-        if(!registered)return;
+        if(!Class().Acquire())return;
         HWND parent=owner ? GetAncestor(owner,GA_ROOT) : nullptr;
-        hwnd_=CreateWindowExW(WS_EX_TOOLWINDOW,L"OxoSynth2ThemeEditorWindow",L"Synth2 - Theme Editor",
+        hwnd_=CreateWindowExW(WS_EX_TOOLWINDOW,Class().Name(),L"Synth2 - Theme Editor",
             WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,
-            CW_USEDEFAULT,CW_USEDEFAULT,520,760,parent,nullptr,GetModuleHandleW(nullptr),this);
-        if(!hwnd_)return;
+            CW_USEDEFAULT,CW_USEDEFAULT,520,760,parent,nullptr,win::ModuleInstance(),this);
+        if(!hwnd_){Class().Release();return;}
         ShowWindow(hwnd_,SW_SHOWNORMAL);
         UpdateWindow(hwnd_);
     }
@@ -52,6 +44,10 @@ public:
         if(hwnd_) DestroyWindow(hwnd_);
     }
 private:
+    static win::WindowClass& Class() {
+        static win::WindowClass c(L"OxoSynth2ThemeEditorWindow",&ThemeEditorWindow::Proc,0,GetSysColorBrush(COLOR_BTNFACE));
+        return c;
+    }
     static constexpr int kThemeSelect=300;
     static constexpr int kPreview=400,kSave=401,kReload=402,kNew=403,kSaveAs=404;
     static constexpr int kHexBase=100,kPickBase=200;
@@ -74,7 +70,7 @@ private:
     }
     HWND Make(const wchar_t* klass,const wchar_t* title,DWORD style,int x,int y,int w,int h,int id=0) {
         HWND control=CreateWindowExW(0,klass,title,WS_CHILD|WS_VISIBLE|style,
-            x,y,w,h,hwnd_,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),GetModuleHandleW(nullptr),nullptr);
+            x,y,w,h,hwnd_,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),win::ModuleInstance(),nullptr);
         if(control && font_) SendMessageW(control,WM_SETFONT,reinterpret_cast<WPARAM>(font_),TRUE);
         return control;
     }
@@ -366,7 +362,9 @@ private:
             const HWND closing=hwnd_;
             hwnd_=nullptr;
             if(font_) {DeleteObject(font_);font_=nullptr;}
-            return DefWindowProcW(closing,msg,wp,lp);
+            const LRESULT result=DefWindowProcW(closing,msg,wp,lp);
+            Class().Release();
+            return result;
         }
         default:return DefWindowProcW(hwnd_,msg,wp,lp);
         }

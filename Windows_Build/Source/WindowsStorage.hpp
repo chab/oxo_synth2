@@ -20,17 +20,15 @@
 
 #include "EditorCore/Identity.h"
 #include "Windows_Build/Source/StorageSelection.hpp"
+#include "Windows_Build/Source/WindowsModule.hpp"
 
 namespace oxo::storage::win {
 namespace fs = std::filesystem;
 
 inline fs::path ThisModule() {
-    // A static datum in this DLL, rather than the hosting DAW's EXE.
-    static int moduleAnchor = 0;
-    HMODULE module = nullptr;
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            reinterpret_cast<LPCWSTR>(&moduleAnchor), &module)) return {};
+    // This DLL, rather than the hosting DAW's EXE.
+    const HMODULE module = oxo::win::ModuleInstance();
+    if (!module) return {};
     std::wstring buffer(32768, L'\0');
     const DWORD count = GetModuleFileNameW(module, buffer.data(), DWORD(buffer.size()));
     if (count == 0 || count >= buffer.size()) return {};

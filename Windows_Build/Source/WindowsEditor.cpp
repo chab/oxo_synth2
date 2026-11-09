@@ -286,37 +286,29 @@ tresult PLUGIN_API WindowsEditor::onSize(ViewRect* r) {
     }
     return kResultTrue;
 }
+win::WindowClass& WindowsEditor::windowClass() {
+    static win::WindowClass c(L"OxoSynth2WindowsEditorView",&WindowsEditor::wndProc,CS_DBLCLKS);
+    return c;
+}
 void WindowsEditor::attachedToParent() {
-    if(window_ || !systemWindow) return;
-    static const wchar_t* name=L"OxoSynth2WindowsEditorView";
-    static const bool registered=[] {
-        WNDCLASSW wc{};
-        wc.style=CS_DBLCLKS;
-        wc.lpfnWndProc=&WindowsEditor::wndProc;
-        wc.hInstance=GetModuleHandleW(nullptr);
-        wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
-        wc.lpszClassName=L"OxoSynth2WindowsEditorView";
-        return RegisterClassW(&wc)!=0 || GetLastError()==ERROR_CLASS_ALREADY_EXISTS;
-    }();
-    if(!registered) return;
-    window_=CreateWindowExW(0,name,L"",WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS,
+    if(window_ || !systemWindow || !windowClass().Acquire()) return;
+    window_=CreateWindowExW(0,windowClass().Name(),L"",WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS,
                           0,0,rect.getWidth(),rect.getHeight(),
-                          reinterpret_cast<HWND>(systemWindow),nullptr,GetModuleHandleW(nullptr),this);
-    if(window_) {
-        SetTimer(window_,1,50,nullptr);
-        // Critical: Json() and loadedProgram() call EnsureScanned(), which
-        // scans all banks synchronously. Never call them before a background
-        // scan has produced a usable revision (large libraries took ~1 min).
-        const int revision=hooks_.libraryRevision ? hooks_.libraryRevision(hooks_.ctx) : 0;
-        if(revision>0) { knownRevision_=revision; refreshBanks(); }
-        // No index yet: build one asynchronously. With a saved index, avoid
-        // traversing every preset on every startup; Refresh is explicit.
-        else if(hooks_.startLibraryScan) hooks_.startLibraryScan(hooks_.ctx);
-    }
+                          reinterpret_cast<HWND>(systemWindow),nullptr,win::ModuleInstance(),this);
+    if(!window_) {windowClass().Release();return;}
+    SetTimer(window_,1,50,nullptr);
+    // Critical: Json() and loadedProgram() call EnsureScanned(), which
+    // scans all banks synchronously. Never call them before a background
+    // scan has produced a usable revision (large libraries took ~1 min).
+    const int revision=hooks_.libraryRevision ? hooks_.libraryRevision(hooks_.ctx) : 0;
+    if(revision>0) { knownRevision_=revision; refreshBanks(); }
+    // No index yet: build one asynchronously. With a saved index, avoid
+    // traversing every preset on every startup; Refresh is explicit.
+    else if(hooks_.startLibraryScan) hooks_.startLibraryScan(hooks_.ctx);
 }
 void WindowsEditor::removedFromParent() {
     if(editName_) {DestroyWindow(editName_);editName_=nullptr;}
-    if(window_) {KillTimer(window_,1); DestroyWindow(window_);window_=nullptr;}
+    if(window_) {KillTimer(window_,1);DestroyWindow(window_);window_=nullptr;windowClass().Release();}
 }
 void WindowsEditor::layoutChild() {
     if(window_) MoveWindow(window_,0,0,rect.getWidth(),rect.getHeight(),TRUE);
@@ -1050,7 +1042,7 @@ void WindowsEditor::updateEditControl() {
         editName_=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",patchName().c_str(),
             WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL|WS_TABSTOP,
             int(300*sx),int(38*sy),int(200*sx),int(19*sy),
-            window_,nullptr,GetModuleHandleW(nullptr),nullptr);
+            window_,nullptr,win::ModuleInstance(),nullptr);
         if(editName_) SendMessageW(editName_,WM_SETFONT,
             WPARAM(GetStockObject(DEFAULT_GUI_FONT)),TRUE);
     } else MoveWindow(editName_,int(300*sx),int(38*sy),int(200*sx),int(19*sy),TRUE);
@@ -1694,11 +1686,16 @@ void WindowsEditor::showMainMenu(int x,int y) {
     int selected=int(TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,x,y,0,window_,nullptr));
     DestroyMenu(menu);
     switch(selected) {
-        case 10: if(hooks_.initializePatch)hooks_.initializePatch(hooks_.ctx);selectedId_=-1;break;
+        case 10:
+            if(hooks_.initializePatch)hooks_.initializePatch(hooks_.ctx);
+            selectedId_=-1;
+            break;
         case 11: showFileDialog(false);break;
         case 12: showFileDialog(true);break;
-        case 13: midiLearn_=!midiLearn_;learnTarget_=-1;
-                 if(hooks_.lastCC)lastCcToken_=hooks_.lastCC(hooks_.ctx);break;
+        case 13:
+            midiLearn_=!midiLearn_;learnTarget_=-1;
+            if(hooks_.lastCC)lastCcToken_=hooks_.lastCC(hooks_.ctx);
+            break;
         case 14: if(hooks_.allNotesOff)hooks_.allNotesOff(hooks_.ctx);break;
         case 15: showThemeEditor();break;
         default:
