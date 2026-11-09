@@ -2,8 +2,10 @@
 // Windows-only, modeless theme editor: the Mac ThemeDialog
 // (Shared/SynthTheme.swift) as a native window. Load (factory, then user
 // themes) and every colour edit apply LIVE to the editor that opened it;
-// Save stores the current colours under a name, Delete removes a user theme
-// (both in themes.json, EditorCore/Themes.hpp).
+// Save stores the current colours under a name, Delete removes a saved user
+// theme (both in themes.json, EditorCore/Themes.hpp). Theme files
+// (<data folder>\Themes\*.json) are listed last and only read: removing
+// one = deleting its file.
 #include "EditorCore/Themes.hpp"
 #include "WindowsModule.hpp"
 #include <windows.h>
@@ -20,6 +22,7 @@ public:
         std::function<themes::Palette()> theme;          // the instance's palette
         std::function<void(const themes::Palette&)> apply; // pick / edit: apply + remember
         std::function<themes::Store&()> store;
+        std::function<std::vector<themes::Named>()> fileThemes;
     };
     ThemeEditorWindow()=default;
     ThemeEditorWindow(const ThemeEditorWindow&)=delete;
@@ -81,11 +84,14 @@ private:
         if(control) SendMessageW(control,WM_SETFONT,reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)),TRUE);
         return control;
     }
-    // Factory themes, then the user's (ThemeDialog's Load menu).
+    // Factory themes, then the user's (ThemeDialog's Load menu), then the
+    // theme files.
     void RebuildList() {
         entries_=themes::Factory();
-        userCount_=0;
-        for(auto& t:host_.store().UserThemes()) {entries_.push_back(std::move(t));++userCount_;}
+        userBegin_=entries_.size();
+        for(auto& t:host_.store().UserThemes()) entries_.push_back(std::move(t));
+        userEnd_=entries_.size();
+        if(host_.fileThemes) for(auto& t:host_.fileThemes()) entries_.push_back(std::move(t));
         SendMessageW(load_,CB_RESETCONTENT,0,0);
         for(size_t i=0;i<entries_.size();++i) {
             const std::wstring name=Wide(entries_[i].name)+(i==0?L" (default)":L"");
@@ -93,7 +99,8 @@ private:
         }
         SelectCurrent();
     }
-    bool IsUser(int index) const { return index>=int(entries_.size()-userCount_) && index<int(entries_.size()); }
+    // A theme saved in themes.json (the only ones Delete removes).
+    bool IsUser(int index) const { return index>=int(userBegin_) && index<int(userEnd_); }
     void SelectCurrent() {
         const themes::Palette p=host_.theme();
         int index=-1;
@@ -215,7 +222,7 @@ private:
     HWND hwnd_=nullptr,load_=nullptr,remove_=nullptr,name_=nullptr;
     std::array<HWND,themes::kSlotCount> hex_{},swatch_{};
     std::vector<themes::Named> entries_;
-    size_t userCount_=0;
+    size_t userBegin_=0,userEnd_=0;
     bool populating_=false;
 };
 } // namespace oxo

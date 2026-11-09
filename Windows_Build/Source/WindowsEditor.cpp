@@ -190,6 +190,12 @@ struct SharedThemes {
     void flush(bool now) {
         if(writeDue && (now || GetTickCount64()>=writeDue)) {writeDue=0;store.Write();}
     }
+    // The Windows port's theme FILES: <data folder>\Themes\*.json (portable:
+    // Synth2_Data\Themes), listed after the saved themes; read each time a
+    // list is shown, so files dropped in Explorer appear at once.
+    std::vector<themes::Named> fileThemes() const {
+        return themes::WithoutFactoryCopies(themes::LoadFolder(storage::Root()/"Themes"));
+    }
     // The palette of an instance without a session theme. Re-reads the
     // file: the last pick may come from another process.
     themes::Palette startPalette() {
@@ -526,15 +532,18 @@ void WindowsEditor::syncTheme() {
     staticDirty_=true;
     repaint();
 }
-// LogoMenu's theme column: factory themes, then the user's; the active one checked.
+// LogoMenu's theme column: factory themes, then the user's (saved, then
+// theme files); the active one checked.
 void WindowsEditor::appendThemes(HMENU menu,std::vector<themes::Palette>& picks) const {
     std::vector<themes::Named> list=themes::Factory();
     const auto user=sharedThemes().store.UserThemes();
-    const size_t factoryCount=list.size();
+    const auto files=sharedThemes().fileThemes();
+    const size_t factoryCount=list.size(), savedEnd=factoryCount+user.size();
     list.insert(list.end(),user.begin(),user.end());
+    list.insert(list.end(),files.begin(),files.end());
     bool checked=false;
     for(size_t i=0;i<list.size();++i) {
-        if(i==factoryCount) AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
+        if(i==factoryCount || (i==savedEnd && !user.empty())) AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
         const bool active=!checked && list[i].palette==theme_;
         checked=checked || active;
         const std::wstring name=toWide(list[i].name.c_str())+(i==0?L" (default)":L"");
@@ -1715,7 +1724,8 @@ void WindowsEditor::showThemeEditor() {
     if(!themeEditor_)themeEditor_=std::make_unique<ThemeEditorWindow>();
     themeEditor_->Show(window_,{[this]{return theme_;},
                                 [this](const themes::Palette& p){setTheme(p,true);},
-                                []()->themes::Store&{return sharedThemes().store;}});
+                                []()->themes::Store&{return sharedThemes().store;},
+                                []{return sharedThemes().fileThemes();}});
 }
 void WindowsEditor::showThemeMenu(int x,int y) {
     HMENU m=CreatePopupMenu();

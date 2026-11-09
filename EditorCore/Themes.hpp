@@ -14,6 +14,8 @@
 //  - Store = ThemeStore: <data folder>/themes.json, {"current": map,
 //    "saved": [{"name": ..., "colors": map}]}; current = the palette a NEW
 //    instance starts with (the last one picked / edited in any instance).
+//  - Theme FILES (Windows): one flat map per *.json in a folder, name = file
+//    stem; extra themes read next to the store, never written by it.
 
 #include "Json.hpp"
 
@@ -118,6 +120,51 @@ inline std::optional<Palette> FromStateText(std::string_view text) {
     return FromHexMap(v);
 }
 
+// Without the themes identical to the factory theme of the same name
+// (ThemeStore.userThemes: a saved copy of a factory theme is not a user's).
+inline std::vector<Named> WithoutFactoryCopies(std::vector<Named> themes) {
+    themes.erase(std::remove_if(themes.begin(), themes.end(),
+                                [](const Named &t) {
+                                    return std::any_of(Factory().begin(), Factory().end(), [&](const Named &f) {
+                                        return f.name == t.name && f.palette == t.palette;
+                                    });
+                                }),
+                 themes.end());
+    return themes;
+}
+
+// Every *.json theme file of `dir` (one flat hex map each, read leniently;
+// name = the file stem), sorted by name, case-insensitive. Not JSON objects,
+// oversized or unreadable files are skipped; no folder = none.
+inline std::vector<Named> LoadFolder(const std::filesystem::path &dir) {
+    constexpr std::uintmax_t kMaxFileSize = 64 * 1024;
+    constexpr size_t kMaxFiles = 1000;
+    std::vector<Named> out;
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it(dir, std::filesystem::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end && out.size() < kMaxFiles; it.increment(ec)) {
+        std::error_code item;
+        const auto &path = it->path();
+        std::string ext = path.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        const auto stem = path.stem().u8string(); // UTF-8 on Windows too (string() = the code page)
+        const std::string name(stem.begin(), stem.end());
+        if (ext != ".json" || name.empty() || name.front() == '.' || !it->is_regular_file(item) ||
+            it->file_size(item) > kMaxFileSize || item)
+            continue;
+        std::ifstream f(path, std::ios::binary);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        json::Value v;
+        if (f && json::Parse(ss.str(), v) && v.IsObject()) out.push_back({name, FromHexMap(v)});
+    }
+    std::sort(out.begin(), out.end(), [](const Named &a, const Named &b) {
+        return std::lexicographical_compare(a.name.begin(), a.name.end(), b.name.begin(), b.name.end(),
+                                            [](unsigned char x, unsigned char y) { return std::tolower(x) < std::tolower(y); });
+    });
+    return out;
+}
+
 // ThemeStore. Not thread-safe: one per process, used from the UI thread.
 class Store {
 public:
@@ -128,14 +175,7 @@ public:
     const std::filesystem::path &File() const { return file_; }
 
     // Saved themes not identical to a factory theme of the same name.
-    std::vector<Named> UserThemes() const {
-        std::vector<Named> out;
-        for (const auto &s : saved_)
-            if (std::none_of(Factory().begin(), Factory().end(),
-                             [&](const Named &f) { return f.name == s.name && f.palette == s.palette; }))
-                out.push_back(s);
-        return out;
-    }
+    std::vector<Named> UserThemes() const { return WithoutFactoryCopies(saved_); }
 
     // Re-reads the file (another process may have written it). A missing or
     // unreadable file keeps what is in memory, like ThemeStore.load().

@@ -97,12 +97,14 @@ environment variables override the CMake found and its generator.
 
 Per-user files: settings, themes and favourites in
 `%APPDATA%\Oxo Music\Oxo Synth2\`, the bank library in
-`Documents\Oxo Music\Oxo Synth2\`.
+`Documents\Oxo Music\Oxo Synth2\`. Themes are saved in `themes.json` (the
+same format as on the Mac); theme files dropped into a `Themes\` folder
+next to it (`*.json`, one theme each, named after the file) are listed too.
 
 Portable mode: create a `Synth2_Data` folder **next to the `OxoSynth2.vst3`
 bundle** (in a folder you can write to). When it exists, the plugin keeps
-everything there instead: settings in it, banks in `Synth2_Data\Presets\`.
-Nothing is converted or renamed.
+everything there instead: settings, `themes.json` and `Themes\` in it, banks
+in `Synth2_Data\Presets\`. Nothing is converted or renamed.
 
 On a mac, `tools/win_check/check.sh` compile-checks the Windows sources with
 mingw-w64 (`brew install mingw-w64`).

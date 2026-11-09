@@ -177,3 +177,34 @@ OXO_TEST(JsonReaderIsStrict) {
     OXO_EXPECT(!json::Parse(std::string(100, '[') + std::string(100, ']'), v)); // too deep
     OXO_EXPECT_EQ(json::Quote("a\"b\\c\n"), std::string("\"a\\\"b\\\\c\\u000a\""));
 }
+
+// The Windows port's theme files (<data folder>\Themes\*.json, portable
+// Synth2_Data\Themes): one per theme, name = file stem, its earlier 17-key
+// format read leniently (the 4 voice-grid keys ignored).
+OXO_TEST(ThemeFolderReadsWindowsFiles) {
+    const fs::path dir = FreshDir("oxo_theme_folder");
+    std::ofstream(dir / "Night.json", std::ios::binary)
+        << "\xEF\xBB\xBF{\n  \"panel\": \"#102030\",\n  \"header\": \"#3B3B38\",\n"
+           "  \"voiceGridBorder\": \"#040404\",\n  \"voiceGridPlaying\": \"#FFFFFF\"\n}\n";
+    std::ofstream(dir / "Synth2.json", std::ios::binary) << themes::StateText(themes::Synth2()); // a seeded factory copy
+    std::ofstream(dir / "Warm.json", std::ios::binary) << R"({"panel":"#000001"})";            // an edited one
+    std::ofstream(dir / "broken.json", std::ios::binary) << "{\"panel\":";
+    std::ofstream(dir / "list.json", std::ios::binary) << "[1, 2]";
+    std::ofstream(dir / "notes.txt", std::ios::binary) << R"({"panel":"#FFFFFF"})";
+    std::ofstream(dir / ".hidden.json", std::ios::binary) << R"({"panel":"#FFFFFF"})";
+    std::ofstream(dir / "Caf\xC3\xA9.JSON", std::ios::binary) << R"({"label":"#ABCDEF"})";
+    const auto all = themes::LoadFolder(dir);
+    OXO_EXPECT_EQ(all.size(), size_t(4)); // Café, Night, Synth2, Warm: sorted, case-insensitive
+    const auto shown = themes::WithoutFactoryCopies(all);
+    OXO_EXPECT_EQ(shown.size(), size_t(3));
+    if (shown.size() == 3) {
+        OXO_EXPECT_EQ(shown[0].name, std::string("Caf\xC3\xA9"));
+        OXO_EXPECT_EQ(shown[0].palette[themes::kLabel], 0xABCDEFu);
+        OXO_EXPECT_EQ(shown[1].name, std::string("Night"));
+        OXO_EXPECT_EQ(shown[1].palette[themes::kPanel], 0x102030u);
+        OXO_EXPECT_EQ(shown[1].palette[themes::kLed], themes::Synth2()[themes::kLed]);
+        OXO_EXPECT_EQ(shown[2].name, std::string("Warm"));
+    }
+    OXO_EXPECT(themes::LoadFolder(dir / "missing").empty());
+    fs::remove_all(dir);
+}

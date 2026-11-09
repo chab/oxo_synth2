@@ -65,7 +65,8 @@ Synth2"; iPad (iOS 17, iPad only) app `com.oxo.music.oxosynth2`, appex
 Per-user settings: mac `~/Library/Application Support/Oxo Music/Oxo Synth2`
 (`midi_mappings.json`, `themes.json`, `settings.json`), iPad the appex's
 container, Windows `%APPDATA%\Oxo Music\Oxo Synth2` (+ `favourites.json`,
-`preset_index.bin`). Bank library: mac `~/Music/Oxo Music/Oxo Synth2`, iPad
+`preset_index.bin`, theme files `Themes\*.json`: one flat hex map each,
+listed after the saved themes, never written). Bank library: mac `~/Music/Oxo Music/Oxo Synth2`, iPad
 `<app group>/Synth2`, Windows `Documents\Oxo Music\Oxo Synth2`. Windows
 portable mode: a `Synth2_Data` folder next to the `.vst3` bundle holds all
 of it (banks in `Synth2_Data\Presets`).
