@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cwchar>
+#include <cwctype>
 #include <sstream>
 #include <string_view>
 
