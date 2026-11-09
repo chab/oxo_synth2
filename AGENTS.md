@@ -64,8 +64,11 @@ Synth2"; iPad (iOS 17, iPad only) app `com.oxo.music.oxosynth2`, appex
 `group.com.oxo.music.oxosynth2`. The panel title reads "Synth2".
 Per-user settings: mac `~/Library/Application Support/Oxo Music/Oxo Synth2`
 (`midi_mappings.json`, `themes.json`, `settings.json`), iPad the appex's
-container. Bank library: mac `~/Music/Oxo Music/Oxo Synth2`, iPad `<app
-group>/Synth2`.
+container, Windows `%APPDATA%\Oxo Music\Oxo Synth2` (+ `favourites.json`,
+`preset_index.bin`). Bank library: mac `~/Music/Oxo Music/Oxo Synth2`, iPad
+`<app group>/Synth2`, Windows `Documents\Oxo Music\Oxo Synth2`. Windows
+portable mode: a `Synth2_Data` folder next to the `.vst3` bundle holds all
+of it (banks in `Synth2_Data\Presets`).
 VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
 + the two plists' AudioComponents integer `version` (by hand, 65536 = 1.0).
 
@@ -84,7 +87,12 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
 - `EditorCore/` portable editor services: `OxoSynth2Bridge.h` (C hooks
   between C++ and the Swift editor), `SynthEditorCore.hpp` (base of the
   VST3 controller and the AUv3 instance), `State.hpp` (state chunk),
-  `Storage.hpp` (per-user files, mac library / factory paths), `Trash.hpp`.
+  `Storage.hpp` (per-user files, mac library / factory paths), `Trash.hpp`,
+  `Json.hpp` (small strict JSON reader), `Themes.hpp` (the C++ mirror of
+  `Shared/SynthTheme.swift` for C++ editors: 13 keys, factory themes,
+  lenient hex map, `stateText`, the `themes.json` store;
+  `EngineCoreTests/ThemesTests.cpp` PARSES the Swift file, so a key or a
+  factory theme changed on one side only fails the tests).
 - `EngineCoreTests/` — `make -C EngineCoreTests test`.
 - `OxoSynth2VST3/` — processor / controller / entry / editor view, CMake
   (SDK + AUv2 wrapper with the hidden-param auwrapper.mm patch, Swift
@@ -137,8 +145,21 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   the tables' sources). `reference/renders/` + `reference/derived/`
   (download, README "Reference data") and `reference/presets/` are
   gitignored.
-- `docs/images/` — README pictures (`synth2_preview.png` = a copy of the
-  site's gallery_2).
+- `Windows_Build/` — Windows x64 VST3 port (contributed, PR #3): CMake
+  project (parses `Identity.xcconfig` like the mac one, vendored zlib
+  1.3.1 = byte-identical upstream), `Source/` = native Win32 / GDI+ editor
+  (`WindowsEditor.cpp`: the SwiftUI panel's layout redrawn; static layer
+  cached in a bitmap, dynamic parts redrawn in the invalid rect only,
+  `TextCache` for outlines, parameter values polled like SynthModel),
+  `WindowsThemeEditor.hpp` (ThemeDialog as a window), `WindowsModule.hpp`
+  (window classes on OUR module, unregistered with the last window),
+  `WindowsTrash.cpp` (Recycle Bin; false where Windows cannot recycle),
+  `WindowsStorage.hpp` / `StorageSelection.hpp` (folders, portable mode),
+  `WindowsPresetIndex.hpp` (bank index cache, rescanned in the background
+  on every editor / browser open), favourites, zoom, `WindowsPrompt.hpp`.
+  Windows-only code in shared files stays under `#if defined(_WIN32)` /
+  `SMTG_OS_WINDOWS`.
+- `docs/images/` — README pictures (`synth2_preview.jpg`).
 - `third_party/` — submodules `vst3sdk` v3.8.1_build_84 (MIT) +
   `AudioUnitSDK` 1.4.0 (Apache 2.0); remaining patches: hidden-param
   auwrapper + AudioUnitSDK deployment target.
@@ -160,6 +181,13 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   (16 voices, one core: LP12 x80, LP24 x70, LPDL x34, detune+sub x22, all
   fx x60 realtime), `make -C tools/s1ref` (x86_64, needs the original AU).
 - Python: `.venv` (numpy, scipy) for `tools/s1ref` scripts.
+- WINDOWS: `build_windows.bat [--no-pause]` on Windows (Visual Studio 2022+
+  C++ workload; CMake from `%CMAKE%`, PATH or VS's own; generator = CMake's
+  default or `CMAKE_GENERATOR`) → `Windows_Build\build\VST3\Release\
+  OxoSynth2.vst3` + storage tests, installs nothing. On the mac,
+  `tools/win_check/check.sh` compile-checks the Windows sources with
+  mingw-w64 (`brew install mingw-w64`; warnings = errors; the worktree's
+  SDK or `VST3SDK=<path>`). `.bat` files are CRLF (`.gitattributes`).
 - MAC INSTALLER: `tools/prepare_mac_installer [--skip-build]
   [--skip-notarize]` → `dist/mac/OxoSynth2-<ver>-<build>-macOS.{pkg,dmg}`
   (gitignored). Components `auv2` + `vst3` (pkg ids
