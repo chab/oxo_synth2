@@ -288,9 +288,10 @@ void WindowsEditor::attachedToParent() {
     // scan has produced a usable revision (large libraries took ~1 min).
     const int revision=hooks_.libraryRevision ? hooks_.libraryRevision(hooks_.ctx) : 0;
     if(revision>0) { knownRevision_=revision; refreshBanks(); }
-    // No index yet: build one asynchronously. With a saved index, avoid
-    // traversing every preset on every startup; Refresh is explicit.
-    else if(hooks_.startLibraryScan) hooks_.startLibraryScan(hooks_.ctx);
+    // As the Mac editor: rescan in the background on every open, so banks
+    // changed in Explorer (or zips dropped in) show up by themselves; the
+    // saved index keeps the list usable meanwhile, the poll swaps it in.
+    if(hooks_.startLibraryScan) hooks_.startLibraryScan(hooks_.ctx);
 }
 void WindowsEditor::removedFromParent() {
     if(editName_) {DestroyWindow(editName_);editName_=nullptr;}
@@ -1019,10 +1020,10 @@ void WindowsEditor::refreshBanks() {
 void WindowsEditor::openBrowser(bool writing) {
     browser_=true;writing_=writing;
     bankScroll_=slotScroll_=0;selectedSlot_=-1;
-    // Opening an already-scanned browser must not request a new full scan.
-    // The separate Refresh button still offers a manual asynchronous rescan.
-    if(knownRevision_<=0 && hooks_.startLibraryScan) hooks_.startLibraryScan(hooks_.ctx);
-    else refreshBanks();
+    // SynthModel.openBrowser: a background rescan on every open (the list
+    // in place stays usable; a scan already running is not restarted).
+    if(hooks_.startLibraryScan) hooks_.startLibraryScan(hooks_.ctx);
+    refreshBanks();
     updateEditControl();
     repaint();
 }
