@@ -17,7 +17,7 @@ Synth2 aims to keep those sounds playable on modern computers. Open source, so t
 
 Note: the original Synth1 was studied only through its audio output. The binary was never disassembled or decompiled (see the clean-room rule in [AGENTS.md](AGENTS.md#rules)).
 
-Formats: macOS VST3 + AUv2, iPad AUv3. Currently working on the Windows version. Linux ports are welcome: if you're a developer on Linux, fork the repository and open a pull request.
+Formats: macOS VST3 + AUv2, iPad AUv3, Windows VST3 (x64, in development). Linux ports are welcome: if you're a developer on Linux, fork the repository and open a pull request.
 
 ## Download
 
@@ -44,7 +44,8 @@ loaded for compatibility only; no Synth1 banks are distributed.
 
 ## Building
 
-Requirements: a Mac with a recent Xcode (developed with Xcode 27).
+Get the sources with their submodules (Steinberg's VST3 SDK, Apple's
+AudioUnitSDK):
 
 ```sh
 git clone --recursive https://github.com/chab/oxo_synth2.git
@@ -58,7 +59,7 @@ A local build keeps the official identity: it replaces an installed Oxo Synth2
 
 ### macOS (VST3 + AUv2)
 
-Also needs CMake 3.25+.
+Needs a Mac with a recent Xcode (developed with Xcode 27) and CMake 3.25+.
 
 ```sh
 ./build_vst3.sh   # builds and installs the VST3 + AUv2 into ~/Library/Audio/Plug-Ins
@@ -66,10 +67,10 @@ Also needs CMake 3.25+.
 
 ### iPad (AUv3)
 
-Open and build `OxoSynth2.xcodeproj` in Xcode. To run it on a device, Xcode
-must sign it with **your** Apple developer team (`Identity.xcconfig` holds the
-official one). Don't edit that file: create `Identity.local.xcconfig` next to
-it with one line:
+Needs a Mac with a recent Xcode. Open and build `OxoSynth2.xcodeproj` in
+Xcode. To run it on a device, Xcode must sign it with **your** Apple developer
+team (`Identity.xcconfig` holds the official one). Don't edit that file:
+create `Identity.local.xcconfig` next to it with one line:
 
 ```
 DEVELOPMENT_TEAM = <your Team ID>
@@ -81,40 +82,59 @@ The file is gitignored, so it stays on your machine.
 
 ### Windows (VST3, x64)
 
-In development. Needs Windows 10 / 11 x64, Visual Studio 2022 or later with
-the "Desktop development with C++" workload (it includes CMake), and the
-submodules (see above).
+Needs Windows 10 / 11 x64, Git, and Visual Studio 2022 or later (Community or
+Build Tools) with the "Desktop development with C++" workload, which includes
+CMake.
 
 ```bat
 build_windows.bat
 ```
 
 It builds `Windows_Build\build\VST3\Release\OxoSynth2.vst3` and runs the
-storage tests; nothing is installed (to use the plugin, copy the
-`OxoSynth2.vst3` folder into `C:\Program Files\Common Files\VST3`).
-`--no-pause` skips the final pause; the `CMAKE` and `CMAKE_GENERATOR`
-environment variables override the CMake found and its generator.
+storage tests; nothing is installed (no administrator rights needed).
 
-`tools\prepare_win_installer.bat` builds the release (static runtime, no
-VC++ redistributable needed), validates it and packs it with
+To try the plugin, copy the bundle into the system VST3 folder. That folder is
+under `Program Files`, so this step needs a Command Prompt **started as
+administrator** (Start menu, type `cmd`, right-click "Command Prompt", "Run as
+administrator"). Close the DAW first, then:
+
+```bat
+cd /d C:\path\to\oxo_synth2
+if exist "%CommonProgramFiles%\VST3\OxoSynth2.vst3" rmdir /S /Q "%CommonProgramFiles%\VST3\OxoSynth2.vst3"
+xcopy Windows_Build\build\VST3\Release\OxoSynth2.vst3 "%CommonProgramFiles%\VST3\OxoSynth2.vst3\" /E /I /Y
+```
+
+The second line removes the previous copy (so no stale file stays in the
+bundle), the third copies the new one. An administrator prompt starts in
+`C:\Windows\System32`, hence the `cd` to your clone first.
+
+Options: `--no-pause` skips the final pause (scripted runs); the `CMAKE` and
+`CMAKE_GENERATOR` environment variables override the CMake found and its
+generator. The build log is `Windows_Build\build\build.log`.
+
+The installer: `tools\prepare_win_installer.bat` builds the release (static
+runtime, no VC++ redistributable needed), validates it and packs it with
 [Inno Setup](https://jrsoftware.org/isinfo.php) 6.3+ into
 `dist\win\OxoSynth2-<version>-<build>-Windows-x64.exe` + a `.zip` (installer,
 `README.pdf`, raw bundle). The installer puts the plugin in `C:\Program
 Files\Common Files\VST3`; `--help` lists the options.
 
-Per-user files: settings and themes in
-`%APPDATA%\Oxo Music\Oxo Synth2\`, the bank library in
-`Documents\Oxo Music\Oxo Synth2\`. Themes are saved in `themes.json` (the
-same format as on the Mac); theme files dropped into a `Themes\` folder
-next to it (`*.json`, one theme each, named after the file) are listed too.
+On a Mac, `tools/win_check/check.sh` compile-checks the Windows sources with
+mingw-w64 (`brew install mingw-w64`), before they reach a Windows machine.
 
-Portable mode: create a `Synth2_Data` folder **next to the `OxoSynth2.vst3`
-bundle** (in a folder you can write to). When it exists, the plugin keeps
-everything there instead: settings, `themes.json` and `Themes\` in it, banks
-in `Synth2_Data\Presets\`. Nothing is converted or renamed.
+#### Where the Windows version keeps your files
 
-On a mac, `tools/win_check/check.sh` compile-checks the Windows sources with
-mingw-w64 (`brew install mingw-w64`).
+- Settings and themes: `%APPDATA%\Oxo Music\Oxo Synth2\`. Themes are saved in
+  `themes.json` (the same format as on the Mac); theme files dropped into a
+  `Themes\` folder next to it (`*.json`, one theme each, named after the
+  file) are listed too.
+- Bank library: `Documents\Oxo Music\Oxo Synth2\`.
+- Portable mode: create a `Synth2_Data` folder **next to the
+  `OxoSynth2.vst3` bundle** (in a folder you can write to). When it exists,
+  the plugin keeps everything there instead: settings, `themes.json` and
+  `Themes\` in it, banks in `Synth2_Data\Presets\`. Nothing is converted or
+  moved: the usual folders stay as they are and are used again if
+  `Synth2_Data` goes away. Restart the host after adding or removing it.
 
 ### Tests
 
