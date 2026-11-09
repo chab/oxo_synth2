@@ -362,7 +362,10 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   `PatchManager::Copy` → byte copy into the bank's first free slot as
   `NNN.sy1` (its own bank = a duplicate); hook `copyPatch` → slot, -1 =
   full (LCD: "Bank is full (128 patches): cannot add a patch"), -2 =
-  refused. The browser stays on the source bank (favorites workflow).
+  refused. The browser stays on the source bank (favorites workflow). A
+  FULL bank refuses the drop up front: forbidden cursor (mac `.forbidden` +
+  `NSCursor.operationNotAllowed`, Windows IDC_NO), no highlight, the full
+  message on the LCD when the drag enters it.
   Factory patches are draggable for copying only (no move / drop inside
   the factory bank, never a copy into it). Windows: the same in its own
   window (`dragMove` / `dragEnd`: a patch click acts on RELEASE so a press

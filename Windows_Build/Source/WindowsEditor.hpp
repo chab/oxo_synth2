@@ -223,6 +223,7 @@ private:
     };
     SlotPress press_;
     int dropSlot_ = -1, dropBank_ = -1; // the drag's move / copy target
+    int dragFullBank_ = -1;             // a full bank under the drag (refused, said once)
     HCURSOR copyCursor_ = nullptr;      // made on first use
     mutable int loadedBankForPaint_ = -1;
     mutable int loadedSlotForPaint_ = -1;

@@ -1772,10 +1772,17 @@ void WindowsEditor::dragMove(float x,float y) {
     }
     invalidate(dragLabelRect());
     press_.x=x;press_.y=y;
-    int slot=-1,bank=-1;
+    int slot=-1,bank=-1,full=-1;
     const bool sameBank=press_.bank==selectedBank_ && press_.bank>=0 && press_.bank<int(banks_.size());
     if(const int s=slotAt(x,y); s>=0 && sameBank && !banks_[size_t(press_.bank)].readOnly) slot=s;
-    else if(const int b=bankRowAt(x,y); b>=0 && !writing_ && !banks_[size_t(b)].readOnly) bank=b;
+    else if(const int b=bankRowAt(x,y); b>=0 && !writing_ && !banks_[size_t(b)].readOnly) {
+        // a full bank refuses the copy: forbidden cursor, said once on entering
+        const auto& slots=banks_[size_t(b)].slots;
+        if(std::any_of(slots.begin(),slots.end(),[](const std::string& s){return s.empty();})) bank=b;
+        else full=b;
+    }
+    if(full>=0 && full!=dragFullBank_) flash(L"Bank is full (128 patches): cannot add a patch",3000);
+    dragFullBank_=full;
     if(slot!=dropSlot_ || bank!=dropBank_) {
         dropSlot_=slot;dropBank_=bank;
         invalidate(kBrowserRect);
@@ -1787,7 +1794,7 @@ void WindowsEditor::dragEnd(bool drop) {
     if(!press_.active) return;
     const SlotPress press=press_;
     const int toSlot=dropSlot_, toBank=dropBank_;
-    press_.active=false;dropSlot_=dropBank_=-1;
+    press_.active=false;dropSlot_=dropBank_=dragFullBank_=-1;
     if(GetCapture()==window_) ReleaseCapture();
     invalidate(kBrowserRect);
     if(!press.dragging) { // a plain click

@@ -376,7 +376,9 @@ struct PatchBrowserView: View {
             pickTarget()
         }
         // a patch dragged onto a bank: copied into its first free slot
-        .onDrop(of: SlotDrop.types, delegate: BankDrop(bank: b, enabled: !info.readOnly && !model.writing, target: $dropBank) {
+        .onDrop(of: SlotDrop.types, delegate: BankDrop(bank: b, enabled: !info.readOnly && !model.writing,
+                                                       isFull: info.count >= SynthModel.bankSlots, target: $dropBank,
+                                                       full: { model.flash(SynthModel.bankFullMessage, seconds: 3) }) {
             model.copyPatch(bank: $0, slot: $1, to: b)
         })
         .libraryMenu(enabled: !locked, export: { model.fileAction = .exportBank(info.id) }, deleteTitle: "Delete bank…",
@@ -558,19 +560,35 @@ private struct SlotDrop: DropDelegate {
 
 /// Drop on a bank row: proposes a COPY ("+" on the cursor) into the bank's
 /// first free slot; the browser stays on the bank shown. Not on the
-/// read-only factory bank.
+/// read-only factory bank. A FULL bank refuses it: forbidden cursor, no
+/// highlight, `full` (the LCD says why) on entering.
 private struct BankDrop: DropDelegate {
-    let bank: Int, enabled: Bool
+    let bank: Int, enabled: Bool, isFull: Bool
     @Binding var target: Int?
+    let full: () -> Void
     let copy: (_ bank: Int, _ slot: Int) -> Void
 
     func validateDrop(info: DropInfo) -> Bool { enabled }
-    func dropEntered(info: DropInfo) { target = bank }
-    func dropExited(info: DropInfo) { if target == bank { target = nil } }
-    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .copy) }
+    func dropEntered(info: DropInfo) {
+        if isFull { full() } else { target = bank }
+    }
+    func dropExited(info: DropInfo) {
+        if target == bank { target = nil }
+        #if os(macOS)
+        if isFull { NSCursor.arrow.set() }
+        #endif
+    }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        #if os(macOS)
+        // .forbidden alone leaves the plain arrow on macOS
+        if isFull { NSCursor.operationNotAllowed.set() }
+        #endif
+        return DropProposal(operation: isFull ? .forbidden : .copy)
+    }
 
     func performDrop(info: DropInfo) -> Bool {
         target = nil
+        guard !isFull else { return false }
         return SlotDrop.read(info) { from in copy(from.bank, from.slot) }
     }
 }

@@ -576,6 +576,7 @@ final class SynthModel: ObservableObject {
     static let userBankName = "User"
     /// Slots per bank (EngineCore kBankSlots).
     static let bankSlots = 128
+    static let bankFullMessage = "Bank is full (128 patches): cannot add a patch"
 
     /// The library's own "User" bank, nil when the user deleted it.
     var userBank: Int? {
@@ -665,7 +666,7 @@ final class SynthModel: ObservableObject {
         loadLibrary()
         switch s {
         case 0...: flash(String(format: "copied to %@ %03d", target, s + 1), seconds: 3)
-        case -1: flash("Bank is full (128 patches): cannot add a patch", seconds: 5)
+        case -1: flash(Self.bankFullMessage, seconds: 5)
         default: flash("copy failed")
         }
     }
