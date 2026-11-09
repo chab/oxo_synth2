@@ -95,6 +95,13 @@ storage tests; nothing is installed (to use the plugin, copy the
 `--no-pause` skips the final pause; the `CMAKE` and `CMAKE_GENERATOR`
 environment variables override the CMake found and its generator.
 
+`tools\prepare_win_installer.bat` builds the release (static runtime, no
+VC++ redistributable needed), validates it and packs it with
+[Inno Setup](https://jrsoftware.org/isinfo.php) 6.3+ into
+`dist\win\OxoSynth2-<version>-<build>-Windows-x64.exe` + a `.zip` (installer,
+`README.pdf`, raw bundle). The installer puts the plugin in `C:\Program
+Files\Common Files\VST3`; `--help` lists the options.
+
 Per-user files: settings, themes and favourites in
 `%APPDATA%\Oxo Music\Oxo Synth2\`, the bank library in
 `Documents\Oxo Music\Oxo Synth2\`. Themes are saved in `themes.json` (the

@@ -189,6 +189,22 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   `tools/win_check/check.sh` compile-checks the Windows sources with
   mingw-w64 (`brew install mingw-w64`; warnings = errors; the worktree's
   SDK or `VST3SDK=<path>`). `.bat` files are CRLF (`.gitattributes`).
+- WINDOWS INSTALLER: `tools\prepare_win_installer.bat [--skip-build]
+  [--skip-validator] [--dynamic-crt] [--no-pause]` IN THE VM (+ Inno Setup
+  6.3+, `winget install JRSoftware.InnoSetup`) →
+  `dist\win\<Product>-<ver>-<build>-Windows-x64.{exe,zip}` (zip = exe +
+  `tools/win_installer/README.pdf` (SmartScreen walkthrough) + the raw
+  bundle). Own build dir `Windows_Build\build-dist`, STATIC CRT (/MT, no
+  VC++ redist; checked with dumpbin). Validator runs on the staged bundle
+  in PORTABLE mode (temporary `stage\Synth2_Data`), so the dev's library
+  stays out. Installer `tools/win_installer/synth2.iss`: elevated, fixed
+  `{commoncf64}\VST3\<bundle>` (no dir page), AppId = `<OXO_BUNDLE_ID>.vst3`
+  (never change), wipes the bundle's `Contents` before copying (mirror) +
+  our bundle from the other VST3 folders (stale copies), never touches
+  `Synth2_Data` or user folders, `CloseApplications=no` (never kill a DAW).
+  Identity / version from `Identity.xcconfig` (+ local), passed as `/D`.
+  Signing optional, env `OXO_WIN_SIGN_SHA1` or `OXO_WIN_SIGN_PFX` (+
+  `_PASSWORD`), `OXO_WIN_SIGN_TIMESTAMP_URL`; dll signed, then the exe.
 - MAC INSTALLER: `tools/prepare_mac_installer [--skip-build]
   [--skip-notarize]` → `dist/mac/OxoSynth2-<ver>-<build>-macOS.{pkg,dmg}`
   (gitignored). Components `auv2` + `vst3` (pkg ids
