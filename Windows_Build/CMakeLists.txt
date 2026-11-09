@@ -7,7 +7,7 @@ if(NOT EXISTS "${OXO_SDK}/public.sdk/source/vst/vstaudioeffect.cpp")
     message(FATAL_ERROR "Pinned Steinberg SDK missing at third_party/vst3sdk")
 endif()
 if(NOT EXISTS "${OXO_ZLIB}/zlib.h")
-    message(FATAL_ERROR "zlib 1.3.1 missing; root - Build.bat copies the existing test dependency")
+    message(FATAL_ERROR "zlib 1.3.1 missing at Windows_Build/Dependencies/zlib-1.3.1")
 endif()
 
 # Parse exactly the same identity as the original macOS CMake project.
@@ -32,7 +32,7 @@ endforeach()
 # Keep the Steinberg SDK project version tied to the original Synth2 identity.
 project(Synth2WindowsVST3 VERSION "${MARKETING_VERSION}" LANGUAGES C CXX)
 if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-    message(FATAL_ERROR "Windows x64 MSVC is required. Run the root - Build.bat on Windows.")
+    message(FATAL_ERROR "Windows x64 MSVC is required. Run build_windows.bat on Windows.")
 endif()
 set(OXO_MARKETING_VERSION "${MARKETING_VERSION}")
 set(OXO_BUILD_NUMBER "${CURRENT_PROJECT_VERSION}")
