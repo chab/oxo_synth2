@@ -217,6 +217,10 @@ struct PatchRef {
 // The bank shipped inside the plugin (read-only, first in the list, updated
 // with the plugin); also its folder name in the bundle resources.
 inline constexpr const char *kFactoryBankName = "Synth2 Factory";
+// The empty bank a new library starts with; also where the write dialog
+// proposes to save a patch out of a read-only bank (created by that write
+// when the user deleted it). Swift mirror: SynthModel.userBankName.
+inline constexpr const char *kUserBankName = "User";
 // Its LibraryProgram::bank (sessions): not a path, so it survives the
 // bundle moving. ':' can't come from Finder in a folder name.
 inline constexpr const char *kFactoryProgramBank = ":factory";
@@ -1016,7 +1020,7 @@ private:
 
     void EnsureRoot() const {
         std::error_code ec;
-        if (!root_.empty() && !std::filesystem::exists(root_, ec)) std::filesystem::create_directories(root_ / "User", ec);
+        if (!root_.empty() && !std::filesystem::exists(root_, ec)) std::filesystem::create_directories(root_ / kUserBankName, ec);
     }
 
     std::filesystem::path root_, factory_;

@@ -111,6 +111,16 @@ private:
     void browserClick(float x, float y, bool doubleClick);
     void openBrowser(bool writing);
     void closeBrowser();
+    int bankRowAt(float x, float y) const; // bank (or kFavouritesBank / kNewUserBank) under a point, -1 = none
+    int slotAt(float x, float y) const;    // slot of the shown bank under a point, -1 = none
+    bool showLibraryMenu(float x, float y, int screenX, int screenY); // false = not over a row
+    void revealInExplorer(const std::string& utf8Path) const;
+    bool pickFolder(const wchar_t* title, std::wstring& folder) const;
+    void buildLearnRects();
+    void setLearn(bool on);
+    void learnSelect(int id);
+    int learnHit(float x, float y) const; // hotspot under a point, -1 = none
+    void drawLearn(Gdiplus::Graphics& g);
     void requestWidth(int width);
     void updateEditControl();
     void layoutChild();
@@ -147,12 +157,25 @@ private:
     bool writing_ = false;
     bool midiLearn_ = false;
     int learnTarget_ = -1;
+    int learnPrevTarget_ = -1; // before a click: a double click restores it (as the mac's double tap)
+    // MIDI learn hotspots (SynthControls' .learnable): one per patch param,
+    // around all its controls; empty = not learnable.
+    static constexpr int kLearnCount = 99; // patch params (SynthModel.paramCount)
+    std::array<Gdiplus::RectF, kLearnCount> learnRects_{};
+    std::vector<int> learnOrder_;          // learnable ids, larger hotspots first
+    std::array<int, kLearnCount> learnCC_{}; // learned CC per param (0 = none), read on entering learn
     int lastCcToken_ = 0;
     int dragId_ = -1;
     float dragStartY_ = 0;
     int dragStartValue_ = 0;
     int selectedId_ = -1;
     static constexpr int kFavouritesBank = -2;
+    // Write dialog: the proposed "User" bank the library lacks (a last row;
+    // the write creates the folder). Never passed to a hook.
+    static constexpr int kNewUserBank = -3;
+    int userBank() const;           // the library's "User" bank, -1 = none
+    bool offersNewUserBank() const; // write dialog shows the kNewUserBank row
+    int bankRowCount() const;       // browser bank rows incl. Favourites (+ new User)
     int selectedBank_ = -1;
     int selectedSlot_ = -1;
     int bankScroll_ = 0;

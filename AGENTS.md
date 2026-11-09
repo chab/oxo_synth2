@@ -338,7 +338,12 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   bank…" (the only in-app way to make one); writes `NNN.sy1` (replaces a
   differently named file that held the slot), "Overwrite NNN" when
   occupied; default target = the loaded slot if writing back into its
-  bank, else the first empty slot.
+  bank, else the first empty slot. Default BANK = the loaded program's if
+  writable; out of a read-only bank (factory) or no bank: "User"
+  (`kUserBankName`, the new library's bank). Deleted? The dialog still
+  lists "--:User  new" last (all slots free) and the write makes the
+  folder (`newBank` then write; Swift `write(newBank:)`, Windows
+  `kNewUserBank`). Snapshot modes `write-factory`, `write-new-user`.
 - MOVE (browser drag and drop): renames every patch of the bank to its
   `NNN.sy1` in two phases (hidden temp names), an occupied target swaps.
   The browser stays on the bank it shows (so does a rescan landing; only
@@ -363,8 +368,10 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   multiple) / Refresh / Close. Rescans on every open. Bank / slot menu
   (`libraryMenu`): mac right click = [Export bank…,] Show in Finder[,
   Delete / Delete bank…]; iPad long press = [Export bank…,] [Delete /
-  Delete bank…] (no delete on the factory bank). Rename banks = Finder
-  (mac only).
+  Delete bank…] (no delete on the factory bank); Windows right click = the
+  mac's menu with "Show in Explorer" (`showLibraryMenu`; a favourite: Show
+  only; bank delete = MessageBox confirmation, Recycle Bin). Rename banks =
+  Finder (mac only).
 - SCAN SPEED (measured on 150 banks x 128 = 19,200 .sy1): `PatchNameCache`
   (process-wide, path + size + mtime) → only new / changed files are
   opened for their name (rescan 60 ms vs 0.5–1.5 s uncached);

@@ -3,6 +3,7 @@
 #include "pluginterfaces/gui/iplugview.h"
 #include "OxoSynth2Identity.h"
 #include "EditorCore/Storage.hpp"
+#include "EditorCore/Trash.hpp"
 #include "WindowsZoomSettings.hpp"
 #include "WindowsFavourites.hpp"
 #include "WindowsThemeEditor.hpp"
@@ -239,6 +240,7 @@ WindowsEditor::WindowsEditor(OxoSynth2Controller* controller)
     GdiplusStartupInput gdiplusInput;
     if(GdiplusStartup(&gdiplusToken_,&gdiplusInput,nullptr)==Ok) textCache_=std::make_unique<TextCache>();
     constructLayout();
+    buildLearnRects();
     // SynthModel.init: the session's palette, else the last one picked;
     // either way pinned to the session.
     const auto restored=hooks_.themeText ? themes::FromStateText(hooks_.themeText(hooks_.ctx)) : std::nullopt;
@@ -617,6 +619,83 @@ void WindowsEditor::hoverChanged(int control,int chrome) {
     hoveredControl_=control;
     hoveredChrome_=chrome;
 }
+
+// MIDI learn (SynthControls' Learnable, SynthModel's learn): in learn mode
+// every patch control but the ctrl src / assign menus wears a hotspot
+// around all its parts (a radio's LEDs, a wave grid): dim border = not
+// learned, bright 2 px border = armed, learn-colour fill + CC badge =
+// learned. Click arms, double click unlearns; an armed control stays armed
+// (the next CC replaces).
+void WindowsEditor::buildLearnRects() {
+    learnRects_.fill(RectF(0,0,0,0));
+    learnOrder_.clear();
+    for(const auto& c:controls_) {
+        if(c.id<0 || c.id>=kLearnCount || (c.id>=86 && c.id<=89) || c.kind==Kind::Label) continue;
+        RectF& r=learnRects_[size_t(c.id)];
+        const RectF own(c.x,c.y,c.w,c.h);
+        if(r.Width<=0) {r=own;continue;}
+        const RectF was=r;
+        RectF::Union(r,was,own);
+    }
+    for(int id=0;id<kLearnCount;id++) {
+        RectF& r=learnRects_[size_t(id)];
+        if(r.Width<=0) continue;
+        r.Inflate(3.f,3.f); // .padding(-3)
+        learnOrder_.push_back(id);
+    }
+    // Drawn larger first, hit smaller first: a control inside a group's
+    // box (e.g. beside a radio column) keeps its own hotspot.
+    std::stable_sort(learnOrder_.begin(),learnOrder_.end(),[this](int a,int b) {
+        const RectF &ra=learnRects_[size_t(a)], &rb=learnRects_[size_t(b)];
+        return ra.Width*ra.Height>rb.Width*rb.Height;
+    });
+}
+void WindowsEditor::setLearn(bool on) {
+    if(on && browser_) closeBrowser(); // SynthModel.toggleLearn
+    midiLearn_=on;
+    learnTarget_=learnPrevTarget_=-1;
+    if(on) {
+        if(hooks_.lastCC) lastCcToken_=hooks_.lastCC(hooks_.ctx);
+        for(int id=0;id<kLearnCount;id++) learnCC_[size_t(id)]=hooks_.midiCC ? hooks_.midiCC(hooks_.ctx,id) : 0;
+    }
+    repaint();
+}
+void WindowsEditor::learnSelect(int id) {
+    for(const int r:{learnTarget_,id}) if(r>=0 && r<kLearnCount) invalidate(learnRects_[size_t(r)]);
+    learnTarget_=id;
+}
+int WindowsEditor::learnHit(float x,float y) const {
+    for(auto it=learnOrder_.rbegin();it!=learnOrder_.rend();++it)
+        if(learnRects_[size_t(*it)].Contains(x,y)) return *it;
+    return -1;
+}
+void WindowsEditor::drawLearn(Graphics& g) {
+    static const Color learn=rgb(0x59A6E8); // Theme.learn
+    for(const int id:learnOrder_) {
+        const RectF& r=learnRects_[size_t(id)];
+        if(!visible(r)) continue;
+        const int cc=learnCC_[size_t(id)];
+        const bool selected=learnTarget_==id;
+        if(cc) {
+            GraphicsPath box;roundedPath(box,r.X,r.Y,r.Width,r.Height,4.f);
+            SolidBrush fillBrush(Color(102,learn.GetR(),learn.GetG(),learn.GetB()));
+            g.FillPath(&fillBrush,&box);
+        }
+        const float width=selected ? 2.f : 1.f; // strokeBorder: inside the box
+        roundedOutline(g,Color(selected ? 255 : 153,learn.GetR(),learn.GetG(),learn.GetB()),
+                       r.X+width/2,r.Y+width/2,r.Width-width,r.Height-width,4.f-width/2,width);
+        if(cc) {
+            const std::wstring label=std::to_wstring(cc);
+            const float w=6.f+6.2f*float(label.size()), h=13.f;
+            const float bx=r.X+(r.Width-w)/2, by=r.Y+(r.Height-h)/2;
+            GraphicsPath badge;roundedPath(badge,bx,by,w,h,2.4f);
+            SolidBrush badgeBrush(learn);
+            g.FillPath(&badgeBrush,&badge);
+            roundedOutline(g,Color(191,255,255,255),bx+.5f,by+.5f,w-1.f,h-1.f,2.4f);
+            text(g,label,bx,by,w,h,9,rgb(0xFFFFFF),true,true);
+        }
+    }
+}
 RectF WindowsEditor::chromeRect(int id) {
     switch(id) {
     case 3: return {420,495,24,20};  case 4: return {449,495,24,20};
@@ -727,10 +806,6 @@ void WindowsEditor::drawControlDynamic(Graphics& g,const Control& c,bool hovered
         hand.SetStartCap(LineCapRound);hand.SetEndCap(LineCapRound);
         g.DrawLine(&hand,PointF(x+dx*radius*.18f,y+dy*radius*.18f),
                    PointF(x+dx*radius*.84f,y+dy*radius*.84f));
-        if(midiLearn_ && c.id<99) {
-            Pen frame(rgb(0x59A7E8),1.4f);
-            g.DrawEllipse(&frame,x-radius-4,y-radius-4,size+8,size+8);
-        }
         return;
     }
     case Kind::Toggle:
@@ -894,6 +969,7 @@ void WindowsEditor::drawDynamic(Graphics& g) {
         if((browser_ && c.y<kBrowserRect.Y+kBrowserRect.Height) || !visible(bounds(c))) continue;
         drawControlDynamic(g,c,hoveredControl_==int(i));
     }
+    if(midiLearn_ && !browser_) drawLearn(g);
     for(const int id:{3,4,5,6})
         if(hoveredChrome_==id) drawChrome(g,id,true);
     if(visible(kLcdRect)) {
@@ -1011,21 +1087,52 @@ void WindowsEditor::refreshBanks() {
     if(selectedBank_==-1 && !banks_.empty()) selectedBank_=bankOrder_.front();
     if(selectedBank_>=int(banks_.size())) selectedBank_=banks_.empty()?-1:bankOrder_.front();
     if(selectedSlot_<0 && loadedSlot>=0 && selectedBank_==loadedBank) selectedSlot_=loadedSlot;
-    if(writing_ && (selectedBank_==kFavouritesBank ||
-                    (selectedBank_>=0 && banks_[size_t(selectedBank_)].readOnly))) {
-        for(size_t b=0;b<banks_.size();b++) if(!banks_[b].readOnly) {selectedBank_=int(b);break;}
+    // The write dialog never targets the read-only factory bank: out of it
+    // (or out of no bank) it opens on the "User" bank, proposed even when
+    // the library has none (the write makes it). A writable bank in view
+    // stays (the loaded one: written back). As PatchBrowserView.leaveReadOnlyBank.
+    if(writing_ && !banks_.empty() && (selectedBank_<0 || banks_[size_t(selectedBank_)].readOnly)) {
+        const int user=userBank();
+        const int pick=user>=0 ? user : kNewUserBank;
+        if(pick!=selectedBank_) {
+            selectedBank_=pick;selectedSlot_=-1;
+            // in view (the new User row is the last one)
+            int visual=int(bankOrder_.size())+1;
+            for(size_t i=0;i<bankOrder_.size();i++) if(bankOrder_[i]==pick) visual=int(i)+1;
+            if(visual<bankScroll_ || visual>=bankScroll_+20) bankScroll_=visual-19;
+        }
     }
+    if(writing_ && selectedSlot_<0 && selectedBank_==kNewUserBank) selectedSlot_=0;
     if(writing_ && selectedSlot_<0 && selectedBank_>=0) {
         const auto& slots=banks_[size_t(selectedBank_)].slots;
         auto it=std::find(slots.begin(),slots.end(),"");
         selectedSlot_=it==slots.end()?0:int(it-slots.begin());
     }
-    bankScroll_=std::clamp(bankScroll_,0,std::max(0,int(bankOrder_.size())+1-20));
+    bankScroll_=std::clamp(bankScroll_,0,std::max(0,bankRowCount()-20));
     repaint();
+}
+int WindowsEditor::userBank() const {
+    for(size_t b=0;b<banks_.size();b++)
+        if(!banks_[b].readOnly && banks_[b].name==s2::kUserBankName) return int(b);
+    return -1;
+}
+bool WindowsEditor::offersNewUserBank() const {
+    return writing_ && !banks_.empty() && userBank()<0;
+}
+int WindowsEditor::bankRowCount() const {
+    return int(bankOrder_.size())+1+(offersNewUserBank()?1:0);
 }
 void WindowsEditor::openBrowser(bool writing) {
     browser_=true;writing_=writing;
     bankScroll_=slotScroll_=0;selectedSlot_=-1;
+    // Write dialog: from the loaded program's bank (SynthModel.openBrowser),
+    // refreshBanks then leaves a read-only one for User. The plain browser
+    // stays where it was (Favourites).
+    if(writing) {
+        int loadedBank=-1,loadedSlot=-1;
+        if(knownRevision_>0 && hooks_.loadedProgram) hooks_.loadedProgram(hooks_.ctx,&loadedBank,&loadedSlot);
+        if(loadedBank>=0 && loadedBank<int(banks_.size())) selectedBank_=loadedBank;
+    }
     // SynthModel.openBrowser: a background rescan on every open (the list
     // in place stays usable; a scan already running is not restarted).
     if(hooks_.startLibraryScan) hooks_.startLibraryScan(hooks_.ctx);
@@ -1035,8 +1142,152 @@ void WindowsEditor::openBrowser(bool writing) {
 }
 void WindowsEditor::closeBrowser() {
     browser_=writing_=false;
+    if(selectedBank_==kNewUserBank) selectedBank_=-1; // the next refresh selects the loaded bank
     updateEditControl();
     repaint();
+}
+int WindowsEditor::bankRowAt(float x,float y) const {
+    if(x<7 || x>=196 || y<64 || y>469) return -1;
+    const int visual=bankScroll_+int((y-64)/20);
+    if(visual==0) return kFavouritesBank;
+    if(visual>0 && visual<=int(bankOrder_.size())) return bankOrder_[size_t(visual-1)];
+    return visual==int(bankOrder_.size())+1 && offersNewUserBank() ? kNewUserBank : -1;
+}
+int WindowsEditor::slotAt(float x,float y) const {
+    if(x<204 || x>=760 || y<64 || y>469) return -1;
+    int count=-1;
+    if(selectedBank_==kFavouritesBank) count=int(favourites_.size());
+    else if(writing_ && selectedBank_==kNewUserBank) count=s2::kBankSlots;
+    else if(selectedBank_>=0 && selectedBank_<int(banks_.size())) count=int(banks_[size_t(selectedBank_)].slots.size());
+    if(count<=0) return -1;
+    const int rows=std::max(1,(count+3)/4);
+    const int row=slotScroll_+int((y-64)/20);
+    if(row>=rows) return -1; // below a short grid, not the next column
+    const int index=std::clamp(int((x-204)/138.5f),0,3)*rows+row;
+    return index<count ? index : -1;
+}
+
+// Right click in the browser = PatchBrowserView's libraryMenu: a bank =
+// Export bank... / Show in Explorer [/ Delete bank...], a patch = Show in
+// Explorer [/ Delete]; nothing on read-only banks' deletes, nothing on
+// banks the write dialog cannot pick. Elsewhere in the browser: no menu.
+bool WindowsEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
+    if(!browser_ || !kBrowserRect.Contains(x,y)) return false;
+    enum {kExport=1,kReveal,kDeleteBank,kDelete};
+    // What the menu acts on, taken NOW: the menu and the message boxes are
+    // modal loops in which the timer still runs, and a background scan
+    // landing meanwhile renumbers the banks.
+    std::string source,slotFile;
+    HMENU menu=CreatePopupMenu();
+    if(!menu) return true;
+    if(const int row=bankRowAt(x,y); row>=0 && row<int(banks_.size())) {
+        const Bank& b=banks_[size_t(row)];
+        if(!(writing_ && b.readOnly)) {
+            source=b.source;
+            AppendMenuW(menu,MF_STRING,kExport,L"Export bank...");
+            AppendMenuW(menu,MF_STRING,kReveal,L"Show in Explorer");
+            if(!b.readOnly) {
+                AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
+                AppendMenuW(menu,MF_STRING,kDeleteBank,L"Delete bank...");
+            }
+        }
+    } else if(const int index=slotAt(x,y); index>=0 && selectedBank_!=kNewUserBank) {
+        // a favourite = its patch (shown, never deleted from here)
+        const bool favouriteView=selectedBank_==kFavouritesBank;
+        int b=selectedBank_,s=index;
+        if((!favouriteView || resolveFavourite(favourites_[size_t(index)],b,s)) &&
+           b>=0 && b<int(banks_.size()) && !banks_[size_t(b)].slots[size_t(s)].empty() &&
+           hooks_.slotPath) {
+            slotFile=hooks_.slotPath(hooks_.ctx,b,s);
+            AppendMenuW(menu,MF_STRING,kReveal,L"Show in Explorer");
+            if(!favouriteView && !banks_[size_t(b)].readOnly) {
+                AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
+                AppendMenuW(menu,MF_STRING,kDelete,L"Delete");
+            }
+        }
+    }
+    const int choice=GetMenuItemCount(menu)>0 ?
+        int(TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,screenX,screenY,0,window_,nullptr)) : 0;
+    DestroyMenu(menu);
+    auto adopt=[this] { // the library changed under us (the hooks rescanned)
+        if(hooks_.libraryRevision) knownRevision_=hooks_.libraryRevision(hooks_.ctx);
+        refreshBanks();
+    };
+    // The bank's index in the hooks' list as of now, -1 = gone.
+    auto bankNow=[&]()->int {
+        if(hooks_.libraryRevision && hooks_.libraryRevision(hooks_.ctx)!=knownRevision_) adopt();
+        for(size_t i=0;i<banks_.size();i++) if(banks_[i].source==source) return int(i);
+        return -1;
+    };
+    switch(choice) {
+    case kReveal:
+        revealInExplorer(slotFile.empty() ? source : slotFile);
+        break;
+    case kExport: {
+        std::wstring dir;
+        if(!pickFolder(L"Export bank: a folder holding its patches is created in the folder you choose",dir)) break;
+        const int bank=bankNow();
+        const std::string made=bank>=0 && hooks_.exportBank ? hooks_.exportBank(hooks_.ctx,bank,toUtf8(dir).c_str()) : "";
+        if(made.empty()) MessageBoxW(window_,L"Unable to export this bank.",L"Synth2",MB_ICONWARNING);
+        else revealInExplorer(made);
+        break;
+    }
+    case kDeleteBank: {
+        // DeleteBankDialog
+        int bank=bankNow();
+        if(bank<0) break;
+        const Bank& b=banks_[size_t(bank)];
+        const auto count=std::count_if(b.slots.begin(),b.slots.end(),[](const std::string& s){return !s.empty();});
+        const std::wstring detail=L"\u201C"+toWide(b.name.c_str())+L"\u201D ("+std::to_wstring(count)+
+            (count==1?L" patch":L" patches")+L") will be moved to the Recycle Bin.";
+        if(MessageBoxW(window_,detail.c_str(),L"Delete bank?",MB_YESNO|MB_ICONWARNING|MB_DEFBUTTON2)!=IDYES) break;
+        bank=bankNow();
+        if(bank<0 || !hooks_.deleteBank || !hooks_.deleteBank(hooks_.ctx,bank))
+            MessageBoxW(window_,L"Unable to delete this bank.",L"Synth2",MB_ICONWARNING);
+        adopt();
+        break;
+    }
+    case kDelete: {
+        // SynthModel.deleteSlot: the .sy1 to the Recycle Bin (PatchManager's
+        // rule: deleted where there is none), then a rescan.
+        if(slotFile.empty()) break;
+        const std::filesystem::path file(toWide(slotFile.c_str()));
+        std::error_code ec;
+        if(!MoveToTrash(file)) std::filesystem::remove(file,ec);
+        if(hooks_.rescanLibrary) hooks_.rescanLibrary(hooks_.ctx);
+        adopt();
+        break;
+    }
+    default: break;
+    }
+    repaint();
+    return true;
+}
+// Finder.reveal: the containing folder opens with the item selected.
+void WindowsEditor::revealInExplorer(const std::string& utf8Path) const {
+    if(utf8Path.empty()) return;
+    std::wstring path=toWide(utf8Path.c_str());
+    std::replace(path.begin(),path.end(),L'/',L'\\');
+    const HRESULT com=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
+    if(auto item=ILCreateFromPathW(path.c_str())) {
+        SHOpenFolderAndSelectItems(item,0,nullptr,0);
+        ILFree(item);
+    }
+    if(SUCCEEDED(com)) CoUninitialize();
+}
+bool WindowsEditor::pickFolder(const wchar_t* title,std::wstring& folder) const {
+    BROWSEINFOW browse{};
+    browse.hwndOwner=window_;
+    browse.lpszTitle=title;
+    browse.ulFlags=BIF_RETURNONLYFSDIRS|BIF_NEWDIALOGSTYLE;
+    PIDLIST_ABSOLUTE item=SHBrowseForFolderW(&browse);
+    if(!item) return false;
+    wchar_t path[MAX_PATH]={};
+    const BOOL gotPath=SHGetPathFromIDListW(item,path);
+    CoTaskMemFree(item);
+    if(!gotPath) return false;
+    folder=path;
+    return true;
 }
 int WindowsEditor::displayBankNumber(int bank) const {
     auto it=std::find(bankOrder_.begin(),bankOrder_.end(),bank);
@@ -1170,24 +1421,26 @@ void WindowsEditor::drawBrowser(Graphics& g) {
     fill(g,p[kDisplayBottom],x+191,y+28,w-192,h-30);
     stroke(g,p[kHeader],x+190,y+28,1,h-30);
     constexpr float row=20;
-    const int visualCount=int(bankOrder_.size())+1; // 00: Favourites
+    const int visualCount=bankRowCount(); // 00: Favourites, then the banks (+ new User)
     for(int i=0;i<20;i++) {
         const int visual=bankScroll_+i;
         if(visual<0 || visual>=visualCount)break;
-        const int bi=visual==0 ? kFavouritesBank : bankOrder_[size_t(visual-1)];
-        const bool isFavouriteBank=bi==kFavouritesBank;
+        const int bi=visual==0 ? kFavouritesBank :
+            visual<=int(bankOrder_.size()) ? bankOrder_[size_t(visual-1)] : kNewUserBank;
+        const bool isFavouriteBank=bi==kFavouritesBank, isNewUser=bi==kNewUserBank;
         const float ry=64+row*i;
         if(bi==selectedBank_)fill(g,selectionFill,8,ry,187,19);
         int count=isFavouriteBank?int(favourites_.size()):0;
-        if(!isFavouriteBank)
+        if(bi>=0)
             for(const auto& slot:banks_[size_t(bi)].slots)if(!slot.empty())++count;
         wchar_t prefix[12];std::swprintf(prefix,12,L"%02d:",visual);
         const Color bankText=bi==selectedBank_?selectionInk:nameInk;
-        text(g,prefix,12,ry,27,18,10.5f,
+        // the bank to be made has no number yet
+        text(g,isNewUser?L"--:":prefix,12,ry,27,18,10.5f,
              bi==selectedBank_?selectedNumberInk:numberInk,false,false,true);
-        text(g,isFavouriteBank?L"Favourites":toWide(banks_[size_t(bi)].name.c_str()),
+        text(g,isFavouriteBank?L"Favourites":isNewUser?toWide(s2::kUserBankName):toWide(banks_[size_t(bi)].name.c_str()),
              39,ry,116,18,10.5f,bankText,false,false,true);
-        text(g,std::to_wstring(count),164,ry,30,18,10.5f,bankText,false,true,true);
+        text(g,isNewUser?L"new":std::to_wstring(count),164,ry,30,18,10.5f,bankText,false,true,true);
     }
     if(knownRevision_<=0) {
         text(g,L"Scanning preset banks in the background...",204,90,510,30,12,rgb(0xC1DCE0));
@@ -1198,8 +1451,9 @@ void WindowsEditor::drawBrowser(Graphics& g) {
         return;
     }
     const bool favouriteView=selectedBank_==kFavouritesBank;
-    if(!favouriteView && (selectedBank_<0 || selectedBank_>=int(banks_.size())))return;
-    const int count=favouriteView?int(favourites_.size()):
+    const bool newUserView=writing_ && selectedBank_==kNewUserBank; // all slots free
+    if(!favouriteView && !newUserView && (selectedBank_<0 || selectedBank_>=int(banks_.size())))return;
+    const int count=favouriteView?int(favourites_.size()):newUserView?s2::kBankSlots:
         int(banks_[size_t(selectedBank_)].slots.size());
     const int rows=std::max(1,(count+3)/4);
     const int loadedPairBank=loadedBankForPaint_;
@@ -1222,6 +1476,8 @@ void WindowsEditor::drawBrowser(Graphics& g) {
                 valid=resolveFavourite(fav,bank,slot);
                 if(valid)label=banks_[size_t(bank)].slots[size_t(slot)].empty()?label:
                     banks_[size_t(bank)].slots[size_t(slot)];
+            } else if(newUserView) {
+                valid=false;
             } else {
                 label=banks_[size_t(bank)].slots[size_t(slot)];
                 favourited=isFavourite(bank,slot);
@@ -1287,12 +1543,22 @@ void WindowsEditor::browserClick(float x,float y,bool doubleClick) {
         if(x>=690 && x<760) {closeBrowser();return;}
         if(writing_) {
             if(x>=514 && x<601) {
-                if(selectedBank_<0 || selectedBank_>=int(banks_.size()))return;
-                if(banks_[size_t(selectedBank_)].readOnly || selectedSlot_<0)return;
+                const bool newUser=selectedBank_==kNewUserBank;
+                if(selectedSlot_<0)return;
+                if(!newUser && (selectedBank_<0 || selectedBank_>=int(banks_.size()) ||
+                                banks_[size_t(selectedBank_)].readOnly))return;
                 std::wstring name=patchName();
                 if(editName_) {const int n=GetWindowTextLengthW(editName_);name.resize(size_t(n)+1);
                     GetWindowTextW(editName_,name.data(),n+1);name.resize(size_t(n));}
-                if(hooks_.writeLibraryPatch && hooks_.writeLibraryPatch(hooks_.ctx,selectedBank_,selectedSlot_,toUtf8(name).c_str())) {
+                // The proposed User bank is made now, by the write (newBank
+                // rescans: its index is valid for the write right away).
+                int bank=selectedBank_;
+                if(newUser && (!hooks_.newBank || (bank=hooks_.newBank(hooks_.ctx,s2::kUserBankName))<0)) {
+                    MessageBoxW(window_,L"Cannot create the User bank. Check the library folder is writable.",
+                                L"Synth2",MB_ICONWARNING);
+                    return;
+                }
+                if(hooks_.writeLibraryPatch && hooks_.writeLibraryPatch(hooks_.ctx,bank,selectedSlot_,toUtf8(name).c_str())) {
                     closeBrowser();refreshBanks();
                 } else MessageBoxW(window_,L"Cannot write that preset. Check the library folder is writable.",L"Synth2",MB_ICONWARNING);
                 return;
@@ -1332,13 +1598,12 @@ void WindowsEditor::browserClick(float x,float y,bool doubleClick) {
     }
     if(y<64 || y>469)return;
     if(x>=7 && x<196) {
-        const int visual=bankScroll_+int((y-64)/20);
-        const int bank=visual==0?kFavouritesBank:
-            (visual>0 && visual<=int(bankOrder_.size()) ? bankOrder_[size_t(visual-1)]:-1);
-        if(bank==kFavouritesBank ||
+        const int bank=bankRowAt(x,y);
+        if(bank==kFavouritesBank || bank==kNewUserBank ||
            (bank>=0 && bank<int(banks_.size()) && !(writing_ && banks_[size_t(bank)].readOnly))) {
             if(writing_ && bank==kFavouritesBank)return;
             selectedBank_=bank;selectedSlot_=-1;slotScroll_=0;
+            if(bank==kNewUserBank) selectedSlot_=0;
             if(writing_ && bank>=0) {
                 const auto& slots=banks_[size_t(bank)].slots;
                 auto it=std::find(slots.begin(),slots.end(),"");
@@ -1347,20 +1612,14 @@ void WindowsEditor::browserClick(float x,float y,bool doubleClick) {
         }
         repaint();return;
     }
-    if(x>=204 && x<760 && (selectedBank_==kFavouritesBank ||
-                            (selectedBank_>=0 && selectedBank_<int(banks_.size())))) {
+    {
+        const bool newUserView=writing_ && selectedBank_==kNewUserBank;
         const bool favouriteView=selectedBank_==kFavouritesBank;
-        const int count=favouriteView?int(favourites_.size()):
-            int(banks_[size_t(selectedBank_)].slots.size());
-        const int rows=std::max(1,(count+3)/4);
-        const int col=std::clamp(int((x-204)/138.5f),0,3);
-        const int rr=slotScroll_+int((y-64)/20);
-        const int index=col*rows+rr;
-        if(index>=0 && index<count) {
+        if(const int index=slotAt(x,y); index>=0) {
             selectedSlot_=index;
             int bank=selectedBank_,slot=index;
             const bool valid=favouriteView?resolveFavourite(favourites_[size_t(index)],bank,slot):
-                !banks_[size_t(bank)].slots[size_t(slot)].empty();
+                !newUserView && !banks_[size_t(bank)].slots[size_t(slot)].empty();
             if(!writing_ && valid && hooks_.loadLibraryPatch) {
                 hooks_.loadLibraryPatch(hooks_.ctx,bank,slot);
                 selectedId_=-1;
@@ -1399,7 +1658,7 @@ void WindowsEditor::updateHover(float x,float y) {
             else if(x>=420.f && x<448.f && y>=495.f && y<515.f) nextChrome=3;
             else if(x>=449.f && x<473.f && y>=495.f && y<515.f) nextChrome=4;
         }
-        if(nextChrome==0) {
+        if(nextChrome==0 && !midiLearn_) { // learn mode: the hotspots take the clicks
             // Match mouseDown's reverse draw order so overlapping hit areas
             // always highlight the control that will receive the click.
             for(size_t i=controls_.size();i>0;--i) {
@@ -1435,9 +1694,7 @@ void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
         browserClick(x,y,doubleClick);
         return;
     }
-    if(midiLearn_ && x>=558.f && x<744.f && y>=488.f && y<512.f) {
-        midiLearn_=false;learnTarget_=-1;repaint();return;
-    }
+    if(midiLearn_ && x>=558.f && x<744.f && y>=488.f && y<512.f) {setLearn(false);return;}
     if(y>=484 && y<=554) {
         if(x>=492 && x<542) {
             if(y<518) {openBrowser(true);return;}
@@ -1449,16 +1706,29 @@ void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
     if(y<32 && x<100) {
         POINT p;GetCursorPos(&p);showThemeMenu(p.x,p.y);return;
     }
+    // Learn mode: a hotspot takes the click (the controls under it stop
+    // taking input); the others (volume, ctrl src / assign menus) still work.
+    if(const int id=midiLearn_ ? learnHit(x,y) : -1; id>=0) {
+        if(doubleClick) {
+            // The first click of the pair armed it: the mac's double tap
+            // leaves the selection as it was.
+            if(learnCC_[size_t(id)] && hooks_.setMidiCC) hooks_.setMidiCC(hooks_.ctx,id,0);
+            learnCC_[size_t(id)]=0;
+            learnSelect(learnPrevTarget_);
+            invalidate(learnRects_[size_t(id)]);
+        } else {
+            learnPrevTarget_=learnTarget_;
+            learnSelect(id);
+            selectedId_=id; // the LCD names it
+            invalidate(kLcdRect);
+        }
+        return;
+    }
     for(auto it=controls_.rbegin();it!=controls_.rend();++it) {
         const auto& c=*it;
         if(x<c.x || x>=c.x+c.w || y<c.y || y>=c.y+c.h)continue;
         if(c.id<0)continue;
         selectedId_=c.id;
-        if(midiLearn_) {
-            if(doubleClick && hooks_.setMidiCC) hooks_.setMidiCC(hooks_.ctx,c.id,0);
-            else learnTarget_=c.id;
-            repaint();return;
-        }
         // WM_LBUTTONDBLCLK is delivered for the SECOND rapid click.
         // Only knobs and non-cycling value displays reset on a double click,
         // exactly as in SwiftUI. Cycle buttons, LEDs, waveform selectors and
@@ -1529,13 +1799,12 @@ void WindowsEditor::wheel(int direction,float x,float y) {
         if(x<196) {
             // Wheel input is expressed as rows, not merely the sign of one
             // notch. A standard wheel step now moves eight bank entries.
-            const int next=std::clamp(bankScroll_-direction,0,
-                                      std::max(0,int(bankOrder_.size())+1-20));
+            const int next=std::clamp(bankScroll_-direction,0,std::max(0,bankRowCount()-20));
             if(next!=bankScroll_) {bankScroll_=next;invalidate(kBrowserRect);}
-        } else if(selectedBank_==kFavouritesBank ||
+        } else if(selectedBank_==kFavouritesBank || selectedBank_==kNewUserBank ||
                   (selectedBank_>=0 && selectedBank_<int(banks_.size()))) {
             const int count=selectedBank_==kFavouritesBank?int(favourites_.size()):
-                int(banks_[size_t(selectedBank_)].slots.size());
+                selectedBank_==kNewUserBank?s2::kBankSlots:int(banks_[size_t(selectedBank_)].slots.size());
             const int rows=(count+3)/4;
             const int amount=(direction>0?1:-1)*std::max(1,(std::abs(direction)+1)/2);
             const int next=std::clamp(slotScroll_-amount,0,std::max(0,rows-20));
@@ -1642,19 +1911,7 @@ void WindowsEditor::showImportDialog(int screenX,int screenY) {
         dialog.Flags=OFN_EXPLORER|OFN_PATHMUSTEXIST|OFN_FILEMUSTEXIST;
         if(!GetOpenFileNameW(&dialog))return;
         path=file;
-    } else {
-        BROWSEINFOW browse{};
-        browse.hwndOwner=window_;
-        browse.lpszTitle=L"Choose a folder containing Synth1 .sy1 presets";
-        browse.ulFlags=BIF_RETURNONLYFSDIRS|BIF_NEWDIALOGSTYLE;
-        PIDLIST_ABSOLUTE item=SHBrowseForFolderW(&browse);
-        if(!item)return;
-        wchar_t folder[MAX_PATH]={};
-        BOOL gotPath=SHGetPathFromIDListW(item,folder);
-        CoTaskMemFree(item);
-        if(!gotPath)return;
-        path=folder;
-    }
+    } else if(!pickFolder(L"Choose a folder containing Synth1 .sy1 presets",path)) return;
     const std::string bytes=toUtf8(path);
     const char* imported=hooks_.importItems(hooks_.ctx,bytes.c_str());
     if(!imported || !*imported)
@@ -1742,10 +1999,7 @@ void WindowsEditor::showMainMenu(int x,int y) {
             break;
         case 11: showFileDialog(false);break;
         case 12: showFileDialog(true);break;
-        case 13:
-            midiLearn_=!midiLearn_;learnTarget_=-1;
-            if(hooks_.lastCC)lastCcToken_=hooks_.lastCC(hooks_.ctx);
-            break;
+        case 13: setLearn(!midiLearn_);break;
         case 14: if(hooks_.allNotesOff)hooks_.allNotesOff(hooks_.ctx);break;
         case 15: showThemeEditor();break;
         default: pickTheme(selected,picks);break;
@@ -1807,11 +2061,18 @@ void WindowsEditor::tick() {
             knownRevision_=revision;refreshBanks();dirty=true;
         }
     }
-    if(midiLearn_&&learnTarget_>=0&&hooks_.lastCC&&hooks_.setMidiCC) {
+    // SynthModel.incomingCC: every new CC is consumed (none learned while
+    // nothing is armed), CC 1..127 only; the control stays armed.
+    if(midiLearn_ && hooks_.lastCC) {
         const int token=hooks_.lastCC(hooks_.ctx);
         if(token!=lastCcToken_ && token>0) {
-            lastCcToken_=token;hooks_.setMidiCC(hooks_.ctx,learnTarget_,token&127);
-            learnTarget_=-1;dirty=true;
+            lastCcToken_=token;
+            const int cc=token&127;
+            if(learnTarget_>=0 && learnTarget_<kLearnCount && cc>=1 && learnCC_[size_t(learnTarget_)]!=cc && hooks_.setMidiCC) {
+                hooks_.setMidiCC(hooks_.ctx,learnTarget_,cc);
+                learnCC_[size_t(learnTarget_)]=cc;
+                invalidate(learnRects_[size_t(learnTarget_)]);
+            }
         }
     }
     if(dirty) repaint();
@@ -1910,7 +2171,9 @@ LRESULT WindowsEditor::windowMessage(UINT msg,WPARAM wp,LPARAM lp) {
     case WM_SETCURSOR: {
         if(LOWORD(lp)==HTCLIENT) {
             POINT pos{};GetCursorPos(&pos);ScreenToClient(window_,&pos);
-            if(hoveredChrome_!=0 || hoveredControl_>=0 || isVersionBox(float(pos.x)/sx,float(pos.y)/sy)) {
+            const float dx=float(pos.x)/sx, dy=float(pos.y)/sy;
+            if(hoveredChrome_!=0 || hoveredControl_>=0 || isVersionBox(dx,dy) ||
+               (midiLearn_ && !browser_ && learnHit(dx,dy)>=0)) {
                 SetCursor(LoadCursorW(nullptr,IDC_HAND));return TRUE;
             }
             RECT client{};GetClientRect(window_,&client);
@@ -1964,12 +2227,16 @@ LRESULT WindowsEditor::windowMessage(UINT msg,WPARAM wp,LPARAM lp) {
     }
     case WM_KEYDOWN:
         if(wp==VK_ESCAPE && browser_) {closeBrowser();return 0;}
-        if(wp==VK_ESCAPE && midiLearn_) {midiLearn_=false;learnTarget_=-1;repaint();return 0;}
+        if(wp==VK_ESCAPE && midiLearn_) {setLearn(false);return 0;}
         if(wp==VK_LEFT) {stepPatch(-1);return 0;}
         if(wp==VK_RIGHT) {stepPatch(1);return 0;}
         return 0;
     case WM_CONTEXTMENU: {
         POINT p{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};
+        if(p.x!=-1 || p.y!=-1) { // -1, -1 = from the keyboard
+            POINT client=p;ScreenToClient(window_,&client);
+            if(showLibraryMenu(float(client.x)/sx,float(client.y)/sy,p.x,p.y)) return 0;
+        }
         showMainMenu(p.x,p.y);return 0;
     }
     default:return DefWindowProcW(window_,msg,wp,lp);
