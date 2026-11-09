@@ -67,9 +67,12 @@ inline fs::path StandardData() {
     const fs::path base = KnownFolder(FOLDERID_RoamingAppData);
     return base.empty() ? fs::path{} : base / fs::path(OXO_DATA_FOLDER);
 }
+// The bank library, as on the mac (~/Music/<OXO_LIBRARY_FOLDER>): a
+// documents folder, not the roaming settings one (roaming profiles sync
+// it at every logon; big libraries made that slow).
 inline fs::path StandardLibrary() {
-    const fs::path root = StandardData();
-    return root.empty() ? fs::path{} : root / "Presets";
+    const fs::path base = KnownFolder(FOLDERID_Documents);
+    return base.empty() ? fs::path{} : base / fs::path(OXO_LIBRARY_FOLDER);
 }
 
 inline paths::Selection Chosen() {

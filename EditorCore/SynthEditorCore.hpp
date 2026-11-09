@@ -14,6 +14,7 @@
 
 #if defined(_WIN32)
 #include "Windows_Build/Source/WindowsPresetIndex.hpp"
+#include "Windows_Build/Source/WindowsStorage.hpp"
 #endif
 
 #include <algorithm>
@@ -50,10 +51,10 @@ public:
         library_.Configure(root, factory, build);
         library_.SetTrash(MoveToTrash);
 #if defined(_WIN32)
-        // Restore the bank index immediately; the browser's Refresh command
-        // still performs a full authoritative filesystem scan on demand.
+        // Restore the bank index (in the settings folder) at once; the
+        // background rescan of every editor / browser open replaces it.
         std::vector<s2::PatchBank> cached;
-        if (winindex::Load(root.parent_path(),root,factory,cached)) {
+        if (winindex::Load(storage::win::Chosen().data,root,factory,cached)) {
             library_.AdoptIndex(std::move(cached));
             savedIndexRevision_ = library_.Revision();
         }
@@ -216,7 +217,7 @@ public:
                 // Writes, imports and explicit refreshes update the index.
                 // Even when cache writing fails, don't retry every 50ms.
                 editor->savedIndexRevision_ = revision;
-                winindex::Save(editor->library_.Root().parent_path(),
+                winindex::Save(storage::win::Chosen().data,
                                editor->library_.Root(),editor->library_.Factory(),
                                editor->library_.Library().Banks());
             }
