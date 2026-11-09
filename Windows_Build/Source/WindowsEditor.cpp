@@ -5,7 +5,6 @@
 #include "EditorCore/Storage.hpp"
 #include "WindowsZoomSettings.hpp"
 #include "WindowsFavourites.hpp"
-#include "WindowsThemes.hpp"
 #include "WindowsThemeEditor.hpp"
 #include <shellapi.h>
 #include <shlobj.h>
@@ -31,9 +30,14 @@ constexpr float kDesignWidth = 770.f, kDesignHeight = 560.f;
 constexpr int kMinWidth = 578;  // 75% of the 770-pixel design width, rounded up
 constexpr int kMaxWidth = 2310; // 300% of the design width
 constexpr float kPi = 3.14159265358979323846f;
-constexpr int kPanel=0, kHeader=1, kHeaderText=2, kLabel=3, kKnob=4, kKnobHighlight=5,
-              kDial=6, kButton=7, kLed=8, kRadio=9, kDisplayText=10, kDisplayTop=11, kDisplayBottom=12,
-              kVoiceGridBorder=13, kVoiceGridEmpty=14, kVoiceGridPlaying=15, kVoiceGridReleased=16;
+constexpr int kPanel=themes::kPanel, kHeader=themes::kHeader, kHeaderText=themes::kHeaderText,
+              kLabel=themes::kLabel, kKnob=themes::kKnobBody, kKnobHighlight=themes::kKnobGradient,
+              kDial=themes::kKnobDial, kButton=themes::kButton, kLed=themes::kLed, kRadio=themes::kRadio,
+              kDisplayText=themes::kDisplayText, kDisplayTop=themes::kDisplayTop,
+              kDisplayBottom=themes::kDisplayBottom;
+constexpr int kThemeCommand=1000; // theme menu items: kThemeCommand + index into the picks
+// Theme.lcdText (Shared/SynthControls.swift): fixed browser / LCD text.
+constexpr int kLcdText=0xE0FFFF;
 constexpr const wchar_t kWindowsDevBuild[] = L"19.3";
 
 Color rgb(int rgbValue) { return Color(255, (rgbValue>>16)&255, (rgbValue>>8)&255, rgbValue&255); }
@@ -223,6 +227,27 @@ struct Reader {
     }
 };
 
+// ThemeStore.shared: one themes.json per process, shared by every editor.
+// remember() writes once the edit settles (the theme editor streams edits).
+struct SharedThemes {
+    themes::Store store{storage::Root()/"themes.json"};
+    ULONGLONG writeDue=0;
+    void remember(const themes::Palette& p) { if(store.Remember(p)) writeDue=GetTickCount64()+400; }
+    void flush(bool now) {
+        if(writeDue && (now || GetTickCount64()>=writeDue)) {writeDue=0;store.Write();}
+    }
+    // The palette of an instance without a session theme. Re-reads the
+    // file: the last pick may come from another process.
+    themes::Palette startPalette() {
+        if(writeDue) flush(true); else store.Load();
+        return store.Current();
+    }
+};
+SharedThemes& sharedThemes() {
+    static SharedThemes shared;
+    return shared;
+}
+
 } // namespace
 
 std::wstring WindowsEditor::toWide(const char* str) {
@@ -253,12 +278,16 @@ WindowsEditor::WindowsEditor(OxoSynth2Controller* controller)
     GdiplusStartupInput gdiplusInput;
     GdiplusStartup(&gdiplusToken_,&gdiplusInput,nullptr);
     constructLayout();
-    wintheme::CreateMissing(storage::Root()); // seeds seven editable factory files once
-    applyTheme(0);
-    readTheme();
+    // SynthModel.init: the session's palette, else the last one picked;
+    // either way pinned to the session.
+    const auto restored=hooks_.themeText ? themes::FromStateText(hooks_.themeText(hooks_.ctx)) : std::nullopt;
+    theme_=restored ? *restored : sharedThemes().startPalette();
+    for(size_t i=0;i<colors_.size();++i) colors_[i]=rgb(int(theme_[i]));
+    if(hooks_.setThemeText) hooks_.setThemeText(hooks_.ctx,themes::StateText(theme_).c_str());
     favouritesReadable_=winfav::Load(storage::Root(),favourites_);
 }
 WindowsEditor::~WindowsEditor() {
+    sharedThemes().flush(true);
     if(themeEditor_)themeEditor_->Close();
     removedFromParent();
     if(gdiplusToken_) GdiplusShutdown(gdiplusToken_);
@@ -512,54 +541,55 @@ void WindowsEditor::constructLayout() {
     knob(99,L"vol",6,484,19,29,26);
 }
 
-void WindowsEditor::applyTheme(int index) {
-    const int i=std::clamp(index,0,6);
-    // Use the saved file even for the default theme. If its location is not
-    // writable on first run, keep the original built-in palette as a fallback.
-    wintheme::Palette colors=wintheme::Originals[static_cast<size_t>(i)];
-    wintheme::Read(wintheme::File(storage::Root(),i),colors);
-    for(size_t k=0;k<palette_.c.size();k++) palette_.c[k]=rgb(int(colors[k]));
+// SynthModel.applyTheme / setThemeColor: this instance wears it (session),
+// and it becomes the palette the next new instance starts with.
+void WindowsEditor::setTheme(const themes::Palette& palette,bool fromThemeEditor) {
+    theme_=palette;
+    for(size_t i=0;i<colors_.size();++i) colors_[i]=rgb(int(theme_[i]));
+    if(hooks_.setThemeText) hooks_.setThemeText(hooks_.ctx,themes::StateText(theme_).c_str());
+    sharedThemes().remember(theme_);
+    if(!fromThemeEditor && themeEditor_) themeEditor_->Refresh();
     repaint();
 }
-bool WindowsEditor::selectTheme(int index) {
-    const auto entries=wintheme::List(storage::Root());
-    if(index<0 || index>=static_cast<int>(entries.size()))return false;
-    wintheme::Palette colors{};
-    const auto file=entries[size_t(index)].file;
-    if(!wintheme::Read(file,colors)) {
-        // Do not overwrite an invalid edited file or silently ignore it.
-        MessageBoxW(window_,
-            (L"Could not load theme file:\n"+file.wstring()+
-             L"\n\nCheck that it contains all original colours as valid #RRGGBB values.").c_str(),
-            L"Synth2 Themes",MB_OK|MB_ICONWARNING);
-        return false;
+// SynthModel.syncTheme: a session restore may bring another palette; one
+// without (older session) keeps the current one, now pinned to the session.
+void WindowsEditor::syncTheme() {
+    const auto restored=hooks_.themeText ? themes::FromStateText(hooks_.themeText(hooks_.ctx)) : std::nullopt;
+    if(!restored) {
+        if(hooks_.setThemeText) hooks_.setThemeText(hooks_.ctx,themes::StateText(theme_).c_str());
+        return;
     }
-    for(size_t k=0;k<palette_.c.size();k++)palette_.c[k]=rgb(int(colors[k]));
-    currentThemeIndex_=index;
-    // Preserve the existing session-state format (for DAW projects) exactly.
-    // The theme file is the source when choosing a theme; the current patch
-    // continues using the existing bridge until a different file is selected.
-    const std::string state=wintheme::ToJSON(colors);
-    if(hooks_.setThemeText)hooks_.setThemeText(hooks_.ctx,state.c_str());
+    if(*restored==theme_) return;
+    theme_=*restored;
+    for(size_t i=0;i<colors_.size();++i) colors_[i]=rgb(int(theme_[i]));
+    if(themeEditor_) themeEditor_->Refresh();
     repaint();
+}
+// LogoMenu's theme column: factory themes, then the user's; the active one checked.
+void WindowsEditor::appendThemes(HMENU menu,std::vector<themes::Palette>& picks) const {
+    std::vector<themes::Named> list=themes::Factory();
+    const auto user=sharedThemes().store.UserThemes();
+    const size_t factoryCount=list.size();
+    list.insert(list.end(),user.begin(),user.end());
+    bool checked=false;
+    for(size_t i=0;i<list.size();++i) {
+        if(i==factoryCount) AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
+        const bool active=!checked && list[i].palette==theme_;
+        checked=checked || active;
+        const std::wstring name=toWide(list[i].name.c_str())+(i==0?L" (default)":L"");
+        AppendMenuW(menu,MF_STRING|(active?MF_CHECKED:0),UINT_PTR(kThemeCommand+int(picks.size())),name.c_str());
+        picks.push_back(list[i].palette);
+    }
+}
+bool WindowsEditor::pickTheme(int command,const std::vector<themes::Palette>& picks) {
+    const int index=command-kThemeCommand;
+    if(index<0 || index>=int(picks.size())) return false;
+    setTheme(picks[size_t(index)]);
     return true;
-}
-void WindowsEditor::readTheme() {
-    if(!hooks_.themeText) return;
-    std::string state=hooks_.themeText(hooks_.ctx);
-    for(size_t i=0;i<wintheme::Keys.size();i++) {
-        const std::string key="\""+std::string(wintheme::Keys[i])+"\"";
-        const size_t p=state.find(key);
-        if(p==std::string::npos) continue;
-        const size_t hash=state.find('#',p+key.size());
-        if(hash==std::string::npos || hash>p+key.size()+9 || hash+7>state.size()) continue;
-        unsigned v=0;
-        if(std::sscanf(state.c_str()+hash+1,"%6x",&v)==1) palette_.c[i]=rgb(int(v));
-    }
 }
 
 void WindowsEditor::drawControl(Graphics& g,const Control& c,bool hovered) {
-    const auto& p=palette_.c;
+    const auto& p=colors_;
     switch(c.kind) {
     case Kind::Label:
         text(g,c.label,c.x,c.y,c.w,c.h,9.5f,p[kLabel],false,true);
@@ -578,10 +608,8 @@ void WindowsEditor::drawControl(Graphics& g,const Control& c,bool hovered) {
         int low=0,high=127,def=64;
         if(hooks_.paramInfo) hooks_.paramInfo(hooks_.ctx,c.id,&low,&high,&def);
         const float frac=std::clamp((float(value(c.id))-float(low))/float(std::max(1,high-low)),0.f,1.f);
-        // macOS theme.knobTicks is label ink composited at 30% opacity over
-        // the panel; the previous code used a near-black header colour.
-        // Solid medium-grey tick dots, without the dark LED outline.
-        const SolidBrush dots(rgb(0x6E6E6E));
+        // Theme.knobTicks: label ink at 30% opacity.
+        const SolidBrush dots(Color(77,p[kLabel].GetR(),p[kLabel].GetG(),p[kLabel].GetB()));
         for(int i=0;i<11;i++) {
             const float a=(-140+i*28-90)*kPi/180;
             // Five closely-spaced FX knobs have 27px centre spacing.
@@ -601,16 +629,13 @@ void WindowsEditor::drawControl(Graphics& g,const Control& c,bool hovered) {
         Color surround[1]={p[kKnob]};
         body.SetSurroundColors(surround,&count);
         g.FillPath(&body,&circle);
-        Pen rim(blend(p[kPanel],p[kLabel],.25f),1.f);
+        Pen rim(muted(p[kPanel],.5f),1.f); // Theme.knobRim
         g.DrawEllipse(&rim,x-radius,y-radius,size,size);
         // SwiftUI uses a short capsule near the rim, not a red line from
         // the knob's centre. Match its -140 to +140 degree travel.
         const float angle=(-140+280*frac-90)*kPi/180;
         const float dx=std::cos(angle), dy=std::sin(angle);
-        // The supplied Mac reference uses the red Synth1-style indicator.
-        // Respect other custom dial colours; remap only the factory white dial.
-        const bool factoryWhite = p[kDial].GetR()==255 && p[kDial].GetG()==255 && p[kDial].GetB()==255;
-        Pen hand(factoryWhite ? rgb(0xFF2D2D) : p[kDial],2.f);
+        Pen hand(p[kDial],2.f);
         hand.SetStartCap(LineCapRound);hand.SetEndCap(LineCapRound);
         g.DrawLine(&hand,PointF(x+dx*radius*.18f,y+dy*radius*.18f),
                    PointF(x+dx*radius*.84f,y+dy*radius*.84f));
@@ -625,7 +650,7 @@ void WindowsEditor::drawControl(Graphics& g,const Control& c,bool hovered) {
     case Kind::Cycle: {
         darkButton(g,p[kButton],c.x,c.y,c.w,c.h,hovered);
         if(c.kind==Kind::Toggle) {
-            const Color on=value(c.id)!=0?p[kLed]:muted(p[kLed],.28f);
+            const Color on=value(c.id)!=0?p[kLed]:muted(p[kLed],.3f);
             led(g,on,c.x+8,c.y+c.h/2,2.8f,value(c.id)!=0);
         }
         text(g,c.label,c.x+(c.kind==Kind::Toggle?12.f:0.f),c.y,
@@ -646,7 +671,7 @@ void WindowsEditor::drawControl(Graphics& g,const Control& c,bool hovered) {
     }
     case Kind::Radio: {
         const bool on=value(c.id)==c.value;
-        const Color light=on?p[kRadio]:muted(p[kRadio],.35f);
+        const Color light=on?p[kRadio]:muted(p[kRadio],.42f);
         const float y=c.y+c.h/2;
         const bool justLed=(c.id==41 || c.id==46);
         const float ledx=justLed ? c.x+c.w*.5f : c.symbol ? c.x+c.w-7.f : c.x+7.f;
@@ -737,7 +762,7 @@ void WindowsEditor::drawControl(Graphics& g,const Control& c,bool hovered) {
 }
 
 void WindowsEditor::draw(Graphics& g) {
-    const auto& p=palette_.c;
+    const auto& p=colors_;
     fill(g,p[kPanel],0,0,kDesignWidth,kDesignHeight);
     text(g,L"Synth2",8,5,94,23,20,p[kLabel],true);
     text(g,L"Virtual Analog",84,7,135,20,12,muted(p[kLabel],.75f));
@@ -812,18 +837,20 @@ void WindowsEditor::draw(Graphics& g) {
         // Vertically centre the two-row grid beside the Write/Menu button pair.
         constexpr float left=548.f,top=505.f;
         constexpr float inset=1.75f; // clear gap from the grid lines
+        // VoiceGrid (Shared/SynthLibraryViews.swift): white = held, gray =
+        // releasing, black = available, empty = past the polyphony; lines =
+        // label ink at 12%. Not theme colours.
+        static const Color held=rgb(0xFFFFFF),releasing=rgb(0x8C8C8C),available=rgb(0x000000);
         for(int i=0;i<32;i++) {
             const int state=int((states>>(i*2))&3);
-            const Color* color=state==2?&p[kVoiceGridPlaying]:
-                               state==1?&p[kVoiceGridReleased]:
-                               i<allocated?&p[kVoiceGridEmpty]:nullptr;
+            const Color* color=state==2?&held:state==1?&releasing:i<allocated?&available:nullptr;
             if(color) {
                 const float x=left+(i%16)*cell, y=top+(i/16)*cell;
                 fill(g,*color,x+inset,y+inset,cell-2*inset,cell-2*inset);
             }
         }
         // Draw one continuous grid instead of 32 overlapping rectangles.
-        Pen grid(p[kVoiceGridBorder],.75f);
+        Pen grid(Color(31,p[kLabel].GetR(),p[kLabel].GetG(),p[kLabel].GetB()),1.f);
         for(int column=0;column<=16;column++) {
             const float x=left+column*cell+.5f;
             g.DrawLine(&grid,x,top,x,top+2*cell);
@@ -1049,11 +1076,13 @@ void WindowsEditor::updateEditControl() {
 }
 
 void WindowsEditor::drawBrowser(Graphics& g) {
-    const auto& p=palette_.c;
-    // The Warm factory palette's selection colours, shared by every theme.
-    // In Warm these are already the original values; other theme colours stay intact.
-    const Color selectionFill=rgb(0xC2D3E1);
-    const Color selectionInk=rgb(0x0D100C);
+    const auto& p=colors_;
+    // As the Mac browser: selected rows = display text colour behind
+    // display-bottom ink; other names in Theme.lcdText (empty slots at 30%).
+    const Color selectionFill=p[kDisplayText];
+    const Color selectionInk=p[kDisplayBottom];
+    const Color nameInk=rgb(kLcdText);
+    const Color emptyInk=blend(p[kDisplayBottom],nameInk,.3f);
     // Numbering is warm yellow on dark rows and dark gold on pale selections.
     // Keep the bank/preset names in their existing theme colours.
     const Color numberInk=rgb(0xE9D56A);
@@ -1096,7 +1125,7 @@ void WindowsEditor::drawBrowser(Graphics& g) {
         if(!isFavouriteBank)
             for(const auto& slot:banks_[size_t(bi)].slots)if(!slot.empty())++count;
         wchar_t prefix[12];std::swprintf(prefix,12,L"%02d:",visual);
-        const Color bankText=bi==selectedBank_?selectionInk:p[kDisplayText];
+        const Color bankText=bi==selectedBank_?selectionInk:nameInk;
         text(g,prefix,12,ry,27,18,10.5f,
              bi==selectedBank_?selectedNumberInk:numberInk,false,false,true);
         text(g,isFavouriteBank?L"Favourites":toWide(banks_[size_t(bi)].name.c_str()),
@@ -1147,7 +1176,7 @@ void WindowsEditor::drawBrowser(Graphics& g) {
             wchar_t prefix[16];
             std::swprintf(prefix,16,L"%03d:",slotIndex+1);
             const Color slotText=favourited ? (selected?rgb(0x17683B):rgb(0x56E496)) :
-                selected?selectionInk:valid?rgb(0xD6F1F2):rgb(0x44656A);
+                selected?selectionInk:valid?nameInk:emptyInk;
             text(g,prefix,x0+3,y0,35,18,10.2f,
                  selected?selectedNumberInk:numberInk,false,false,true);
             text(g,toWide(label.c_str()),x0+39,y0,93,18,10.2f,
@@ -1616,28 +1645,16 @@ void WindowsEditor::showFileDialog(bool save) {
     }
 }
 
-void WindowsEditor::previewTheme(int index,const std::array<std::uint32_t,17>& colors) {
-    currentThemeIndex_=index;
-    for(size_t i=0;i<palette_.c.size();++i)palette_.c[i]=rgb(int(colors[i]));
-    if(hooks_.setThemeText) {
-        const std::string json=wintheme::ToJSON(colors);
-        hooks_.setThemeText(hooks_.ctx,json.c_str());
-    }
-    repaint();
-}
 void WindowsEditor::showThemeEditor() {
     if(!themeEditor_)themeEditor_=std::make_unique<ThemeEditorWindow>();
-    themeEditor_->Show(window_,storage::Root(),currentThemeIndex_,
-        [this](int index,const wintheme::Palette& colors){previewTheme(index,colors);});
+    themeEditor_->Show(window_,{[this]{return theme_;},
+                                [this](const themes::Palette& p){setTheme(p,true);},
+                                []()->themes::Store&{return sharedThemes().store;}});
 }
 void WindowsEditor::showThemeMenu(int x,int y) {
     HMENU m=CreatePopupMenu();
-    const auto entries=wintheme::List(storage::Root());
-    for(size_t i=0;i<entries.size() && i<300;++i) {
-        if(i==wintheme::Names.size())AppendMenuW(m,MF_SEPARATOR,0,nullptr);
-        const UINT command=i<wintheme::Names.size()?100+UINT(i):500+UINT(i-wintheme::Names.size());
-        AppendMenuW(m,MF_STRING,command,entries[i].name.c_str());
-    }
+    std::vector<themes::Palette> picks;
+    appendThemes(m,picks);
     AppendMenuW(m,MF_SEPARATOR,0,nullptr);
     AppendMenuW(m,MF_STRING,120,L"75% size");
     AppendMenuW(m,MF_STRING,121,L"100% size");
@@ -1648,9 +1665,8 @@ void WindowsEditor::showThemeMenu(int x,int y) {
     AppendMenuW(m,MF_STRING,126,L"300% size");
     int choice=int(TrackPopupMenu(m,TPM_RETURNCMD|TPM_NONOTIFY,x,y,0,window_,nullptr));
     DestroyMenu(m);
-    if(choice>=100&&choice<107)selectTheme(choice-100);
-    else if(choice>=500&&choice<793)selectTheme(int(wintheme::Names.size())+choice-500);
-    else if(choice>=120&&choice<=126) {
+    if(pickTheme(choice,picks)) return;
+    if(choice>=120&&choice<=126) {
         static const int widths[]={578,770,963,1155,1540,1925,2310};
         requestWidth(widths[choice-120]);
     }
@@ -1673,15 +1689,11 @@ void WindowsEditor::showMainMenu(int x,int y) {
     AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
     AppendMenuW(menu,MF_STRING,13,midiLearn_?L"Exit MIDI Learn":L"MIDI Learn");
     AppendMenuW(menu,MF_STRING,14,L"All notes off");
-    HMENU themes=CreatePopupMenu();
-    const auto entries=wintheme::List(storage::Root());
-    for(size_t i=0;i<entries.size() && i<300;++i) {
-        if(i==wintheme::Names.size())AppendMenuW(themes,MF_SEPARATOR,0,nullptr);
-        const UINT command=i<wintheme::Names.size()?100+UINT(i):500+UINT(i-wintheme::Names.size());
-        AppendMenuW(themes,MF_STRING,command,entries[i].name.c_str());
-    }
+    HMENU themeMenu=CreatePopupMenu();
+    std::vector<themes::Palette> picks;
+    appendThemes(themeMenu,picks);
     AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
-    AppendMenuW(menu,MF_POPUP,UINT_PTR(themes),L"Select theme");
+    AppendMenuW(menu,MF_POPUP,UINT_PTR(themeMenu),L"Select theme");
     AppendMenuW(menu,MF_STRING,15,L"Themes...");
     int selected=int(TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,x,y,0,window_,nullptr));
     DestroyMenu(menu);
@@ -1698,11 +1710,7 @@ void WindowsEditor::showMainMenu(int x,int y) {
             break;
         case 14: if(hooks_.allNotesOff)hooks_.allNotesOff(hooks_.ctx);break;
         case 15: showThemeEditor();break;
-        default:
-            if(selected>=100&&selected<107) selectTheme(selected-100);
-            else if(selected>=500&&selected<793)
-                selectTheme(int(wintheme::Names.size())+selected-500);
-            break;
+        default: pickTheme(selected,picks);break;
     }
     repaint();
 }
@@ -1745,11 +1753,12 @@ void WindowsEditor::showParameterMenu(int id,int x,int y) {
     if(selected>=2000&&selected<2000+int(values.size()))setValueOnce(id,values[size_t(selected-2000)]);
 }
 void WindowsEditor::tick() {
+    sharedThemes().flush(false);
     bool dirty=false;
     if(hooks_.patchSerial) {
         const int serial=hooks_.patchSerial(hooks_.ctx);
         if(serial!=knownSerial_) {
-            knownSerial_=serial;readTheme();selectedId_=-1;dirty=true;
+            knownSerial_=serial;syncTheme();selectedId_=-1;dirty=true;
         }
     }
     // Poll even with the browser closed: the first full scan must finish

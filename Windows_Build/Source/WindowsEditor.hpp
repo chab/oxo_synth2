@@ -10,6 +10,7 @@
 #include <vector>
 #include <array>
 #include <memory>
+#include "EditorCore/Themes.hpp"
 #include "WindowsFavourites.hpp"
 #include "WindowsModule.hpp"
 
@@ -46,10 +47,6 @@ private:
         bool readOnly = false;
         std::vector<std::string> slots;
     };
-    struct Palette {
-        std::array<Gdiplus::Color, 17> c;
-    };
-
     void constructLayout();
     void knob(int id, const wchar_t* label, float sx, float sy, float x, float y, float size = 24);
     void button(int id, const wchar_t* label, Kind kind, float sx, float sy, float x, float y, float width = 40);
@@ -66,7 +63,10 @@ private:
     void showMainMenu(int x, int y);
     void showThemeMenu(int x, int y);
     void showThemeEditor();
-    void previewTheme(int index, const std::array<std::uint32_t,17>& colors);
+    void appendThemes(HMENU menu, std::vector<themes::Palette>& picks) const;
+    bool pickTheme(int command, const std::vector<themes::Palette>& picks);
+    void setTheme(const themes::Palette& palette, bool fromThemeEditor = false);
+    void syncTheme();
     void showParameterMenu(int id, int x, int y);
     void stepPatch(int direction);
     void showFileDialog(bool save);
@@ -88,9 +88,6 @@ private:
     void browserClick(float x, float y, bool doubleClick);
     void openBrowser(bool writing);
     void closeBrowser();
-    void applyTheme(int index);
-    bool selectTheme(int index);
-    void readTheme();
     void requestWidth(int width);
     void updateEditControl();
     void layoutChild();
@@ -112,8 +109,8 @@ private:
     HWND editName_ = nullptr;
     ULONG_PTR gdiplusToken_ = 0;
     std::vector<Control> controls_;
-    Palette palette_{};
-    int currentThemeIndex_ = 0;
+    themes::Palette theme_ = themes::Synth2(); // this instance's palette (kept in the session)
+    std::array<Gdiplus::Color, themes::kSlotCount> colors_; // theme_ as GDI+ colours
     std::unique_ptr<ThemeEditorWindow> themeEditor_;
     bool browser_ = false;
     bool writing_ = false;

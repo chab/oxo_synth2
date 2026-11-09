@@ -8,7 +8,8 @@ LIBS := -lz
 ifeq ($(shell uname),Darwin)
 LIBS += -framework CoreFoundation
 endif
-HDRS := $(wildcard *.hpp) $(wildcard ../EngineCore/*.hpp)
+HDRS := $(wildcard *.hpp) $(wildcard ../EngineCore/*.hpp) ../EditorCore/Json.hpp ../EditorCore/Themes.hpp \
+        ../Shared/SynthTheme.swift
 
 .PHONY: test clean
 
