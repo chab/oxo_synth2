@@ -37,6 +37,7 @@ constexpr int kPanel=themes::kPanel, kHeader=themes::kHeader, kHeaderText=themes
               kDisplayText=themes::kDisplayText, kDisplayTop=themes::kDisplayTop,
               kDisplayBottom=themes::kDisplayBottom;
 constexpr int kThemeCommand=1000; // theme menu items: kThemeCommand + index into the picks
+constexpr const wchar_t* kProjectURL=L"https://github.com/chab/oxo_synth2"; // SynthPanelView.projectURL
 // Theme.lcdText (Shared/SynthControls.swift): fixed browser / LCD text.
 constexpr int kLcdText=0xE0FFFF;
 // Regions redrawn on their own (design coordinates).
@@ -624,21 +625,16 @@ RectF WindowsEditor::chromeRect(int id) {
     case 10: return {604,38,74,20};  case 11: return {430,38,66,20};
     case 12: return {502,38,112,20}; case 13: return {620,38,60,20};
     case 14: return {690,38,64,20};  case 15: return {348,38,76,20};
-    case 16: return {492,5,94,20};
     default: return {0,0,0,0};
     }
 }
-// The panel's own chrome buttons (zoom, < >, write, menu).
+// The panel's own chrome buttons (< >, write, menu).
 void WindowsEditor::drawChrome(Graphics& g,int id,bool hovered) {
     const auto& p=colors_;
     const RectF r=chromeRect(id);
     const Color face=id==5 ? rgb(0xB81715) : p[kButton];
     darkButton(g,face,r.X,r.Y,r.Width,r.Height,hovered);
-    if(id==16) {
-        // Persistent exact zoom readout: 770 design pixels = 100%.
-        const int zoomPercent=int(std::lround(100.f*float(rect.getWidth())/kDesignWidth));
-        text(g,L"Zoom "+std::to_wstring(zoomPercent)+L"%",r.X+2,r.Y,r.Width-4,r.Height,11.f,rgb(0xE8E8E8),true,true);
-    } else if(id==3 || id==4) {
+    if(id==3 || id==4) {
         text(g,id==3?L"<":L">",r.X+1,r.Y,r.Width-3,r.Height,13,rgb(0xFFFFFF),true,true);
     } else {
         text(g,id==5?L"write":L"menu",r.X,r.Y,r.Width,r.Height,11,rgb(0xFFFFFF),true,true);
@@ -881,7 +877,7 @@ void WindowsEditor::drawStatic(Graphics& g) {
     GraphicsPath mainLcd;roundedPath(mainLcd,50,484,432,70,4.f);
     g.FillPath(&lcd,&mainLcd);
     roundedOutline(g,rgb(0x070707),50,484,432,70,4.f,1.5f);
-    for(const int id:{3,4,5,6,16}) drawChrome(g,id,false);
+    for(const int id:{3,4,5,6}) drawChrome(g,id,false);
     // Small bottom-right host-resize grip. All drawing scales as one canvas.
     Pen grip(blend(p[kPanel],p[kLabel],.65f),1.f);
     for(int i=0;i<3;i++) {
@@ -898,7 +894,7 @@ void WindowsEditor::drawDynamic(Graphics& g) {
         if((browser_ && c.y<kBrowserRect.Y+kBrowserRect.Height) || !visible(bounds(c))) continue;
         drawControlDynamic(g,c,hoveredControl_==int(i));
     }
-    for(const int id:{3,4,5,6,16})
+    for(const int id:{3,4,5,6})
         if(hoveredChrome_==id) drawChrome(g,id,true);
     if(visible(kLcdRect)) {
         int loadedBank=-1,loadedSlot=-1;
@@ -1114,14 +1110,8 @@ void WindowsEditor::toggleFavourite() {
     favouritesChanged();
     repaint();
 }
-void WindowsEditor::showAbout() {
-    const std::wstring info=toWide(OXO_PRODUCT_NAME)+L" "+toWide(OXO_VERSION)+L" (build "+toWide(OXO_BUILD_NUMBER)+
-        L"), Windows x64 VST3\n\n"
-        L"Original Synth1: Daichi Laboratory\n"
-        L"Synth2 recreation: Oxo Music\n"
-        L"Windows port: sl23\n\n"
-        L"Synth1 and Synth2 remain credited to their respective developers.";
-    MessageBoxW(window_,info.c_str(),L"About Synth2",MB_OK|MB_ICONINFORMATION);
+bool WindowsEditor::isVersionBox(float x,float y) {
+    return x>=593.f && x<762.f && y>=2.f && y<31.f;
 }
 
 void WindowsEditor::updateEditControl() {
@@ -1386,12 +1376,9 @@ void WindowsEditor::browserClick(float x,float y,bool doubleClick) {
 void WindowsEditor::updateHover(float x,float y) {
     int nextControl=-1;
     int nextChrome=0;
-    // Zoom is now a regular themed hoverable button; LCDs and waveforms are not.
     // The browser covers only the central panel. Keep the chrome underneath
     // it (Write, Menu and main LCD) interactive while browsing.
-    if(x>=492.f && x<586.f && y>=5.f && y<25.f) {
-        nextChrome=16; // Zoom button (same subtle hover as other buttons)
-    } else if(browser_ && x>=6.f && x<764.f && y>=34.f && y<478.f) {
+    if(browser_ && x>=6.f && x<764.f && y>=34.f && y<478.f) {
         if(y>=37.f && y<=61.f) {
             if(x>=690.f && x<760.f) nextChrome=14; // Close
             else if(writing_) {
@@ -1429,28 +1416,6 @@ void WindowsEditor::updateHover(float x,float y) {
 }
 
 void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
-    // The top Zoom readout remains usable even when the bottom-right resize
-    // grip is off-screen. Use the existing VST3 host resize request.
-    if(x>=492.f && x<586.f && y>=5.f && y<25.f) {
-        static constexpr int levels[]={75,100,125,150,175,200,250,300};
-        const int current=int(std::lround(100.f*float(rect.getWidth())/kDesignWidth));
-        HMENU menu=CreatePopupMenu();
-        if(menu) {
-            for(int i=0;i<8;i++) {
-                const std::wstring label=std::to_wstring(levels[i])+L"%";
-                const UINT flags=MF_STRING | (current==levels[i] ? MF_CHECKED : 0);
-                AppendMenuW(menu,flags,1000+i,label.c_str());
-            }
-            POINT where{};
-            GetCursorPos(&where);
-            const int selection=int(TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,
-                where.x,where.y,0,window_,nullptr));
-            DestroyMenu(menu);
-            if(selection>=1000 && selection<1008)
-                requestWidth(int(std::lround(kDesignWidth*levels[selection-1000]/100.f)));
-        }
-        return;
-    }
     if(x>=kDesignWidth-22.f && y>=kDesignHeight-22.f && !doubleClick) {
         if(!plugFrame)return;
         GetCursorPos(&resizeStartScreen_);
@@ -1459,9 +1424,11 @@ void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
         SetCapture(window_);
         return;
     }
-    // The red version label opens the Windows-port credits without changing
-    // the plugin's version metadata or affecting host automation.
-    if(x>=593.f && x<762.f && y>=2.f && y<31.f) {showAbout();return;}
+    // The version box opens the project page (SynthPanelView.projectURL).
+    if(isVersionBox(x,y)) {
+        ShellExecuteW(window_,L"open",kProjectURL,nullptr,nullptr,SW_SHOWNORMAL);
+        return;
+    }
     // Route to the browser only inside the browser's actual visible bounds.
     // Header controls and the bottom strip keep their normal mouse actions.
     if(browser_ && x>=6.f && x<764.f && y>=34.f && y<478.f) {
@@ -1729,23 +1696,18 @@ void WindowsEditor::showThemeEditor() {
 }
 void WindowsEditor::showThemeMenu(int x,int y) {
     HMENU m=CreatePopupMenu();
+    static constexpr int levels[]={75,100,125,150,200,250,300};
+    const int current=int(std::lround(100.f*float(rect.getWidth())/kDesignWidth));
+    for(int i=0;i<7;i++)
+        AppendMenuW(m,MF_STRING|(current==levels[i] ? MF_CHECKED : 0),UINT_PTR(120+i),
+                    (std::to_wstring(levels[i])+L"% size").c_str());
+    AppendMenuW(m,MF_SEPARATOR,0,nullptr);
     std::vector<themes::Palette> picks;
     appendThemes(m,picks);
-    AppendMenuW(m,MF_SEPARATOR,0,nullptr);
-    AppendMenuW(m,MF_STRING,120,L"75% size");
-    AppendMenuW(m,MF_STRING,121,L"100% size");
-    AppendMenuW(m,MF_STRING,122,L"125% size");
-    AppendMenuW(m,MF_STRING,123,L"150% size");
-    AppendMenuW(m,MF_STRING,124,L"200% size");
-    AppendMenuW(m,MF_STRING,125,L"250% size");
-    AppendMenuW(m,MF_STRING,126,L"300% size");
     int choice=int(TrackPopupMenu(m,TPM_RETURNCMD|TPM_NONOTIFY,x,y,0,window_,nullptr));
     DestroyMenu(m);
     if(pickTheme(choice,picks)) return;
-    if(choice>=120&&choice<=126) {
-        static const int widths[]={578,770,963,1155,1540,1925,2310};
-        requestWidth(widths[choice-120]);
-    }
+    if(choice>=120&&choice<=126) requestWidth(int(std::lround(kDesignWidth*levels[choice-120]/100.f)));
 }
 void WindowsEditor::requestWidth(int width) {
     if(!plugFrame)return;
@@ -1942,15 +1904,13 @@ LRESULT WindowsEditor::windowMessage(UINT msg,WPARAM wp,LPARAM lp) {
     const float sy=float(std::max(1,rect.getHeight()))/kDesignHeight;
     switch(msg) {
     case WM_ERASEBKGND:return 1;
+    // Everything scales with the window: a size change redraws all of it
+    // (Windows itself would only invalidate the newly exposed strip).
+    case WM_SIZE:InvalidateRect(window_,nullptr,FALSE);return 0;
     case WM_SETCURSOR: {
         if(LOWORD(lp)==HTCLIENT) {
             POINT pos{};GetCursorPos(&pos);ScreenToClient(window_,&pos);
-            // Indicate that the zoom readout is a clickable size menu.
-            if(pos.x>=int(492.f*sx) && pos.x<int(586.f*sx) &&
-               pos.y>=int(5.f*sy) && pos.y<int(25.f*sy)) {
-                SetCursor(LoadCursorW(nullptr,IDC_HAND));return TRUE;
-            }
-            if(hoveredChrome_!=0 || hoveredControl_>=0) {
+            if(hoveredChrome_!=0 || hoveredControl_>=0 || isVersionBox(float(pos.x)/sx,float(pos.y)/sy)) {
                 SetCursor(LoadCursorW(nullptr,IDC_HAND));return TRUE;
             }
             RECT client{};GetClientRect(window_,&client);

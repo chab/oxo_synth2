@@ -94,7 +94,7 @@ private:
     void showImportDialog(int screenX, int screenY);
     void refreshBanks();
     void toggleFavourite();
-    void showAbout();
+    static bool isVersionBox(float x, float y);
     int displayBankNumber(int bank) const;
     std::string bankKey(int bank) const;
     bool resolveFavourite(const winfav::Item& favourite,int& bank,int& slot) const;
