@@ -38,6 +38,8 @@ constexpr int kPanel=themes::kPanel, kHeader=themes::kHeader, kHeaderText=themes
 constexpr int kThemeCommand=1000; // theme menu items: kThemeCommand + index into the picks
 // Theme.lcdText (Shared/SynthControls.swift): fixed browser / LCD text.
 constexpr int kLcdText=0xE0FFFF;
+// Regions redrawn on their own (design coordinates).
+const RectF kLcdRect(50,484,432,70), kGridRect(548,505,216,28), kBrowserRect(6,34,758,444);
 constexpr const wchar_t kWindowsDevBuild[] = L"19.3";
 
 Color rgb(int rgbValue) { return Color(255, (rgbValue>>16)&255, (rgbValue>>8)&255, rgbValue&255); }
@@ -50,73 +52,81 @@ void fill(Graphics& g, const Color& c, float x,float y,float w,float h) {
 void stroke(Graphics& g, const Color& c, float x,float y,float w,float h,float width=1) {
     Pen p(c,width); g.DrawRectangle(&p,x,y,w,h);
 }
-// Draw text as antialiased outlines in design-space coordinates. Unlike
-// grid-fitted glyph bitmaps, the letter positions do not snap to different
-// pixels while the VST3 view is resized. Using actual ink bounds also centres
-// short LCD values vertically instead of centring the larger font line box.
-// Fixed-size, natural-proportion text. Long labels are ellipsized instead
-// of shrinking the font. A shared ascender/descender reference keeps each
-// line's baseline stable even when its characters contain p, g, j, or y.
-void text(Graphics& g, const std::wstring& s, float x,float y,float w,float h, float size,
-          Color c, bool bold=false, bool centred=false, bool mono=false) {
-    if (s.empty() || w <= 2.f || h <= 1.f) return;
-    (void)bold; // Match the current Windows theme: all panel text uses bold.
-    const FontFamily family(mono ? L"Consolas" : L"Segoe UI");
-    StringFormat format;
-    format.SetFormatFlags(StringFormatFlagsNoWrap | StringFormatFlagsNoClip);
-    // Font size is chosen by the control, NEVER reduced to fit the string.
-    const float fontSize = size < 13.f ? std::max(10.8f, size * 1.08f) : size;
-    auto makePath = [&](const std::wstring& string, GraphicsPath& path,
-                        RectF& bounds) -> bool {
-        if (path.AddString(string.c_str(), -1, &family, FontStyleBold,
-                           fontSize, PointF(0.f,0.f), &format) != Ok) return false;
-        return path.GetBounds(&bounds) == Ok;
-    };
+} // namespace
 
-    GraphicsPath path;
-    RectF ink{};
-    if (!makePath(s, path, ink)) return;
-    const float maxInkWidth = w - 2.f;
-    if (ink.Width > maxInkWidth) {
-        // Reserve the full-size ellipsis and find the longest fitting prefix.
-        const std::wstring ellipsis(1, wchar_t(0x2026));
-        GraphicsPath dots;
-        RectF dotBounds{};
-        if (!makePath(ellipsis, dots, dotBounds) || dotBounds.Width > maxInkWidth) return;
-        size_t low=0, high=s.size();
-        while (low<high) {
-            const size_t mid=low+(high-low+1)/2;
-            const std::wstring trial=s.substr(0,mid)+ellipsis;
-            GraphicsPath probe;
-            RectF probeBounds{};
-            if (!makePath(trial,probe,probeBounds)) return;
-            if (probeBounds.Width <= maxInkWidth) low=mid;
-            else high=mid-1;
-        }
-        std::wstring shortened=s.substr(0,low);
-        // Windows wchar_t is UTF-16; don't cut a surrogate pair in half.
-        if (!shortened.empty() && shortened.back()>=wchar_t(0xD800) &&
-            shortened.back()<=wchar_t(0xDBFF)) shortened.pop_back();
-        shortened+=ellipsis;
-        path.Reset();
-        if (!makePath(shortened,path,ink)) return;
+// Text is drawn as antialiased outlines in design-space coordinates: unlike
+// grid-fitted glyph bitmaps, the letter positions do not snap to different
+// pixels while the VST3 view is resized, and the ink bounds centre short LCD
+// values. Fixed-size, natural-proportion text: long labels are ellipsized
+// instead of shrinking the font; a shared ascender / descender reference
+// keeps every baseline stable. Building an outline (AddString) is the
+// expensive part, so each one is built ONCE per (text, size, box width,
+// font) and then only filled.
+class TextCache {
+public:
+    struct Shape {
+        std::unique_ptr<GraphicsPath> path; // at the origin; null = nothing fits
+        RectF ink;                          // its ink bounds
+        float refY = 0, refH = 0;           // the line's reference ink ("Agjpqy")
+    };
+    TextCache() : segoe_(L"Segoe UI"), consolas_(L"Consolas") {
+        format_.SetFormatFlags(StringFormatFlagsNoWrap | StringFormatFlagsNoClip);
+    }
+    const Shape& get(const std::wstring& s, float fontSize, float maxInkWidth, bool mono) {
+        std::wstring key=s;
+        key+=L'\x1f';key+=std::to_wstring(std::lround(fontSize*100));
+        key+=L'\x1f';key+=std::to_wstring(std::lround(maxInkWidth*100));
+        key+=mono?L'm':L's';
+        if(const auto it=shapes_.find(key); it!=shapes_.end()) return it->second;
+        if(shapes_.size()>=kMaxShapes) shapes_.clear(); // LCD readouts / names come and go
+        return shapes_.emplace(std::move(key),build(s,fontSize,maxInkWidth,mono)).first->second;
     }
 
-    GraphicsPath reference;
-    RectF metrics{};
-    if (!makePath(L"Agjpqy",reference,metrics)) return;
-    const float left = centred ? x+(w-ink.Width)*.5f : x+1.f;
-    const float top = y+(h-metrics.Height)*.5f;
-    Matrix translate;
-    translate.Translate(left-ink.X,top-metrics.Y);
-    path.Transform(&translate);
-    SolidBrush brush(c);
-    const GraphicsState saved=g.Save();
-    g.SetClip(RectF(x,y,w,h),CombineModeIntersect);
-    g.FillPath(&brush,&path);
-    g.Restore(saved);
-}
+private:
+    static constexpr size_t kMaxShapes=4096;
+    bool make(const std::wstring& s, float size, bool mono, GraphicsPath& path, RectF& bounds) const {
+        return path.AddString(s.c_str(),-1,mono?&consolas_:&segoe_,FontStyleBold,size,PointF(0.f,0.f),&format_)==Ok &&
+               path.GetBounds(&bounds)==Ok;
+    }
+    Shape build(const std::wstring& s, float size, float maxInkWidth, bool mono) const {
+        Shape shape;
+        auto path=std::make_unique<GraphicsPath>();
+        if(!make(s,size,mono,*path,shape.ink)) return shape;
+        if(shape.ink.Width>maxInkWidth) {
+            // Reserve the full-size ellipsis and find the longest fitting prefix.
+            const std::wstring ellipsis(1,wchar_t(0x2026));
+            GraphicsPath dots;
+            RectF dotBounds{};
+            if(!make(ellipsis,size,mono,dots,dotBounds) || dotBounds.Width>maxInkWidth) return shape;
+            size_t low=0,high=s.size();
+            while(low<high) {
+                const size_t mid=low+(high-low+1)/2;
+                GraphicsPath probe;
+                RectF probeBounds{};
+                if(!make(s.substr(0,mid)+ellipsis,size,mono,probe,probeBounds)) return shape;
+                if(probeBounds.Width<=maxInkWidth) low=mid; else high=mid-1;
+            }
+            std::wstring shortened=s.substr(0,low);
+            // Windows wchar_t is UTF-16; don't cut a surrogate pair in half.
+            if(!shortened.empty() && shortened.back()>=wchar_t(0xD800) && shortened.back()<=wchar_t(0xDBFF))
+                shortened.pop_back();
+            path->Reset();
+            if(!make(shortened+ellipsis,size,mono,*path,shape.ink)) return shape;
+        }
+        GraphicsPath reference;
+        RectF metrics{};
+        if(!make(L"Agjpqy",size,mono,reference,metrics)) return shape;
+        shape.refY=metrics.Y;
+        shape.refH=metrics.Height;
+        shape.path=std::move(path);
+        return shape;
+    }
+    FontFamily segoe_, consolas_;
+    StringFormat format_;
+    std::unordered_map<std::wstring, Shape> shapes_;
+};
 
+namespace {
 Color blend(const Color& background, const Color& foreground, float amount) {
     amount=std::clamp(amount,0.f,1.f);
     auto part=[&](BYTE back, BYTE front) {
@@ -276,7 +286,7 @@ WindowsEditor::WindowsEditor(OxoSynth2Controller* controller)
     rect=ViewRect(0,0,savedWidth,int(std::lround(savedWidth*560.0/770.0)));
     if(controller_) hooks_=controller_->MakeHooks();
     GdiplusStartupInput gdiplusInput;
-    GdiplusStartup(&gdiplusToken_,&gdiplusInput,nullptr);
+    if(GdiplusStartup(&gdiplusToken_,&gdiplusInput,nullptr)==Ok) textCache_=std::make_unique<TextCache>();
     constructLayout();
     // SynthModel.init: the session's palette, else the last one picked;
     // either way pinned to the session.
@@ -290,6 +300,7 @@ WindowsEditor::~WindowsEditor() {
     sharedThemes().flush(true);
     if(themeEditor_)themeEditor_->Close();
     removedFromParent();
+    textCache_.reset(); // before GDI+ goes
     if(gdiplusToken_) GdiplusShutdown(gdiplusToken_);
 }
 tresult PLUGIN_API WindowsEditor::isPlatformTypeSupported(FIDString type) {
@@ -325,6 +336,7 @@ void WindowsEditor::attachedToParent() {
                           0,0,rect.getWidth(),rect.getHeight(),
                           reinterpret_cast<HWND>(systemWindow),nullptr,win::ModuleInstance(),this);
     if(!window_) {windowClass().Release();return;}
+    for(size_t id=0;id<knownValues_.size();++id) knownValues_[id]=value(int(id));
     SetTimer(window_,1,50,nullptr);
     // Critical: Json() and loadedProgram() call EnsureScanned(), which
     // scans all banks synchronously. Never call them before a background
@@ -338,6 +350,7 @@ void WindowsEditor::attachedToParent() {
 void WindowsEditor::removedFromParent() {
     if(editName_) {DestroyWindow(editName_);editName_=nullptr;}
     if(window_) {KillTimer(window_,1);DestroyWindow(window_);window_=nullptr;windowClass().Release();}
+    releaseBuffers(); // the editor object may outlive its window: no bitmaps while closed
 }
 void WindowsEditor::layoutChild() {
     if(window_) MoveWindow(window_,0,0,rect.getWidth(),rect.getHeight(),TRUE);
@@ -549,6 +562,7 @@ void WindowsEditor::setTheme(const themes::Palette& palette,bool fromThemeEditor
     if(hooks_.setThemeText) hooks_.setThemeText(hooks_.ctx,themes::StateText(theme_).c_str());
     sharedThemes().remember(theme_);
     if(!fromThemeEditor && themeEditor_) themeEditor_->Refresh();
+    staticDirty_=true;
     repaint();
 }
 // SynthModel.syncTheme: a session restore may bring another palette; one
@@ -563,6 +577,7 @@ void WindowsEditor::syncTheme() {
     theme_=*restored;
     for(size_t i=0;i<colors_.size();++i) colors_[i]=rgb(int(theme_[i]));
     if(themeEditor_) themeEditor_->Refresh();
+    staticDirty_=true;
     repaint();
 }
 // LogoMenu's theme column: factory themes, then the user's; the active one checked.
@@ -588,26 +603,102 @@ bool WindowsEditor::pickTheme(int command,const std::vector<themes::Palette>& pi
     return true;
 }
 
-void WindowsEditor::drawControl(Graphics& g,const Control& c,bool hovered) {
+// Drawing has two layers. The STATIC one (panel, sections, labels, knob
+// bodies, button faces, LCD backgrounds) only changes with the theme or the
+// size: it is rendered once into a bitmap. Every paint blits it, then draws
+// the DYNAMIC parts (knob pointers, LEDs, values, waves, badges, LCD texts,
+// voice grid, hover, browser), only where the window is invalid.
+void WindowsEditor::text(Graphics& g,const std::wstring& s,float x,float y,float w,float h,float size,
+                         Color c,bool,bool centred,bool mono) {
+    if(s.empty() || w<=2.f || h<=1.f || !textCache_ || !visible(RectF(x,y,w,h))) return;
+    // Font size is chosen by the control, NEVER reduced to fit the string.
+    const float fontSize=size<13.f ? std::max(10.8f,size*1.08f) : size;
+    const auto& shape=textCache_->get(s,fontSize,w-2.f,mono);
+    if(!shape.path) return;
+    const float left=centred ? x+(w-shape.ink.Width)*.5f : x+1.f;
+    const float top=y+(h-shape.refH)*.5f;
+    const GraphicsState saved=g.Save();
+    g.SetClip(RectF(x,y,w,h),CombineModeIntersect);
+    g.TranslateTransform(left-shape.ink.X,top-shape.refY);
+    SolidBrush brush(c);
+    g.FillPath(&brush,shape.path.get());
+    g.Restore(saved);
+}
+
+bool WindowsEditor::visible(const RectF& r) const {
+    return r.X<paintClip_.X+paintClip_.Width && paintClip_.X<r.X+r.Width &&
+           r.Y<paintClip_.Y+paintClip_.Height && paintClip_.Y<r.Y+r.Height;
+}
+RectF WindowsEditor::bounds(const Control& c) {
+    // Room for the LED / wave glow and the learn frame around a knob.
+    return RectF(c.x-5.f,c.y-5.f,c.w+10.f,c.h+10.f);
+}
+void WindowsEditor::invalidate(const RectF& r) const {
+    if(!window_) return;
+    const float sx=float(std::max(1,rect.getWidth()))/kDesignWidth;
+    const float sy=float(std::max(1,rect.getHeight()))/kDesignHeight;
+    RECT device{LONG(std::floor(r.X*sx))-2,LONG(std::floor(r.Y*sy))-2,
+                LONG(std::ceil((r.X+r.Width)*sx))+2,LONG(std::ceil((r.Y+r.Height)*sy))+2};
+    InvalidateRect(window_,&device,FALSE);
+}
+// Everything showing parameter `id`: its controls, the LCD readout when it
+// is the selected one, the voice grid for voice mode / polyphony.
+void WindowsEditor::invalidateParam(int id) const {
+    for(const auto& c:controls_) if(c.id==id) invalidate(bounds(c));
+    if(id==selectedId_) invalidate(kLcdRect);
+    if(id==38 || id==94) invalidate(kGridRect);
+}
+void WindowsEditor::valueChanged(int id) {
+    if(id>=0 && id<int(knownValues_.size())) knownValues_[size_t(id)]=value(id);
+    invalidateParam(id);
+}
+// Hover is visual only: redraw the old and the new target, nothing else.
+void WindowsEditor::hoverChanged(int control,int chrome) {
+    if(control==hoveredControl_ && chrome==hoveredChrome_) return;
+    for(const int c:{hoveredControl_,control})
+        if(c>=0 && c<int(controls_.size())) invalidate(bounds(controls_[size_t(c)]));
+    for(const int c:{hoveredChrome_,chrome}) if(c) invalidate(chromeRect(c));
+    hoveredControl_=control;
+    hoveredChrome_=chrome;
+}
+RectF WindowsEditor::chromeRect(int id) {
+    switch(id) {
+    case 3: return {420,495,24,20};  case 4: return {449,495,24,20};
+    case 5: return {492,488,50,26};  case 6: return {492,522,50,26};
+    case 8: return {558,488,186,24}; case 9: return {514,38,84,20};
+    case 10: return {604,38,74,20};  case 11: return {430,38,66,20};
+    case 12: return {502,38,112,20}; case 13: return {620,38,60,20};
+    case 14: return {690,38,64,20};  case 15: return {348,38,76,20};
+    case 16: return {492,5,94,20};
+    default: return {0,0,0,0};
+    }
+}
+// The panel's own chrome buttons (zoom, < >, write, menu).
+void WindowsEditor::drawChrome(Graphics& g,int id,bool hovered) {
+    const auto& p=colors_;
+    const RectF r=chromeRect(id);
+    const Color face=id==5 ? rgb(0xB81715) : p[kButton];
+    darkButton(g,face,r.X,r.Y,r.Width,r.Height,hovered);
+    if(id==16) {
+        // Persistent exact zoom readout: 770 design pixels = 100%.
+        const int zoomPercent=int(std::lround(100.f*float(rect.getWidth())/kDesignWidth));
+        text(g,L"Zoom "+std::to_wstring(zoomPercent)+L"%",r.X+2,r.Y,r.Width-4,r.Height,11.f,rgb(0xE8E8E8),true,true);
+    } else if(id==3 || id==4) {
+        text(g,id==3?L"<":L">",r.X+1,r.Y,r.Width-3,r.Height,13,rgb(0xFFFFFF),true,true);
+    } else {
+        text(g,id==5?L"write":L"menu",r.X,r.Y,r.Width,r.Height,11,rgb(0xFFFFFF),true,true);
+    }
+}
+
+void WindowsEditor::drawControlStatic(Graphics& g,const Control& c) {
     const auto& p=colors_;
     switch(c.kind) {
     case Kind::Label:
         text(g,c.label,c.x,c.y,c.w,c.h,9.5f,p[kLabel],false,true);
         return;
-    case Kind::Badge: {
-        const bool on=(c.id<0 || value(c.id)!=0);
-        darkButton(g,on?rgb(0x0F1111):rgb(0x393939),c.x,c.y,c.w,c.h,hovered);
-        // Move the four Osc/LFO badge digits down exactly one design pixel.
-        text(g,c.label,c.x,c.y+1.f,c.w,c.h-1.f,12,c.id<0?rgb(0xFFFFFF):
-             on?rgb(0xFFDA59):rgb(0x777777),true,true);
-        return;
-    }
     case Kind::Knob: {
         const float size=c.w/1.3f;
         const float x=c.x+c.w/2, y=c.y+size*.65f;
-        int low=0,high=127,def=64;
-        if(hooks_.paramInfo) hooks_.paramInfo(hooks_.ctx,c.id,&low,&high,&def);
-        const float frac=std::clamp((float(value(c.id))-float(low))/float(std::max(1,high-low)),0.f,1.f);
         // Theme.knobTicks: label ink at 30% opacity.
         const SolidBrush dots(Color(77,p[kLabel].GetR(),p[kLabel].GetG(),p[kLabel].GetB()));
         for(int i=0;i<11;i++) {
@@ -615,9 +706,7 @@ void WindowsEditor::drawControl(Graphics& g,const Control& c,bool hovered) {
             // Five closely-spaced FX knobs have 27px centre spacing.
             // Keep their dot rings distinct without moving the panel geometry.
             const float dotRing=size<=22.f ? size*.65f-2.3f : size*.65f-1.5f;
-            const float cx=x+std::cos(a)*dotRing;
-            const float cy=y+std::sin(a)*dotRing;
-            g.FillEllipse(&dots,cx-.8f,cy-.8f,1.6f,1.6f);
+            g.FillEllipse(&dots,x+std::cos(a)*dotRing-.8f,y+std::sin(a)*dotRing-.8f,1.6f,1.6f);
         }
         const float radius=size*.5f;
         GraphicsPath circle;
@@ -631,6 +720,54 @@ void WindowsEditor::drawControl(Graphics& g,const Control& c,bool hovered) {
         g.FillPath(&body,&circle);
         Pen rim(muted(p[kPanel],.5f),1.f); // Theme.knobRim
         g.DrawEllipse(&rim,x-radius,y-radius,size,size);
+        text(g,c.label,x-25,y+radius+1,50,12,9.5f,p[kLabel],false,true);
+        return;
+    }
+    case Kind::Toggle:
+    case Kind::Cycle:
+        darkButton(g,p[kButton],c.x,c.y,c.w,c.h);
+        text(g,c.label,c.x+(c.kind==Kind::Toggle?12.f:0.f),c.y,
+             c.w-(c.kind==Kind::Toggle?14.f:0.f),c.h,10.5f,rgb(0xE8E8E8),true,true);
+        return;
+    case Kind::Display: {
+        LinearGradientBrush lcd(PointF(c.x,c.y),PointF(c.x,c.y+c.h),p[kDisplayTop],p[kDisplayBottom]);
+        GraphicsPath lcdPath;roundedPath(lcdPath,c.x,c.y,c.w,c.h,2.f);
+        g.FillPath(&lcd,&lcdPath);
+        roundedOutline(g,rgb(0x0B0B0B),c.x,c.y,c.w,c.h,2.f);
+        return;
+    }
+    case Kind::Radio:
+        if(c.id!=41 && c.id!=46) {
+            const float left=c.id==14 ? 13.f : (c.symbol ? 0.f : 15.f);
+            const float width=c.id==14 ? c.w-14.f : c.w-(c.symbol?14.f:16.f);
+            text(g,c.label,c.x+left,c.y,width,c.h,9.5f,p[kLabel],false,false);
+        }
+        return;
+    case Kind::Badge:
+    case Kind::Wave:
+        return; // their face depends on the value: dynamic
+    }
+}
+
+void WindowsEditor::drawControlDynamic(Graphics& g,const Control& c,bool hovered) {
+    const auto& p=colors_;
+    switch(c.kind) {
+    case Kind::Label:
+        return;
+    case Kind::Badge: {
+        const bool on=(c.id<0 || value(c.id)!=0);
+        darkButton(g,on?rgb(0x0F1111):rgb(0x393939),c.x,c.y,c.w,c.h,hovered);
+        // Move the four Osc/LFO badge digits down exactly one design pixel.
+        text(g,c.label,c.x,c.y+1.f,c.w,c.h-1.f,12,c.id<0?rgb(0xFFFFFF):
+             on?rgb(0xFFDA59):rgb(0x777777),true,true);
+        return;
+    }
+    case Kind::Knob: {
+        const float size=c.w/1.3f, radius=size*.5f;
+        const float x=c.x+c.w/2, y=c.y+size*.65f;
+        int low=0,high=127,def=64;
+        if(hooks_.paramInfo) hooks_.paramInfo(hooks_.ctx,c.id,&low,&high,&def);
+        const float frac=std::clamp((float(value(c.id))-float(low))/float(std::max(1,high-low)),0.f,1.f);
         // SwiftUI uses a short capsule near the rim, not a red line from
         // the knob's centre. Match its -140 to +140 degree travel.
         const float angle=(-140+280*frac-90)*kPi/180;
@@ -639,7 +776,6 @@ void WindowsEditor::drawControl(Graphics& g,const Control& c,bool hovered) {
         hand.SetStartCap(LineCapRound);hand.SetEndCap(LineCapRound);
         g.DrawLine(&hand,PointF(x+dx*radius*.18f,y+dy*radius*.18f),
                    PointF(x+dx*radius*.84f,y+dy*radius*.84f));
-        text(g,c.label,x-25,y+radius+1,50,12,9.5f,p[kLabel],false,true);
         if(midiLearn_ && c.id<99) {
             Pen frame(rgb(0x59A7E8),1.4f);
             g.DrawEllipse(&frame,x-radius-4,y-radius-4,size+8,size+8);
@@ -647,21 +783,18 @@ void WindowsEditor::drawControl(Graphics& g,const Control& c,bool hovered) {
         return;
     }
     case Kind::Toggle:
-    case Kind::Cycle: {
-        darkButton(g,p[kButton],c.x,c.y,c.w,c.h,hovered);
-        if(c.kind==Kind::Toggle) {
-            const Color on=value(c.id)!=0?p[kLed]:muted(p[kLed],.3f);
-            led(g,on,c.x+8,c.y+c.h/2,2.8f,value(c.id)!=0);
+    case Kind::Cycle:
+        if(hovered) {
+            darkButton(g,p[kButton],c.x,c.y,c.w,c.h,true);
+            text(g,c.label,c.x+(c.kind==Kind::Toggle?12.f:0.f),c.y,
+                 c.w-(c.kind==Kind::Toggle?14.f:0.f),c.h,10.5f,rgb(0xE8E8E8),true,true);
         }
-        text(g,c.label,c.x+(c.kind==Kind::Toggle?12.f:0.f),c.y,
-             c.w-(c.kind==Kind::Toggle?14.f:0.f),c.h,10.5f,rgb(0xE8E8E8),true,true);
+        if(c.kind==Kind::Toggle) {
+            const bool on=value(c.id)!=0;
+            led(g,on?p[kLed]:muted(p[kLed],.3f),c.x+8,c.y+c.h/2,2.8f,on);
+        }
         return;
-    }
     case Kind::Display: {
-        LinearGradientBrush lcd(PointF(c.x,c.y),PointF(c.x,c.y+c.h),p[kDisplayTop],p[kDisplayBottom]);
-        GraphicsPath lcdPath;roundedPath(lcdPath,c.x,c.y,c.w,c.h,2.f);
-        g.FillPath(&lcd,&lcdPath);
-        roundedOutline(g,rgb(0x0B0B0B),c.x,c.y,c.w,c.h,2.f);
         std::wstring v=formatted(c.id);
         if(c.id==9 || c.id==40) { // 2-digit displays, as in SynthPanelView.swift
             wchar_t out[32];std::swprintf(out,32,L"%02d",value(c.id));v=out;
@@ -671,106 +804,98 @@ void WindowsEditor::drawControl(Graphics& g,const Control& c,bool hovered) {
     }
     case Kind::Radio: {
         const bool on=value(c.id)==c.value;
-        const Color light=on?p[kRadio]:muted(p[kRadio],.42f);
-        const float y=c.y+c.h/2;
         const bool justLed=(c.id==41 || c.id==46);
         const float ledx=justLed ? c.x+c.w*.5f : c.symbol ? c.x+c.w-7.f : c.x+7.f;
         // All red selector LEDs gain 2px diameter: radius 3.4 -> 4.4.
-        led(g,light,ledx,y,4.4f,on);
-        if(!justLed) {
-            const float left=c.id==14 ? 13.f : (c.symbol ? 0.f : 15.f);
-            const float width=c.id==14 ? c.w-14.f : c.w-(c.symbol?14.f:16.f);
-            text(g,c.label,c.x+left,c.y,width,c.h,9.5f,p[kLabel],false,false);
-        }
+        led(g,on?p[kRadio]:muted(p[kRadio],.42f),ledx,c.y+c.h/2,4.4f,on);
         return;
     }
-    case Kind::Wave: {
-        const bool on=(value(c.id)==c.value) || (c.id==42||c.id==47);
-        // Original WaveCell: FLAT fill (no gradient), 2 px corner radius.
-        const Color waveFace=on?p[kDisplayText]:p[kButton];
-        // Original WaveCell glows only while selected. Three thin, low-alpha
-        // rings add a soft 2px aura without changing button dimensions.
-        if(on) {
-            const BYTE r=waveFace.GetR(),green=waveFace.GetG(),b=waveFace.GetB();
-            roundedOutline(g,Color(20,r,green,b),c.x-2.5f,c.y-2.5f,c.w+5.f,c.h+5.f,4.5f,1.5f);
-            roundedOutline(g,Color(35,r,green,b),c.x-1.5f,c.y-1.5f,c.w+3.f,c.h+3.f,3.5f,1.2f);
-            roundedOutline(g,Color(55,r,green,b),c.x-.5f,c.y-.5f,c.w+1.f,c.h+1.f,2.5f,1.f);
-        }
-        roundedFill(g,waveFace,c.x,c.y,c.w,c.h,2.f);
-        roundedOutline(g,Color(170,0,0,0),c.x,c.y,c.w,c.h,2.f);
-        // Slightly stronger strokes, while preserving the original shape paths.
-        Pen pen(on ? rgb(0x101719) : rgb(0xDDDDDD),1.7f);
-        pen.SetStartCap(LineCapRound);pen.SetEndCap(LineCapRound);
-        pen.SetLineJoin(LineJoinRound);
-        const float x=c.x+4,y=c.y+3.5f,w=c.w-8,h=c.h-7;
-        int shape=c.symbol;
-        if(c.id==42 || c.id==47) {
-            constexpr int cycleShapes[]={6,3,5,7,8,0};
-            shape=cycleShapes[std::clamp(value(c.id),0,5)];
-        }
-        switch(shape) {
-            case 0: { // sine
-                PointF pts[25];
-                for(int i=0;i<25;i++) {
-                    const float t=i/24.f;
-                    pts[i]=PointF(x+w*t,y+h*(.5f-.5f*std::sin(2*kPi*t)));
-                }
-                g.DrawLines(&pen,pts,25);break;
-            }
-            case 1:case 6: { // saw / falling saw, original two-stroke shape
-                PointF pts[]={{x,y+h},{x,y},{x+w,y+h}};
-                g.DrawLines(&pen,pts,3);break;
-            }
-            case 2:case 5: { // pulse (30%) / square (50%)
-                const float duty=(shape==2 ? .30f : .50f);
-                PointF pts[]={{x,y+h},{x,y},{x+w*duty,y},
-                              {x+w*duty,y+h},{x+w,y+h},{x+w,y}};
-                g.DrawLines(&pen,pts,6);break;
-            }
-            case 3: { // triangle
-                PointF pts[]={{x,y+h},{x+w*.5f,y},{x+w,y+h}};
-                g.DrawLines(&pen,pts,3);break;
-            }
-            case 4: { // fixed sample of noise; same samples as WaveIcon.noise
-                const float ys[]={.5f,.1f,.8f,.3f,.95f,.2f,.6f,0.f,.7f,.4f,.9f,.25f,.55f};
-                PointF pts[13];
-                for(int i=0;i<13;i++)pts[i]=PointF(x+w*i/12.f,y+h*ys[i]);
-                g.DrawLines(&pen,pts,13);break;
-            }
-            case 7:case 8: { // stepped or smoothly interpolated random LFO
-                const float ys[]={.6f,.1f,.8f,.35f,.95f};
-                const float step=w/5.f, curve=step*.35f;
-                GraphicsPath path;
-                path.StartFigure();
-                path.AddLine(x,y+h*ys[0],x+step-(shape==8?curve:0),y+h*ys[0]);
-                for(int i=1;i<5;i++) {
-                    const float edge=x+step*i;
-                    const float prev=y+h*ys[i-1], level=y+h*ys[i];
-                    if(shape==8) {
-                        path.AddBezier(edge-curve,prev,edge,prev,edge,level,edge+curve,level);
-                    } else path.AddLine(edge,prev,edge,level);
-                    path.AddLine(edge+(shape==8?curve:0),level,
-                                 x+step*(i+1)-(shape==8 && i<4?curve:0),level);
-                }
-                g.DrawPath(&pen,&path);break;
-            }
-            default:break;
-        }
+    case Kind::Wave:
+        drawWave(g,c);
         return;
-    }
     }
 }
 
-void WindowsEditor::draw(Graphics& g) {
+void WindowsEditor::drawWave(Graphics& g,const Control& c) {
+    const auto& p=colors_;
+    const bool on=(value(c.id)==c.value) || (c.id==42||c.id==47);
+    // Original WaveCell: FLAT fill (no gradient), 2 px corner radius.
+    const Color waveFace=on?p[kDisplayText]:p[kButton];
+    // Original WaveCell glows only while selected. Three thin, low-alpha
+    // rings add a soft 2px aura without changing button dimensions.
+    if(on) {
+        const BYTE r=waveFace.GetR(),green=waveFace.GetG(),b=waveFace.GetB();
+        roundedOutline(g,Color(20,r,green,b),c.x-2.5f,c.y-2.5f,c.w+5.f,c.h+5.f,4.5f,1.5f);
+        roundedOutline(g,Color(35,r,green,b),c.x-1.5f,c.y-1.5f,c.w+3.f,c.h+3.f,3.5f,1.2f);
+        roundedOutline(g,Color(55,r,green,b),c.x-.5f,c.y-.5f,c.w+1.f,c.h+1.f,2.5f,1.f);
+    }
+    roundedFill(g,waveFace,c.x,c.y,c.w,c.h,2.f);
+    roundedOutline(g,Color(170,0,0,0),c.x,c.y,c.w,c.h,2.f);
+    // Slightly stronger strokes, while preserving the original shape paths.
+    Pen pen(on ? rgb(0x101719) : rgb(0xDDDDDD),1.7f);
+    pen.SetStartCap(LineCapRound);pen.SetEndCap(LineCapRound);
+    pen.SetLineJoin(LineJoinRound);
+    const float x=c.x+4,y=c.y+3.5f,w=c.w-8,h=c.h-7;
+    int shape=c.symbol;
+    if(c.id==42 || c.id==47) {
+        constexpr int cycleShapes[]={6,3,5,7,8,0};
+        shape=cycleShapes[std::clamp(value(c.id),0,5)];
+    }
+    switch(shape) {
+        case 0: { // sine
+            PointF pts[25];
+            for(int i=0;i<25;i++) {
+                const float t=i/24.f;
+                pts[i]=PointF(x+w*t,y+h*(.5f-.5f*std::sin(2*kPi*t)));
+            }
+            g.DrawLines(&pen,pts,25);break;
+        }
+        case 1:case 6: { // saw / falling saw, original two-stroke shape
+            PointF pts[]={{x,y+h},{x,y},{x+w,y+h}};
+            g.DrawLines(&pen,pts,3);break;
+        }
+        case 2:case 5: { // pulse (30%) / square (50%)
+            const float duty=(shape==2 ? .30f : .50f);
+            PointF pts[]={{x,y+h},{x,y},{x+w*duty,y},
+                          {x+w*duty,y+h},{x+w,y+h},{x+w,y}};
+            g.DrawLines(&pen,pts,6);break;
+        }
+        case 3: { // triangle
+            PointF pts[]={{x,y+h},{x+w*.5f,y},{x+w,y+h}};
+            g.DrawLines(&pen,pts,3);break;
+        }
+        case 4: { // fixed sample of noise; same samples as WaveIcon.noise
+            const float ys[]={.5f,.1f,.8f,.3f,.95f,.2f,.6f,0.f,.7f,.4f,.9f,.25f,.55f};
+            PointF pts[13];
+            for(int i=0;i<13;i++)pts[i]=PointF(x+w*i/12.f,y+h*ys[i]);
+            g.DrawLines(&pen,pts,13);break;
+        }
+        case 7:case 8: { // stepped or smoothly interpolated random LFO
+            const float ys[]={.6f,.1f,.8f,.35f,.95f};
+            const float step=w/5.f, curve=step*.35f;
+            GraphicsPath path;
+            path.StartFigure();
+            path.AddLine(x,y+h*ys[0],x+step-(shape==8?curve:0),y+h*ys[0]);
+            for(int i=1;i<5;i++) {
+                const float edge=x+step*i;
+                const float prev=y+h*ys[i-1], level=y+h*ys[i];
+                if(shape==8) {
+                    path.AddBezier(edge-curve,prev,edge,prev,edge,level,edge+curve,level);
+                } else path.AddLine(edge,prev,edge,level);
+                path.AddLine(edge+(shape==8?curve:0),level,
+                             x+step*(i+1)-(shape==8 && i<4?curve:0),level);
+            }
+            g.DrawPath(&pen,&path);break;
+        }
+        default:break;
+    }
+}
+
+void WindowsEditor::drawStatic(Graphics& g) {
     const auto& p=colors_;
     fill(g,p[kPanel],0,0,kDesignWidth,kDesignHeight);
     text(g,L"Synth2",8,5,94,23,20,p[kLabel],true);
     text(g,L"Virtual Analog",84,7,135,20,12,muted(p[kLabel],.75f));
-    // Persistent exact zoom readout: 770 design pixels = 100%.
-    const int zoomPercent=int(std::lround(100.f*float(rect.getWidth())/kDesignWidth));
-    const std::wstring zoomLabel=L"Zoom "+std::to_wstring(zoomPercent)+L"%";
-    darkButton(g,p[kButton],492.f,5.f,94.f,20.f,hoveredChrome_==16);
-    text(g,zoomLabel,494.f,5.f,90.f,20.f,11.f,rgb(0xE8E8E8),true,true);
     fill(g,rgb(0xAD0F0C),593,5,168,20);
     stroke(g,rgb(0x101010),593,5,168,20);
     text(g,L"V"+toWide(OXO_VERSION)+L"  Windows dev v"+std::wstring(kWindowsDevBuild),
@@ -792,85 +917,92 @@ void WindowsEditor::draw(Graphics& g) {
         text(g,sec.name,sec.x+5,sec.y,sec.w-10,16,12,p[kHeaderText],true);
     }
     Pen div(muted(p[kHeader],.45f),.8f);
-    for(const auto& a:std::vector<std::array<float,4>>{
-        {180,56,180,110},{14,115,310,115},{218,121,218,268},{14,197,210,197}})
-        g.DrawLine(&div,a[0],a[1],a[2],a[3]);
-    for(size_t i=0;i<controls_.size();++i)
-        drawControl(g,controls_[i],hoveredControl_==int(i));
+    static constexpr float dividers[][4]={{180,56,180,110},{14,115,310,115},{218,121,218,268},{14,197,210,197}};
+    for(const auto& a:dividers) g.DrawLine(&div,a[0],a[1],a[2],a[3]);
+    for(const auto& c:controls_) drawControlStatic(g,c);
     // Original LCD + write/menu + voice grid geometry from Shared/SynthLibraryViews.swift.
     LinearGradientBrush lcd(PointF(50,484),PointF(50,554),p[kDisplayTop],p[kDisplayBottom]);
     GraphicsPath mainLcd;roundedPath(mainLcd,50,484,432,70,4.f);
     g.FillPath(&lcd,&mainLcd);
     roundedOutline(g,rgb(0x070707),50,484,432,70,4.f,1.5f);
-    int loadedBank=-1,loadedSlot=-1;
-    if(knownRevision_>0 && hooks_.loadedProgram)
-        hooks_.loadedProgram(hooks_.ctx,&loadedBank,&loadedSlot);
-    loadedBankForPaint_=loadedBank;
-    loadedSlotForPaint_=loadedSlot;
-    const int prefix=(loadedSlot>=0 ? loadedSlot+1 : 0);
-    wchar_t formattedNumber[16];
-    if(prefix) std::swprintf(formattedNumber,16,L"%03d: ",prefix);
-    else std::wcscpy(formattedNumber,L"---: ");
-    text(g,std::wstring(formattedNumber)+patchName(),60,489,330,25,17,rgb(0xDFFAFF),true,false,true);
-    std::wstring second=readout();
-    if(second.empty()) {
-        if(loadedBank>=0 && loadedBank<int(banks_.size())) {
-            wchar_t num[16];std::swprintf(num,16,L"%02d: ",displayBankNumber(loadedBank));
-            second=std::wstring(num)+toWide(banks_[size_t(loadedBank)].name.c_str());
-        } else second=knownRevision_>0 ? L"Click here to browse banks" : L"Scanning preset banks...";
-    }
-    text(g,second,60,526,392,23,13,p[kDisplayText],false,false,true);
-    darkButton(g,p[kButton],420,495,24,20,hoveredChrome_==3);
-    darkButton(g,p[kButton],449,495,24,20,hoveredChrome_==4);
-    text(g,L"<",421,495,21,20,13,rgb(0xFFFFFF),true,true);
-    text(g,L">",450,495,21,20,13,rgb(0xFFFFFF),true,true);
-    darkButton(g,rgb(0xB81715),492,488,50,26,hoveredChrome_==5);
-    text(g,L"write",492,488,50,26,11,rgb(0xFFFFFF),true,true);
-    darkButton(g,p[kButton],492,522,50,26,hoveredChrome_==6);
-    text(g,L"menu",492,522,50,26,11,rgb(0xFFFFFF),true,true);
-    if(!midiLearn_) {
-        const uint64_t states=hooks_.voiceStates ? hooks_.voiceStates(hooks_.ctx) : 0;
-        // Poly shows the allowed voice count; Mono and Legato show one
-        // allocated square. Playing/released voices remain visible in all modes.
-        const int allocated=value(38)==0 ? std::clamp(value(94),1,32) : 1;
-        constexpr float cell=215.f/16.f;
-        // Vertically centre the two-row grid beside the Write/Menu button pair.
-        constexpr float left=548.f,top=505.f;
-        constexpr float inset=1.75f; // clear gap from the grid lines
-        // VoiceGrid (Shared/SynthLibraryViews.swift): white = held, gray =
-        // releasing, black = available, empty = past the polyphony; lines =
-        // label ink at 12%. Not theme colours.
-        static const Color held=rgb(0xFFFFFF),releasing=rgb(0x8C8C8C),available=rgb(0x000000);
-        for(int i=0;i<32;i++) {
-            const int state=int((states>>(i*2))&3);
-            const Color* color=state==2?&held:state==1?&releasing:i<allocated?&available:nullptr;
-            if(color) {
-                const float x=left+(i%16)*cell, y=top+(i/16)*cell;
-                fill(g,*color,x+inset,y+inset,cell-2*inset,cell-2*inset);
-            }
-        }
-        // Draw one continuous grid instead of 32 overlapping rectangles.
-        Pen grid(Color(31,p[kLabel].GetR(),p[kLabel].GetG(),p[kLabel].GetB()),1.f);
-        for(int column=0;column<=16;column++) {
-            const float x=left+column*cell+.5f;
-            g.DrawLine(&grid,x,top,x,top+2*cell);
-        }
-        for(int row=0;row<=2;row++) {
-            const float y=top+row*cell+.5f;
-            g.DrawLine(&grid,left,y,left+16*cell,y);
-        }
-    } else {
-        darkButton(g,rgb(0xA30D0D),558,488,186,24,hoveredChrome_==8);
-        text(g,L"Exit MIDI Learn",558,488,186,24,11,rgb(0xFFFFFF),true,true);
-        text(g,L"Select a control, then move a MIDI CC",548,518,206,20,9,p[kLabel],true,true);
-    }
-    if(browser_) drawBrowser(g);
+    for(const int id:{3,4,5,6,16}) drawChrome(g,id,false);
     // Small bottom-right host-resize grip. All drawing scales as one canvas.
     Pen grip(blend(p[kPanel],p[kLabel],.65f),1.f);
     for(int i=0;i<3;i++) {
         const float a=float(i*5);
         g.DrawLine(&grip,752.f+a,557.f,767.f,542.f+a);
     }
+}
+
+void WindowsEditor::drawDynamic(Graphics& g) {
+    const auto& p=colors_;
+    // The browser covers the whole panel area: only the bottom bar shows.
+    for(size_t i=0;i<controls_.size();++i) {
+        const auto& c=controls_[i];
+        if((browser_ && c.y<kBrowserRect.Y+kBrowserRect.Height) || !visible(bounds(c))) continue;
+        drawControlDynamic(g,c,hoveredControl_==int(i));
+    }
+    for(const int id:{3,4,5,6,16})
+        if(hoveredChrome_==id) drawChrome(g,id,true);
+    if(visible(kLcdRect)) {
+        int loadedBank=-1,loadedSlot=-1;
+        if(knownRevision_>0 && hooks_.loadedProgram)
+            hooks_.loadedProgram(hooks_.ctx,&loadedBank,&loadedSlot);
+        loadedBankForPaint_=loadedBank;
+        loadedSlotForPaint_=loadedSlot;
+        const int prefix=(loadedSlot>=0 ? loadedSlot+1 : 0);
+        wchar_t formattedNumber[16];
+        if(prefix) std::swprintf(formattedNumber,16,L"%03d: ",prefix);
+        else std::wcscpy(formattedNumber,L"---: ");
+        text(g,std::wstring(formattedNumber)+patchName(),60,489,330,25,17,rgb(0xDFFAFF),true,false,true);
+        std::wstring second=readout();
+        if(second.empty()) {
+            if(loadedBank>=0 && loadedBank<int(banks_.size())) {
+                wchar_t num[16];std::swprintf(num,16,L"%02d: ",displayBankNumber(loadedBank));
+                second=std::wstring(num)+toWide(banks_[size_t(loadedBank)].name.c_str());
+            } else second=knownRevision_>0 ? L"Click here to browse banks" : L"Scanning preset banks...";
+        }
+        text(g,second,60,526,392,23,13,p[kDisplayText],false,false,true);
+    }
+    if(!midiLearn_) {
+        if(visible(kGridRect)) {
+            const uint64_t states=hooks_.voiceStates ? hooks_.voiceStates(hooks_.ctx) : 0;
+            // Poly shows the allowed voice count; Mono and Legato show one
+            // allocated square. Playing/released voices remain visible in all modes.
+            const int allocated=value(38)==0 ? std::clamp(value(94),1,32) : 1;
+            constexpr float cell=215.f/16.f;
+            // Vertically centre the two-row grid beside the Write/Menu button pair.
+            const float left=kGridRect.X,top=kGridRect.Y;
+            constexpr float inset=1.75f; // clear gap from the grid lines
+            // VoiceGrid (Shared/SynthLibraryViews.swift): white = held, gray =
+            // releasing, black = available, empty = past the polyphony; lines =
+            // label ink at 12%. Not theme colours.
+            static const Color held=rgb(0xFFFFFF),releasing=rgb(0x8C8C8C),available=rgb(0x000000);
+            for(int i=0;i<32;i++) {
+                const int state=int((states>>(i*2))&3);
+                const Color* color=state==2?&held:state==1?&releasing:i<allocated?&available:nullptr;
+                if(color) {
+                    const float x=left+(i%16)*cell, y=top+(i/16)*cell;
+                    fill(g,*color,x+inset,y+inset,cell-2*inset,cell-2*inset);
+                }
+            }
+            // Draw one continuous grid instead of 32 overlapping rectangles.
+            Pen grid(Color(31,p[kLabel].GetR(),p[kLabel].GetG(),p[kLabel].GetB()),1.f);
+            for(int column=0;column<=16;column++) {
+                const float x=left+column*cell+.5f;
+                g.DrawLine(&grid,x,top,x,top+2*cell);
+            }
+            for(int row=0;row<=2;row++) {
+                const float y=top+row*cell+.5f;
+                g.DrawLine(&grid,left,y,left+16*cell,y);
+            }
+        }
+    } else {
+        darkButton(g,rgb(0xA30D0D),558,488,186,24,hoveredChrome_==8);
+        text(g,L"Exit MIDI Learn",558,488,186,24,11,rgb(0xFFFFFF),true,true);
+        text(g,L"Select a control, then move a MIDI CC",548,518,206,20,9,p[kLabel],true,true);
+    }
+    if(browser_ && visible(kBrowserRect)) drawBrowser(g);
 }
 
 void WindowsEditor::refreshBanks() {
@@ -1196,7 +1328,8 @@ void WindowsEditor::setValueOnce(int id,int v) {
     hooks_.setValue(hooks_.ctx,id,v);
     hooks_.endEdit(hooks_.ctx,id);
     selectedId_=id;
-    repaint();
+    valueChanged(id);
+    invalidate(kLcdRect);
 }
 void WindowsEditor::cycle(int id,int step) {
     int low=0,high=127,def=0;
@@ -1346,11 +1479,7 @@ void WindowsEditor::updateHover(float x,float y) {
             }
         }
     }
-    if(nextControl!=hoveredControl_ || nextChrome!=hoveredChrome_) {
-        hoveredControl_=nextControl;
-        hoveredChrome_=nextChrome;
-        repaint();
-    }
+    hoverChanged(nextControl,nextChrome);
 }
 
 void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
@@ -1437,7 +1566,7 @@ void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
             }
             dragId_=c.id;dragStartY_=y;dragStartValue_=value(c.id);
             if(hooks_.beginEdit)hooks_.beginEdit(hooks_.ctx,c.id);
-            SetCapture(window_);repaint();return;
+            SetCapture(window_);invalidate(kLcdRect);return;
         case Kind::Toggle:
         case Kind::Badge: setValueOnce(c.id,value(c.id)?0:1);return;
         case Kind::Cycle: cycle(c.id,1);return;
@@ -1465,7 +1594,7 @@ void WindowsEditor::mouseMove(float x, float y) {
     const float pixels=(fine?900.f:180.f);
     int newValue=std::clamp(dragStartValue_+int(std::lround((dragStartY_-y)*span/pixels)),low,high);
     if(hooks_.setValue)hooks_.setValue(hooks_.ctx,dragId_,newValue);
-    repaint();
+    valueChanged(dragId_);
 }
 void WindowsEditor::mouseUp() {
     if(resizeDragging_) {
@@ -1489,7 +1618,7 @@ void WindowsEditor::wheel(int direction,float x,float y) {
             // notch. A standard wheel step now moves eight bank entries.
             const int next=std::clamp(bankScroll_-direction,0,
                                       std::max(0,int(bankOrder_.size())+1-20));
-            if(next!=bankScroll_) {bankScroll_=next;repaint();}
+            if(next!=bankScroll_) {bankScroll_=next;invalidate(kBrowserRect);}
         } else if(selectedBank_==kFavouritesBank ||
                   (selectedBank_>=0 && selectedBank_<int(banks_.size()))) {
             const int count=selectedBank_==kFavouritesBank?int(favourites_.size()):
@@ -1497,7 +1626,7 @@ void WindowsEditor::wheel(int direction,float x,float y) {
             const int rows=(count+3)/4;
             const int amount=(direction>0?1:-1)*std::max(1,(std::abs(direction)+1)/2);
             const int next=std::clamp(slotScroll_-amount,0,std::max(0,rows-20));
-            if(next!=slotScroll_) {slotScroll_=next;repaint();}
+            if(next!=slotScroll_) {slotScroll_=next;invalidate(kBrowserRect);}
         }
         return;
     }
@@ -1776,17 +1905,77 @@ void WindowsEditor::tick() {
             learnTarget_=-1;dirty=true;
         }
     }
-    if(!browser_ && !midiLearn_) {
-        const int mode=value(38), poly=value(94);
-        if(mode!=knownGridMode_ || poly!=knownGridPolyphony_) {
-            knownGridMode_=mode;knownGridPolyphony_=poly;dirty=true;
-        }
-        if(hooks_.voiceStates) {
-            const uint64_t states=hooks_.voiceStates(hooks_.ctx);
-            if(states!=knownVoiceStates_) {knownVoiceStates_=states;dirty=true;}
-        }
-    }
     if(dirty) repaint();
+    // Host automation / MIDI / patch edits: redraw what shows a changed
+    // value (SynthModel polls the same way).
+    for(size_t id=0;id<knownValues_.size();++id)
+        if(value(int(id))!=knownValues_[id]) valueChanged(int(id));
+    if(!midiLearn_ && hooks_.voiceStates) {
+        const uint64_t states=hooks_.voiceStates(hooks_.ctx);
+        if(states!=knownVoiceStates_) {knownVoiceStates_=states;invalidate(kGridRect);}
+    }
+}
+
+bool WindowsEditor::ensureBuffers(HDC screen,int width,int height) {
+    if(static_.dc && back_.dc && width==bufferWidth_ && height==bufferHeight_) return true;
+    releaseBuffers();
+    for(Buffer* b:{&static_,&back_}) {
+        b->dc=CreateCompatibleDC(screen);
+        b->bitmap=b->dc ? CreateCompatibleBitmap(screen,width,height) : nullptr;
+        b->previous=b->bitmap ? SelectObject(b->dc,b->bitmap) : nullptr;
+        if(!b->previous || b->previous==HGDI_ERROR) {releaseBuffers();return false;}
+    }
+    bufferWidth_=width;bufferHeight_=height;
+    staticDirty_=true;
+    return true;
+}
+void WindowsEditor::releaseBuffers() {
+    for(Buffer* b:{&static_,&back_}) {
+        if(b->dc && b->previous && b->previous!=HGDI_ERROR) SelectObject(b->dc,b->previous);
+        if(b->bitmap) DeleteObject(b->bitmap);
+        if(b->dc) DeleteDC(b->dc);
+        *b={};
+    }
+    bufferWidth_=bufferHeight_=0;
+}
+void WindowsEditor::paint(HDC screen,const RECT& dirty) {
+    RECT client{};GetClientRect(window_,&client);
+    const int width=client.right-client.left, height=client.bottom-client.top;
+    if(width<=0 || height<=0) return;
+    const float sx=float(width)/kDesignWidth, sy=float(height)/kDesignHeight;
+    auto prepare=[&](Graphics& g) {
+        g.SetSmoothingMode(SmoothingModeAntiAlias);
+        g.SetTextRenderingHint(TextRenderingHintAntiAlias);
+        g.SetPixelOffsetMode(PixelOffsetModeHighQuality);
+        g.ScaleTransform(sx,sy);
+    };
+    const RectF full(0,0,kDesignWidth,kDesignHeight);
+    if(!ensureBuffers(screen,width,height)) { // no bitmaps: everything, straight to the screen
+        Graphics g(screen);
+        prepare(g);
+        paintClip_=full;
+        drawStatic(g);
+        drawDynamic(g);
+        return;
+    }
+    if(staticDirty_) {
+        Graphics g(static_.dc);
+        prepare(g);
+        paintClip_=full;
+        drawStatic(g);
+        staticDirty_=false;
+    }
+    const int x=dirty.left, y=dirty.top, w=dirty.right-dirty.left, h=dirty.bottom-dirty.top;
+    BitBlt(back_.dc,x,y,w,h,static_.dc,x,y,SRCCOPY);
+    {
+        Graphics g(back_.dc);
+        g.SetClip(Rect(x,y,w,h)); // device pixels: before the scale
+        prepare(g);
+        paintClip_=RectF(float(x)/sx-1.f,float(y)/sy-1.f,float(w)/sx+2.f,float(h)/sy+2.f);
+        drawDynamic(g);
+    }
+    paintClip_=full;
+    BitBlt(screen,x,y,w,h,back_.dc,x,y,SRCCOPY);
 }
 
 LRESULT CALLBACK WindowsEditor::wndProc(HWND window,UINT msg,WPARAM wp,LPARAM lp) {
@@ -1828,34 +2017,7 @@ LRESULT WindowsEditor::windowMessage(UINT msg,WPARAM wp,LPARAM lp) {
     }
     case WM_PAINT: {
         PAINTSTRUCT ps{};
-        HDC screenDC=BeginPaint(window_,&ps);
-        if(screenDC) {
-            RECT client{};GetClientRect(window_,&client);
-            const int width=client.right-client.left;
-            const int height=client.bottom-client.top;
-            if(width>0 && height>0) {
-                auto paint=[&](HDC target) {
-                    Graphics g(target);
-                    g.SetSmoothingMode(SmoothingModeAntiAlias);
-                    g.SetTextRenderingHint(TextRenderingHintAntiAlias);
-                    g.SetPixelOffsetMode(PixelOffsetModeHighQuality);
-                    g.ScaleTransform(float(width)/kDesignWidth,float(height)/kDesignHeight);
-                    draw(g);
-                };
-                HDC memoryDC=CreateCompatibleDC(screenDC);
-                HBITMAP bitmap=memoryDC ? CreateCompatibleBitmap(screenDC,width,height) : nullptr;
-                if(memoryDC && bitmap) {
-                    HGDIOBJ previous=SelectObject(memoryDC,bitmap);
-                    if(previous && previous!=HGDI_ERROR) {
-                        paint(memoryDC);
-                        BitBlt(screenDC,0,0,width,height,memoryDC,0,0,SRCCOPY);
-                        SelectObject(memoryDC,previous);
-                    } else paint(screenDC);
-                    DeleteObject(bitmap);
-                } else paint(screenDC);
-                if(memoryDC)DeleteDC(memoryDC);
-            }
-        }
+        if(HDC screen=BeginPaint(window_,&ps)) paint(screen,ps.rcPaint);
         EndPaint(window_,&ps);
         return 0;
     }
@@ -1877,11 +2039,7 @@ LRESULT WindowsEditor::windowMessage(UINT msg,WPARAM wp,LPARAM lp) {
         mouseMove(float(GET_X_LPARAM(lp))/sx,float(GET_Y_LPARAM(lp))/sy);return 0;
     case WM_MOUSELEAVE:
         trackingMouseLeave_=false;
-        if(hoveredControl_!=-1 || hoveredChrome_!=0) {
-            hoveredControl_=-1;
-            hoveredChrome_=0;
-            repaint();
-        }
+        hoverChanged(-1,0);
         return 0;
     case WM_LBUTTONUP:mouseUp();return 0;
     case WM_CAPTURECHANGED:mouseUp();return 0;

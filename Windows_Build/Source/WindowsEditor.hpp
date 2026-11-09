@@ -17,6 +17,7 @@
 namespace oxo {
 class OxoSynth2Controller;
 class ThemeEditorWindow;
+class TextCache;
 
 // Windows-only implementation of the original 770x560 SwiftUI design canvas.
 // It uses the existing SynthEditorCore bridge; the DSP and parameter layout
@@ -57,9 +58,25 @@ private:
                const std::vector<int>& shapes);
     void label(float x, float y, const wchar_t* text);
     void badge(float x, float y, const wchar_t* text, int id = -1);
-    void draw(Gdiplus::Graphics& g);
-    void drawControl(Gdiplus::Graphics& g, const Control& c, bool hovered);
+    void text(Gdiplus::Graphics& g, const std::wstring& s, float x, float y, float w, float h, float size,
+              Gdiplus::Color c, bool bold = false, bool centred = false, bool mono = false);
+    bool visible(const Gdiplus::RectF& design) const;
+    static Gdiplus::RectF bounds(const Control& c);
+    static Gdiplus::RectF chromeRect(int id);
+    void invalidate(const Gdiplus::RectF& design) const;
+    void invalidateParam(int id) const;
+    void valueChanged(int id);
+    void hoverChanged(int control, int chrome);
+    void drawStatic(Gdiplus::Graphics& g);
+    void drawDynamic(Gdiplus::Graphics& g);
+    void drawControlStatic(Gdiplus::Graphics& g, const Control& c);
+    void drawControlDynamic(Gdiplus::Graphics& g, const Control& c, bool hovered);
+    void drawWave(Gdiplus::Graphics& g, const Control& c);
+    void drawChrome(Gdiplus::Graphics& g, int id, bool hovered);
     void drawBrowser(Gdiplus::Graphics& g);
+    void paint(HDC screen, const RECT& dirty);
+    bool ensureBuffers(HDC screen, int width, int height);
+    void releaseBuffers();
     void showMainMenu(int x, int y);
     void showThemeMenu(int x, int y);
     void showThemeEditor();
@@ -112,6 +129,14 @@ private:
     themes::Palette theme_ = themes::Synth2(); // this instance's palette (kept in the session)
     std::array<Gdiplus::Color, themes::kSlotCount> colors_; // theme_ as GDI+ colours
     std::unique_ptr<ThemeEditorWindow> themeEditor_;
+    std::unique_ptr<TextCache> textCache_; // GDI+ objects: lives between GdiplusStartup / Shutdown
+    // Persistent bitmaps, recreated only on resize: the static layer and the back buffer.
+    struct Buffer { HDC dc = nullptr; HBITMAP bitmap = nullptr; HGDIOBJ previous = nullptr; };
+    Buffer static_, back_;
+    int bufferWidth_ = 0, bufferHeight_ = 0;
+    bool staticDirty_ = true;
+    Gdiplus::RectF paintClip_{0, 0, 770, 560}; // design-space area being painted
+    std::array<int, 100> knownValues_{};        // params 0..99 as last drawn (host automation polling)
     bool browser_ = false;
     bool writing_ = false;
     bool midiLearn_ = false;
@@ -129,8 +154,6 @@ private:
     int knownRevision_ = -1;
     int knownSerial_ = -1;
     uint64_t knownVoiceStates_ = 0;
-    int knownGridMode_ = -1;
-    int knownGridPolyphony_ = -1;
     int hoveredControl_ = -1;
     int hoveredChrome_ = 0;
     bool trackingMouseLeave_ = false;
