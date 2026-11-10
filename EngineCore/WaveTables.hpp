@@ -65,13 +65,13 @@ struct WaveTable {
     std::vector<Cubic> cubic; // size + 1 (a phase of exactly 1 reads point 0 again)
 
     // phase in [0, 1]
-    float Read(double phase) const {
+    OXO_INLINE float Read(double phase) const {
         const double pos = phase * size;
         const uint32_t i = uint32_t(pos);
         return Eval(i, float(pos - i));
     }
     // the table at the phases (ph[k] << shift) + offset, k = 0..3, in one register
-    simd::F4 Read4(const Phase64 *ph, int shift = 0, Phase64 offset = 0) const {
+    OXO_INLINE simd::F4 Read4(const Phase64 *ph, int shift = 0, Phase64 offset = 0) const {
         using namespace simd;
         Phase64 q[4];
         for (int k = 0; k < 4; ++k) q[k] = (ph[k] << shift) + offset;
@@ -94,7 +94,7 @@ struct WaveTable {
     }
 
 private:
-    float Eval(uint32_t i, float f) const {
+    OXO_INLINE float Eval(uint32_t i, float f) const {
         const Cubic &c = cubic[i];
         return ((c.c3 * f + c.c2) * f + c.c1) * f + c.c0;
     }

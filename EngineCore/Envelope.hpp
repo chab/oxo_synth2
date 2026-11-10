@@ -6,6 +6,7 @@
 // time-constant law (kEnvTauSeconds, tau doubles every ~10.1 steps).
 
 #include "MeasuredTables.hpp"
+#include "Simd.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -21,6 +22,10 @@ public:
     enum class SustainLaw { Amp, Linear };
     void Configure(double sampleRate, int attack, int decay, int sustain, int release,
                    SustainLaw law = SustainLaw::Amp) {
+        // (every render chunk: the exps only when a setting changed)
+        const Settings settings{sampleRate, attack, decay, sustain, release, law};
+        if (settings == settings_) return;
+        settings_ = settings;
         attackStep_ = 1.0 / std::max(1.0, tables::kAmpAttackSeconds[attack] * sampleRate);
         decayCoef_ = 1.0 - std::exp(-1.0 / (tables::kEnvTauSeconds[decay] * sampleRate));
         releaseCoef_ = 1.0 - std::exp(-1.0 / (tables::kEnvTauSeconds[release] * sampleRate));
@@ -41,7 +46,7 @@ public:
     bool Attacking() const { return stage_ == Stage::Attack; }
     double Level() const { return level_; }
 
-    double Next() {
+    OXO_INLINE double Next() {
         switch (stage_) {
         case Stage::Idle: break;
         case Stage::Attack:
@@ -68,6 +73,14 @@ public:
 
 private:
     static constexpr double kAim = 1.0 / 2048;
+    struct Settings {
+        double sampleRate = 0;
+        int attack = -1, decay = -1, sustain = -1, release = -1;
+        SustainLaw law = SustainLaw::Amp;
+        bool operator==(const Settings &) const = default;
+    };
+
+    Settings settings_;
 
     Stage stage_ = Stage::Idle;
     double level_ = 0;

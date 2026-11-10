@@ -191,9 +191,13 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   rate, osc1's = `<< 1`), read / sined 4 at a time through explicit SIMD
   (`EngineCore/Simd.hpp`: SSE2 / NEON / plain C++, `-DOXO_SIMD_SCALAR`
   forces the latter; gathers, which no compiler vectorizes); `Voice::Wrap` calls
-  floor only out of range (a library call on x64 SSE2). Keep the voice in
-  ONE per-sample loop: splitting the filter into its own pass made it
-  latency-bound (slower everywhere). Engine changes: render every factory /
+  floor only out of range (a library call on x64 SSE2). Everything the
+  voice loop calls is `OXO_INLINE` (forced; no lambdas there: clang left
+  them as calls, each spilling the loop's live values; MSVC inlines even
+  less): +10..25 %. Per-chunk exps are cached (`Adsr::Configure`, detune
+  ratios). Keep the voice in ONE per-sample loop: splitting the filter
+  into its own pass made it latency-bound, and a separate modulation pass
+  (envelopes / LFO routes into arrays) was 5..15 % slower too. Engine changes: render every factory /
   starter patch before / after and compare (expected <= -120 dB).
 - Python: `.venv` (numpy, scipy) for `tools/s1ref` scripts.
 - WINDOWS: `build_windows.bat [--no-pause]` on Windows (Visual Studio 2022+

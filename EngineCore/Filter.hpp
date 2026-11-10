@@ -22,6 +22,7 @@
 // signals are normalized (oscillator full scale = 1).
 
 #include "MeasuredTables.hpp"
+#include "Simd.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -104,7 +105,7 @@ public:
     }
 
     // type 0..4, cutoff in knob units (may be fractional / out of range), res 0..127.
-    void SetParams(int type, double cutoffKnob, int res) {
+    OXO_INLINE void SetParams(int type, double cutoffKnob, int res) {
         type_ = type;
         if (type == 4) return SetDiode(cutoffKnob, res);
         if (type == 1) {
@@ -113,13 +114,16 @@ public:
             ladderK_ = std::max(0.0, 0.0297 * res - 0.076) * comp;
             return;
         }
-        const double r = res / 127.0;
         svfF_ = tables_->SvfF(cutoffKnob);
-        svfD_ = std::max(1.0 - r, 0.0);
-        svfG_ = 1.0 - 0.7 * r;
+        if (res != svfRes_) {
+            const double r = res / 127.0;
+            svfRes_ = res;
+            svfD_ = std::max(1.0 - r, 0.0);
+            svfG_ = 1.0 - 0.7 * r;
+        }
     }
 
-    double Process(double x) {
+    OXO_INLINE double Process(double x) {
         if (type_ == 4) return Diode(x);
         if (type_ == 1) {
             // The limiter rides the FEEDBACK here (in-loop), which is what
@@ -257,6 +261,7 @@ private:
     std::shared_ptr<const FilterTables> tables_;
     int type_ = 1;
     double svfF_ = 0.1, svfD_ = 1, svfG_ = 1;
+    int svfRes_ = 0; // the res svfD_ / svfG_ hold
     double low_ = 0, band_ = 0;
     double ladderA_ = 0.5, ladderK_ = 0, ladderGain_ = 1;
     double stage_[4] = {0, 0, 0, 0};
@@ -268,6 +273,6 @@ private:
 };
 
 // (measured) filter saturation, after the filter: y = (1 + a) x / (1 + a |x|).
-inline double Saturate(double x, double a) { return a > 0 ? (1 + a) * x / (1 + a * std::fabs(x)) : x; }
+OXO_INLINE double Saturate(double x, double a) { return a > 0 ? (1 + a) * x / (1 + a * std::fabs(x)) : x; }
 
 } // namespace oxo::s2

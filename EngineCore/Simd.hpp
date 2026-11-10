@@ -19,6 +19,14 @@
 #define OXO_SIMD_NEON 1
 #endif
 
+// The engine's per-sample helpers: always inlined (a call in the voice's
+// loop spills its many live values; MSVC inlines less than clang).
+#if defined(_MSC_VER) && !defined(__clang__)
+#define OXO_INLINE __forceinline
+#else
+#define OXO_INLINE inline __attribute__((always_inline))
+#endif
+
 namespace oxo::s2::simd {
 
 #if OXO_SIMD_SSE2
