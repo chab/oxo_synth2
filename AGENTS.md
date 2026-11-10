@@ -180,8 +180,18 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   compact comma style). Then `tools/au_harness`.
 - `make -C EngineCoreTests test`, `make -C tools/s2render`, CPU bench
   `clang++ -std=c++20 -O2 tools/bench/main.cpp -o build/bench && ./build/bench`
-  (16 voices, one core: LP12 x80, LP24 x70, LPDL x34, detune+sub x22, all
-  fx x60 realtime), `make -C tools/s1ref` (x86_64, needs the original AU).
+  (16 voices, one core, Apple M: LP12 x80, LP24 x70, LPDL x34, detune+sub
+  x40, all fx x60 realtime; `./build/bench <x.sy1>...` = a keyboard scrub,
+  ~31 voices: Madame Eljay 010 x20, the heaviest case reported, Synth1
+  ~4x lighter), `make -C tools/s1ref` (x86_64, needs the original AU).
+  ENGINE CPU CONTRACTS: wave tables store each point's Hermite cubic (one
+  load per read, 11 MB at 44.1 kHz shared per process); osc1's detune
+  copies use 64-bit fixed-point phases (`Phase64`, free wrap), their sines
+  in float into a member scratch array (vectorizes); `Voice::Wrap` calls
+  floor only out of range (a library call on x64 SSE2). Keep the voice in
+  ONE per-sample loop: splitting the filter into its own pass made it
+  latency-bound (slower everywhere). Engine changes: render every factory /
+  starter patch before / after and compare (expected <= -120 dB).
 - Python: `.venv` (numpy, scipy) for `tools/s1ref` scripts.
 - WINDOWS: `build_windows.bat [--no-pause]` on Windows (Visual Studio 2022+
   C++ workload; CMake from `%CMAKE%`, PATH or VS's own; generator = CMake's

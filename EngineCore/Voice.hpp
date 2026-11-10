@@ -16,6 +16,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <type_traits>
 
 namespace oxo::s2 {
 
