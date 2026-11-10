@@ -33,7 +33,7 @@ FLAGS=(-std=c++20 -c -Wall -Wextra -Werror -DUNICODE -D_UNICODE -DNOMINMAX -DWIN
 fail=0
 for f in Windows_Build/Source/*.cpp OxoSynth2VST3/source/OxoSynth2Controller.cpp \
          OxoSynth2VST3/source/OxoSynth2Processor.cpp OxoSynth2VST3/source/OxoSynth2Entry.cpp \
-         Windows_Build/Tests/*.cpp; do
+         Windows_Build/Tests/*.cpp tools/bench/main.cpp; do
     if "$CXX" "${FLAGS[@]}" "$f" -o "$OUT/$(basename "$f" .cpp).o" 2> "$OUT/$(basename "$f" .cpp).log"; then
         echo "ok   $f"
     else

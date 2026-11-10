@@ -105,6 +105,13 @@ foreach(OXO_BANK IN LISTS OXO_STARTER_BANKS)
     endif()
 endforeach()
 
+# Engine CPU bench (tools/bench, the mac's program) with the plugin's
+# compiler and options: build_windows.bat --bench.
+add_executable(synth2_bench EXCLUDE_FROM_ALL "${OXO_ROOT}/tools/bench/main.cpp")
+target_compile_features(synth2_bench PRIVATE cxx_std_20)
+target_compile_definitions(synth2_bench PRIVATE NOMINMAX _USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS)
+target_compile_options(synth2_bench PRIVATE /EHsc /fp:precise /utf-8)
+
 add_executable(synth2_storage_tests Tests/StorageSelectionTests.cpp)
 target_compile_features(synth2_storage_tests PRIVATE cxx_std_20)
 target_include_directories(synth2_storage_tests PRIVATE "${OXO_ROOT}")

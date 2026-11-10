@@ -217,12 +217,17 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   and compare (expected <= -120 dB; the x86_64 and arm64 renders differ
   slightly from each other: FMA).
 - Python: `.venv` (numpy, scipy) for `tools/s1ref` scripts.
-- WINDOWS: `build_windows.bat [--clang] [--no-pause]` on Windows (Visual Studio 2022+
+- WINDOWS: `build_windows.bat [--clang] [--bench] [--no-pause]` on Windows (Visual Studio 2022+
   C++ workload; CMake from `%CMAKE%`, PATH or VS's own; generator = CMake's
   default or `CMAKE_GENERATOR`) → `Windows_Build\build\VST3\Release\
   OxoSynth2.vst3` + storage tests, installs nothing (`--clang` = clang-cl,
   VS's ClangCL toolset, into `Windows_Build\build-clang`: to compare its
-  engine CPU with MSVC's; the installer still builds with MSVC). On the mac,
+  engine CPU with MSVC's; the installer still builds with MSVC; `--bench`
+  = also build and run `tools/bench` (CMake target `synth2_bench`, the
+  plugin's compiler and options: the scenarios + the bundled Madame Eljay
+  010 scrub), THE way to time the engine on a PC: Rosetta on an M4 shows
+  neither MSVC's code nor a PC's caches / ports, and runs AVX2 2x slower
+  than SSE2). On the mac,
   `tools/win_check/check.sh` compile-checks the Windows sources with
   mingw-w64 (`brew install mingw-w64`; warnings = errors; the worktree's
   SDK or `VST3SDK=<path>`). `.bat` files are CRLF (`.gitattributes`).

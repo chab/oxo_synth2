@@ -2,11 +2,15 @@
 rem Builds the Windows x64 VST3 (MSVC, or clang-cl) into Windows_Build\build and
 rem runs the Windows storage tests. Installs nothing, touches nothing outside the
 rem repo.
-rem   build_windows.bat [--clang] [--no-pause]
+rem   build_windows.bat [--clang] [--bench] [--no-pause]
 rem --clang: clang-cl (Visual Studio's ClangCL toolset, components "C++ Clang
 rem Compiler for Windows" + "MSBuild support for LLVM (clang-cl) toolset")
 rem instead of MSVC, into Windows_Build\build-clang (to compare the engine's
 rem CPU load with the MSVC build's).
+rem --bench: also builds and runs the engine CPU bench (tools\bench, the
+rem plugin's compiler and options): realtime factors for a few scenarios and
+rem a keyboard scrub of the bundled Madame Eljay 010 patch, one core. Run it
+rem with and without --clang, on a quiet machine.
 rem Needs Visual Studio 2022 or later (workload "Desktop development with
 rem C++") and the submodules: git submodule update --init --recursive
 rem CMake: %CMAKE% if set, else cmake on PATH, else the one bundled with Visual
@@ -16,9 +20,10 @@ setlocal EnableExtensions DisableDelayedExpansion
 pushd "%~dp0" || exit /b 1
 set "NOPAUSE="
 set "CLANG="
+set "BENCH="
 :args
 if "%~1"=="" goto args_done
-if /i "%~1"=="--no-pause" (set "NOPAUSE=1") else if /i "%~1"=="--clang" (set "CLANG=1") else (set "REASON=Unknown option %~1" & goto fail)
+if /i "%~1"=="--no-pause" (set "NOPAUSE=1") else if /i "%~1"=="--clang" (set "CLANG=1") else if /i "%~1"=="--bench" (set "BENCH=1") else (set "REASON=Unknown option %~1" & goto fail)
 shift
 goto args
 :args_done
@@ -57,6 +62,16 @@ if not exist "%TESTS%" (set "REASON=Storage tests not built" & goto fail)
 "%TESTS%" >>"%LOG%" 2>&1
 if errorlevel 1 (set "REASON=Storage tests failed" & goto fail)
 
+if not defined BENCH goto built
+echo [bench] Building and running the engine CPU bench...
+"%CMAKE%" --build "%BUILD%" --config Release --target synth2_bench --parallel >>"%LOG%" 2>&1
+if errorlevel 1 (set "REASON=Bench build failed" & goto fail)
+set "BENCHEXE=%BUILD%\bin\Release\synth2_bench.exe"
+if not exist "%BENCHEXE%" (set "REASON=Bench not built" & goto fail)
+"%BENCHEXE%"
+"%BENCHEXE%" "%~dp0Shared\Resources\Synth2 Starter Banks\Madame Eljay\010.sy1"
+
+:built
 echo.
 echo [PASS] Built %BUILD%\VST3\Release\OxoSynth2.vst3 (not installed).
 set "EXIT_CODE=0"

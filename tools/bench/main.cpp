@@ -3,6 +3,7 @@
 //   clang++ -std=c++20 -O2 tools/bench/main.cpp -o build/bench && ./build/bench [patch.sy1...]
 // Each .sy1 given is also played as a keyboard "scrub" (a mouse dragged
 // over the keys: a new key every 60 ms, each released after 120 ms).
+// Windows: build_windows.bat [--clang] --bench (the plugin's compiler and options).
 // Against the original (both x86_64 under Rosetta: build the bench with
 // -arch x86_64), the same scrub as an s1ref job:
 //   ./build/bench --job x.sy1 /tmp/scrub.wav > /tmp/scrub.txt
@@ -100,6 +101,11 @@ static void Scrub(const char *path) {
 
 int main(int argc, char **argv) {
     if (argc == 4 && std::string(argv[1]) == "--job") return PrintScrubJob(argv[2], argv[3]), 0;
+#if defined(__clang__)
+    std::printf("compiler: clang %s\n", __clang_version__);
+#elif defined(_MSC_VER)
+    std::printf("compiler: MSVC %d\n", _MSC_FULL_VER);
+#endif
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a.size() > 4 && a.substr(a.size() - 4) == ".sy1") Scrub(argv[i]);
