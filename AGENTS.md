@@ -271,20 +271,17 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   2x slower than SSE2). `bin\Release\synth2_bench.exe` has a static CRT:
   copy it alone to any PC; `synth2_bench.exe --chords [runs]` = 32 voices
   rotating (unison 4, detune + sub, long release), best / median % of one
-  core. Time on a REAL x86 PC: the UTM VM is ARM64 Windows (QEMU), x64
-  code runs there under Prism emulation (2026-11-10, VM, `--chords`:
-  before d89340c MSVC 10.6 %, clang-cl 7.7 %; at 2c1356d, the per-case
-  voice loop, 9.1 % / 5.5 %, scrub x12 / x19: MSVC gains far less from
-  it, clang-cl is ~1.7x faster on everything but LPDL, x28 both). The mac drives the VM with `utmctl` (guest agent):
-  `utmctl exec Windows --cmd cmd.exe /c "x.bat > C:\out.txt 2>&1"` returns
-  no output and does not wait (poll `utmctl file pull Windows C:\out.txt`);
-  `utmctl file push Windows <path> < file`; the VM's clone is
-  `C:\Users\chab\dev\synth2` (synced through GitHub). On the mac,
+  core. MSVC vs CLANG-CL (2026-11-10, `--chords`; measured on ARM64
+  Windows, where the x64 build runs EMULATED: confirm on a real x86 PC):
+  before d89340c MSVC 10.6 %, clang-cl 7.7 %; at 2c1356d (the per-case
+  voice loop) 9.1 % / 5.5 %, scrub x12 / x19. MSVC gains far less from
+  that loop; clang-cl is ~1.7x faster on everything but LPDL (x28 both).
+  On the mac,
   `tools/win_check/check.sh` compile-checks the Windows sources with
   mingw-w64 (`brew install mingw-w64`; warnings = errors; the worktree's
   SDK or `VST3SDK=<path>`). `.bat` files are CRLF (`.gitattributes`).
 - WINDOWS INSTALLER: `tools\prepare_win_installer.bat [--skip-build]
-  [--skip-validator] [--msvc] [--dynamic-crt] [--no-pause]` IN THE VM (+
+  [--skip-validator] [--msvc] [--dynamic-crt] [--no-pause]` on Windows (+
   Inno Setup 6.3+, `winget install JRSoftware.InnoSetup`) →
   `dist\win\<Product>-<ver>-<build>-Windows-x64.{exe,zip}` (zip = exe +
   `tools/win_installer/README.pdf` (SmartScreen walkthrough) + the raw

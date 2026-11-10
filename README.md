@@ -90,11 +90,12 @@ CMake.
 build_windows.bat
 ```
 
+Run it from a Command Prompt in the folder you cloned (or double-click it).
 It builds `Windows_Build\build\VST3\Release\OxoSynth2.vst3` with MSVC and
 runs the storage tests; nothing is installed (no administrator rights needed).
 
-The released plugin is built with **clang-cl** instead: its code for the
-engine is clearly faster than MSVC's (about 1.7x in our measurements).
+The released plugin is built with **clang-cl** instead: in our measurements
+so far its code for the engine is about 1.7x faster than MSVC's.
 `build_windows.bat --clang` builds that way into `Windows_Build\build-clang`;
 it needs two more individual components from the Visual Studio Installer,
 "C++ Clang Compiler for Windows" and "MSBuild support for LLVM (clang-cl)
