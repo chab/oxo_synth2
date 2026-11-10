@@ -374,8 +374,8 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   as read at instantiation). AUv3: MIDI 1 0xC0 + UMP MIDI 2.0 program change.
   MENU > PROGRAM CHANGE (checkmark, every platform): off = program
   changes ignored by the DSP. Per-user preference `"programChange"`
-  (default true) in settings.json (`storage::LoadProgramChange`), read by
-  each instance when it starts (VST3 processor + controller, AUv3); the
+  (default FALSE: ignored until checked) in settings.json
+  (`storage::LoadProgramChange`), read by each instance when it starts (VST3 processor + controller, AUv3); the
   toggle saves it and tells this instance's DSP (VST3 message
   "OxoProgramChangeOn"), other open instances keep theirs until reloaded.
   Hooks `programChange` / `setProgramChange`, LCD "program change: on/off".

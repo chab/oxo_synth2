@@ -228,7 +228,7 @@ private:
     uint32_t ccCounter_ = 0;
     s2::ProgramMailbox programs_;          // the current bank's values (UI -> render)
     std::atomic<int32_t> programToken_{0}; // render -> UI: (counter << 7) | slot
-    std::atomic<bool> programChangeOn_{true}; // menu > Program change (settings.json)
+    std::atomic<bool> programChangeOn_{false}; // menu > Program change (settings.json)
     uint32_t programCounter_ = 0;          // audio thread
     int32_t seenProgramToken_ = 0;         // UI thread
     std::vector<float> scratchL_, scratchR_;

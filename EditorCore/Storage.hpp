@@ -79,10 +79,10 @@ inline bool SaveMidiLearn(const s2::MidiLearnTable &cc) {
     return !ec;
 }
 
-// Menu > Program change: MIDI program changes played (default) or ignored.
+// Menu > Program change: MIDI program changes played or ignored (default).
 // Per user (settings.json), read by each instance when it starts.
 inline constexpr const char *kProgramChangeKey = "programChange";
-inline bool LoadProgramChange() { return settings::LoadBool(Root(), kProgramChangeKey, true); }
+inline bool LoadProgramChange() { return settings::LoadBool(Root(), kProgramChangeKey, false); }
 inline bool SaveProgramChange(bool on) { return settings::SaveBool(Root(), kProgramChangeKey, on); }
 
 } // namespace oxo::storage

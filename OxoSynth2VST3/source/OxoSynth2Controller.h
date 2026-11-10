@@ -60,7 +60,7 @@ public:
 
 private:
     s2::MidiLearnTable learnCc_{};
-    bool programChangeOn_ = true; // menu > Program change (per-user preference)
+    bool programChangeOn_ = false; // menu > Program change (per-user preference)
 };
 
 } // namespace oxo

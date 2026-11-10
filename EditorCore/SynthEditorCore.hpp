@@ -49,7 +49,7 @@ public:
     virtual void PollProgramChange() {} // wrappers hearing of the DSP's switch by polling (AUv3)
     // Menu > Program change (storage::LoadProgramChange): the DSP plays or
     // ignores program changes; the setter also saves the preference.
-    virtual bool ProgramChangeOn() { return true; }
+    virtual bool ProgramChangeOn() { return false; }
     virtual void SetProgramChangeOn(bool) {}
 
     // ---- shared ----

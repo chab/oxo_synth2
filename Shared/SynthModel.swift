@@ -169,7 +169,7 @@ final class SynthModel: ObservableObject {
     /// Effect type pick list (a click on its display; Synth1's 2 x 5 menu).
     @Published var showEffectMenu = false
     /// Menu > Program change (checkmark): MIDI program changes played.
-    @Published var programChange = true {
+    @Published var programChange = false {
         didSet {
             guard programChange != oldValue else { return }
             host.programChange = programChange

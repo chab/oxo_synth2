@@ -2197,7 +2197,7 @@ void WindowsEditor::showMainMenu(int x,int y) {
     AppendMenuW(menu,MF_STRING,12,L"Save patch file...");
     AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
     AppendMenuW(menu,MF_STRING,13,midiLearn_?L"Exit MIDI Learn":L"MIDI Learn");
-    const bool programChange=!hooks_.programChange || hooks_.programChange(hooks_.ctx)!=0;
+    const bool programChange=hooks_.programChange && hooks_.programChange(hooks_.ctx)!=0;
     AppendMenuW(menu,MF_STRING|(programChange?MF_CHECKED:0),17,L"Program change");
     AppendMenuW(menu,MF_STRING,14,L"All notes off");
     HMENU themeMenu=CreatePopupMenu();

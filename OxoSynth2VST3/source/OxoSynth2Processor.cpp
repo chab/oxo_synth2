@@ -101,7 +101,7 @@ tresult PLUGIN_API OxoSynth2Processor::notify(Vst::IMessage *message) {
         return kResultOk;
     }
     if (message && strcmp(message->getMessageID(), "OxoProgramChangeOn") == 0) {
-        int64 on = 1;
+        int64 on = 0;
         if (message->getAttributes() && message->getAttributes()->getInt("on", on) == kResultOk) programChangeOn_ = on != 0;
         return kResultOk;
     }
