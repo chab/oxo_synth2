@@ -180,9 +180,9 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   compact comma style). Then `tools/au_harness`.
 - `make -C EngineCoreTests test`, `make -C tools/s2render`, CPU bench
   `clang++ -std=c++20 -O2 tools/bench/main.cpp -o build/bench && ./build/bench`
-  (16 voices, one core, Apple M4: LP12 x138, LP24 x110, LPDL x36,
-  detune+sub x62, all fx x93 realtime; `./build/bench <x.sy1>...` = a
-  keyboard scrub, ~31 voices: Madame Eljay 010 x31, the heaviest case
+  (16 voices, one core, Apple M4: LP12 x135, LP24 x109, LPDL x35,
+  detune+sub x88, all fx x90 realtime; `./build/bench <x.sy1>...` = a
+  keyboard scrub, ~31 voices: Madame Eljay 010 x46, the heaviest case
   reported),
   `make -C tools/s1ref` (x86_64, needs the original AU).
   VS THE ORIGINAL: time both as x86_64 under Rosetta (the only Synth1 we
@@ -192,37 +192,40 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   job), `S1REF_TIME=1 build/s1ref/s1ref batch /tmp/s.txt` (original), a
   `-arch x86_64` bench `./build/bench_x64 /tmp/s.txt` (ours; any job
   file). 2026-11-10, Madame Eljay 010 (osc1 pulse + detune, sine sub an
-  octave down, osc2 pulse, BP12, 4-voice unison): Synth1 x33, ours x17
-  (x13 before the per-case voice loop, x9 before the SIMD work); without
-  its detune x40 / x32, without detune, sub, LFO and fx x46 / x36. WHAT
-  IS LEFT IS THE DETUNE COPIES: ours 27 ms of CPU per second of audio
-  (31 voices), the original 5; its cost hardly moves with the detune
-  knob, ours is 8 (+ 8 with the sub) table reads or sines per sample,
-  ~10 instructions each, half of that patch's CPU. Rosetta can't show
-  denormal costs (ARM hardware), MSVC's code or a PC's caches / ports:
-  time a PC with `build_windows.bat --bench`. Instruction counts per
-  run: macOS `/usr/bin/time -l` ("instructions retired"; the voice runs
-  at IPC ~6 on M4, so cost ~ instruction count: per voice-sample 245 for
-  two oscillators + SVF, 310 for that patch without detune, 600 with;
-  arm64 counts every double literal the loop rematerializes as 5).
-  Line-level profile: `xcrun xctrace record --template 'Time Profiler'
-  --launch -- <bin>`, export the time-profile table, leaf addresses
-  through `atos -i` (no perf on mac; samples skid onto long dependency
-  chains: trust instruction-count A/B over the line profile).
-  TRIED, NO GAIN (2026-11-10): linear interpolation for the copies (own
-  {x, dx} table: -2.5..5 % instructions, images up to ~-62 dB; the
-  interpolation order is not what a read costs); skipping the filter's
-  coefficient lookup when the cutoff did not move; `[[unlikely]]` on the
-  SVF limiter's pow.
+  octave down, osc2 pulse, BP12, 4-voice unison): Synth1 x33, ours x23
+  (x17 before the copies' table lookups, x13 before the per-case voice
+  loop, x9 before the SIMD work); without its detune x40 / x31, without
+  detune, sub, LFO and fx x46 / x37. The detune copies: ours 12 ms of
+  CPU per second of audio (31 voices; 27 as interpolated reads), the
+  original 5. Rosetta can't show denormal costs (ARM hardware), MSVC's
+  code or a PC's caches / ports: time a PC with `build_windows.bat
+  --bench`. Instruction counts per run: macOS `/usr/bin/time -l`
+  ("instructions retired"; the voice runs at IPC ~6 on M4, so cost ~
+  instruction count: per voice-sample 245 for two oscillators + SVF, 310
+  for that patch without detune, 490 with; arm64 counts every double
+  literal the loop rematerializes as 5). Line-level profile: `xcrun
+  xctrace record --template 'Time Profiler' --launch -- <bin>`, export
+  the time-profile table, leaf addresses through `atos -i` (no perf on
+  mac; samples skid onto long dependency chains: trust instruction-count
+  A/B over the line profile). Timing the ORIGINAL per feature tells how
+  it works (its pulse copies cost 2x its saw copies = two reads; its sub
+  copies cost the same for the four sub shapes = one read each).
+  TRIED, NO GAIN (2026-11-10): linear interpolation for the copies (-2.5
+  ..5 % instructions: an interpolated read costs its gather, not its
+  order); skipping the filter's coefficient lookup when the cutoff did
+  not move; `[[unlikely]]` on the SVF limiter's pow.
   ENGINE CPU CONTRACTS: wave tables store each point's Hermite cubic (one
-  load per read, 11 MB at 44.1 kHz shared per process); osc1's detune
-  copies use 64-bit fixed-point phases (`Phase64`, free wrap), ONE array
-  shared by osc1's and the sub's copies (`copyPhase_`, sub octave = half
-  rate, osc1's = `<< 1`), read / sined 4 at a time through explicit SIMD
-  (`EngineCore/Simd.hpp`: SSE2 / NEON / plain C++, `-DOXO_SIMD_SCALAR`
-  forces the latter; gathers, which no compiler vectorizes; the phase
-  arithmetic too, `P4`: clang builds it from scalar source, MSVC does
-  not). THE VOICE LOOP IS COMPILED PER CASE: `Voice::RenderChunk` picks
+  load per read, 11 MB at 44.1 kHz shared per process) for osc1, osc2
+  and the sub; osc1's and the sub's DETUNE COPIES are plain lookups, as
+  in the original (Osc below): `WaveTableSet::CopyTable`, 2048 points
+  per note and shape (+ 3 MB), the phase's top 11 bits, no
+  interpolation, summed by `Voice::CopiesSum` (a third of an
+  interpolated read's cost). Their 64-bit fixed-point phases
+  (`Phase64`, free wrap) are ONE array shared by osc1's and the sub's
+  copies (`copyPhase_`, sub octave = half rate, osc1's = `<< 1`),
+  stepped through `EngineCore/Simd.hpp` `P4` (SSE2 / NEON / plain C++,
+  `-DOXO_SIMD_SCALAR` forces the latter: clang builds that from scalar
+  source, MSVC does not). THE VOICE LOOP IS COMPILED PER CASE: `Voice::RenderChunk` picks
   one of 18 `RenderChunkAs<kOsc, kDetune, kFilter>` (osc static / moving
   / cross = FM, ring, sync; detune; SVF / ladder / diode), same
   statements in each (`if constexpr`), so they render bit-identically.
@@ -248,7 +251,11 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   starter / library patch before / after and compare (the per-case loop
   was bit-identical on all 747, arm64 and x86_64, two phrases incl.
   staccato notes reusing voice slots; the x86_64 and arm64 renders
-  differ slightly from each other: FMA).
+  differ slightly from each other: FMA). Give such a tool ABSOLUTE
+  patch paths and make it fail on an unreadable file: a first run
+  compared the init patch 346 times (the counts in the commits of
+  e237a62 / 62ef63c are from it; right ones: LFO depth 0 changes 102
+  patches, FM 0 319).
 - Python: `.venv` (numpy, scipy) for `tools/s1ref` scripts.
 - WINDOWS: `build_windows.bat [--clang] [--bench] [--no-pause]` on Windows (Visual Studio 2022+
   C++ workload; CMake from `%CMAKE%`, PATH or VS's own; generator = CMake's
@@ -627,9 +634,21 @@ original AU; keeps both renders for listening).
   -57 dB (ours -140 dB; saw / pulse -45..-53 dB, ours -80..-130). With
   osc1 at 4 % of the mix it falls to -55..-65 dB: level dependent, so
   mostly after the mix, a nonlinearity on the loud detune sum that our
-  ladder (linear at resonance 0) does not model. TODO(measure). So the
-  original's detune tells nothing about cheaper copy reads: its dirt is
-  not interpolation noise. Fundamentals of all shapes in
+  ladder (linear at resonance 0) does not model. TODO(measure).
+  DETUNE COPIES (`measure_copies.py`, osc1 played quietly so the lines
+  stand clear of that intermodulation): the original reads osc1's and
+  the sub's 8 copies from a 2048-POINT TABLE of the note's band-limited
+  wave with the phase TRUNCATED, no interpolation (osc1 itself and the
+  sub are interpolated: a sine's image at 2047 x f is at -133 dB =
+  linear on 2048 points). Every harmonic h of a copy at f leaves lines
+  at (k x 2048 +- h) x f, 1 / (k x 2048) of the copy's fundamental
+  whatever h (-66.2, -72.2 dB...: a sawtooth series), none beyond the
+  wave's top harmonic; seen to 0.1 Hz / 0.5 dB for sine, saw, triangle,
+  pulse (two points of the saw a WHOLE number of points apart) and the
+  sub's shapes. Ours reads them the same way (`WaveTableSet::CopyTable`)
+  and shows the same series. At 96 kHz the original's saw still stops
+  at 22 kHz (key 96: 10 harmonics at both rates; ours fills to Nyquist).
+  Fundamentals of all shapes in
   phase (saw falling +1 at phase 0, tri peak at 0.25). osc1 shapes 0 sine 1
   saw 2 pulse 3 tri; osc2 1 saw 2 pulse 3 tri 4 noise; sub 0 sine 1 tri 2 saw
   3 square, sub phase-locked to osc1, auto level w = g/(g+32). Mix

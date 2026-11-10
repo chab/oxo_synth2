@@ -47,24 +47,13 @@ inline constexpr double kDetuneOffsets[kDetuneOscs] = {-7, -5, -3, -1, 1, 3, 5, 
 inline double NoteHz(double note) { return 440.0 * std::exp2((note - 69.0) / 12.0); }
 
 // sin(2 pi ph) for ph in [0, 1]: folded to a quarter wave, Taylor to x^11
-// (|error| < 6e-8 = -145 dB; std::sin costs several times more per detune
-// copy).
+// (|error| < 6e-8 = -145 dB; std::sin costs several times more).
 OXO_INLINE double Sin2Pi(double ph) {
     const double x = ph - 0.5, a = std::fabs(x), r = 2 * M_PI * std::min(a, 0.5 - a), r2 = r * r;
     double s = -1.0 / 39916800.0;
     for (const double c : {1.0 / 362880.0, -1.0 / 5040.0, 1.0 / 120.0, -1.0 / 6.0, 1.0}) s = s * r2 + c;
     return std::copysign(s * r, -x);
 }
-// The same in float for 4 detune copies at once (|error| < 2e-7).
-OXO_INLINE simd::F4 Sin2Pi4(const Phase64 *ph, int shift) {
-    using namespace simd;
-    const F4 x = Top24(ShiftLeft(LoadPhases(ph), shift)) - Set(0.5f), a = Abs(x);
-    const F4 r = Set(float(2 * M_PI)) * Min(a, Set(0.5f) - a), r2 = r * r;
-    F4 s = MulAdd(Set(-1.0f / 39916800.0f), r2, Set(1.0f / 362880.0f));
-    for (const float c : {-1.0f / 5040.0f, 1.0f / 120.0f, -1.0f / 6.0f, 1.0f}) s = MulAdd(s, r2, Set(c));
-    return NegSignOf(s * r, x);
-}
-
 class Voice {
 public:
     // The longest run rendered in one go (Synth renders in chunks of it:
@@ -343,7 +332,7 @@ private:
         const double staticIncA = inc1 * bendRatio, staticIncB = inc2 * bendRatio;
         const double staticWidth = std::clamp(width, kWidthMin, kWidthMax);
         double curWidth = staticWidth;
-        Phase64 curWidth64 = detuneOn && shape1 == 2 ? WidthToPhase64(staticWidth) : 0;
+        uint32_t curWidthPoints = CopyWidth(staticWidth);
         // a sub-octave change on a sounding voice re-locks the sub copies
         if (copyHalf_ != (p[kSubOctave] != 0)) {
             Phase64 copies[kDetuneOscs];
@@ -354,6 +343,14 @@ private:
         // the sub's shapes as osc1's (0 sine, 1 saw, 2 pulse, 3 tri): sine, tri, saw, square
         static constexpr int kSubAsOsc1[4] = {0, 3, 1, 2};
         const int subAs1 = kSubAsOsc1[subShape & 3];
+        // the copies' tables (WaveTableSet::CopyTable): osc1's (a pulse = two
+        // points of the saw) and the sub's
+        using Copy = WaveTableSet::CopyShape;
+        const float *const copy1 = shape1 == 0 ? tables_->CopySine()
+                                               : tables_->CopyTable(shape1 == 3 ? Copy::kCopyTriangle : Copy::kCopySaw, std::clamp(t1, 0, 127));
+        static constexpr Copy kSubCopy[4] = {Copy::kCopySaw, Copy::kCopyTriangle, Copy::kCopySaw, Copy::kCopySquare};
+        const float *const copySub = (subShape & 3) == 0 ? tables_->CopySine()
+                                                         : tables_->CopyTable(kSubCopy[subShape & 3], std::clamp(tSub, 0, 127));
         // the stored copy phases' step ratios (in Phase64 units / 2, see the phase update)
         const double copyRatio = copyHalf_ ? 0.5 : 1.0;
         double copyScale[kDetuneOscs];
@@ -459,7 +456,7 @@ private:
             if constexpr (kOsc != kOscStatic) {
                 incA = incAs[i], incB = incBs[i], w = widths[i];
                 curWidth = w;
-                if (detuneOn && shape1 == 2) curWidth64 = WidthToPhase64(w);
+                curWidthPoints = CopyWidth(w);
             }
             // ---- osc2 ----
             double o2 = 0;
@@ -488,8 +485,10 @@ private:
             double o1 = OscRead(shape1, saw1, tri1, osc1Phase_, curWidth);
             double sub = subOn ? OscRead(subAs1, sawSub, triSub, subPhase_, 0.5) : 0.0;
             if (detuneOn) {
-                const double acc = o1 + CopiesSum(shape1, saw1, tri1, copyPhase_.data(), copyShift, curWidth64);
-                const double subAcc = subOn ? sub + CopiesSum(subAs1, sawSub, triSub, copyPhase_.data(), 0, Phase64(1) << 63) : sub;
+                const Phase64 *const ph = copyPhase_.data();
+                const double acc = o1 + (shape1 == 2 ? 0.5f * (CopiesSum(copy1, ph, copyShift, 0) - CopiesSum(copy1, ph, copyShift, curWidthPoints))
+                                                     : CopiesSum(copy1, ph, copyShift, 0));
+                const double subAcc = subOn ? sub + CopiesSum(copySub, ph, 0, 0) : sub;
                 // a step under one cycle either way converts directly (two's
                 // complement = mod 1)
                 if (const double step = incA * fm; step != copyStep) {
@@ -590,19 +589,19 @@ private:
         default: return tri.Read(ph);
         }
     }
-    // the same summed over the 8 detune copies' phases ph << shift, 4 at a time (Simd.hpp)
-    static OXO_INLINE double CopiesSum(int shape, const WaveTable &saw, const WaveTable &tri, const Phase64 *ph, int shift,
-                                       Phase64 width) {
-        using simd::Sum;
-        switch (shape) {
-        case 0: return Sum(Sin2Pi4(ph, shift) + Sin2Pi4(ph + 4, shift));
-        case 1: return Sum(saw.Read4(ph, shift) + saw.Read4(ph + 4, shift));
-        case 2:
-            return 0.5f * Sum((saw.Read4(ph, shift) - saw.Read4(ph, shift, width)) +
-                              (saw.Read4(ph + 4, shift) - saw.Read4(ph + 4, shift, width)));
-        default: return Sum(tri.Read4(ph, shift) + tri.Read4(ph + 4, shift));
-        }
+    // the 8 detune copies' sum: the table's points at the phases ph << shift,
+    // truncated (no interpolation, see WaveTableSet::CopyTable), `offset`
+    // points further (a pulse's second saw)
+    static OXO_INLINE float CopiesSum(const float *table, const Phase64 *ph, int shift, uint32_t offset) {
+        float v[kDetuneOscs];
+        for (int d = 0; d < kDetuneOscs; ++d)
+            v[d] = table[(uint32_t((ph[d] << shift) >> (64 - WaveTableSet::kCopyBits)) + offset) & (WaveTableSet::kCopyPoints - 1)];
+        return ((v[0] + v[1]) + (v[2] + v[3])) + ((v[4] + v[5]) + (v[6] + v[7]));
     }
+    // a pulse width in whole table points: (measured) the copies' pulse is
+    // two points of the saw a whole number of points apart (the harmonics a
+    // width cancels leave no lines either, e.g. the 4th and 8th at width 64)
+    static OXO_INLINE uint32_t CopyWidth(double width) { return uint32_t(width * WaveTableSet::kCopyPoints); }
 
     // The LFOs (0..2) routed to one destination.
     struct LfoRoute {
@@ -626,8 +625,6 @@ private:
     static OXO_INLINE double Wrap(double ph) { return ph >= 0.0 && ph < 1.0 ? ph : ph - std::floor(ph); }
     // the same for ph in [0, 2) (a phase + a pulse width), never a call
     static OXO_INLINE double WrapNext(double ph) { return ph >= 1.0 ? ph - 1.0 : ph; }
-    // a pulse width (always inside (0, 1)) as a phase offset = ToPhase64 without its wrap
-    static OXO_INLINE Phase64 WidthToPhase64(double width) { return Phase64(int64_t(width * 0x1p63)) << 1; }
     // osc1's detune copy d (the sub's copy d = copyPhase_[d])
     Phase64 CopyPhase(int d) const { return copyHalf_ ? copyPhase_[d] << 1 : copyPhase_[d]; }
     // osc1's copy phases, the sub's locked to them (half = sub octave)
