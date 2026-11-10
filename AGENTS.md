@@ -180,9 +180,10 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   compact comma style). Then `tools/au_harness`.
 - `make -C EngineCoreTests test`, `make -C tools/s2render`, CPU bench
   `clang++ -std=c++20 -O2 tools/bench/main.cpp -o build/bench && ./build/bench`
-  (16 voices, one core, Apple M4: LP12 x94, LP24 x81, LPDL x34, detune+sub
-  x49, all fx x71 realtime; `./build/bench <x.sy1>...` = a keyboard scrub,
-  ~31 voices: Madame Eljay 010 x21..24, the heaviest case reported),
+  (16 voices, one core, Apple M4: LP12 x138, LP24 x110, LPDL x36,
+  detune+sub x62, all fx x93 realtime; `./build/bench <x.sy1>...` = a
+  keyboard scrub, ~31 voices: Madame Eljay 010 x31, the heaviest case
+  reported),
   `make -C tools/s1ref` (x86_64, needs the original AU).
   VS THE ORIGINAL: time both as x86_64 under Rosetta (the only Synth1 we
   can run; its ratio, 3.4x before, was close to a real Windows PC's DAW
@@ -190,14 +191,29 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   `./build/bench --job x.sy1 /tmp/s.wav > /tmp/s.txt` (the scrub as a
   job), `S1REF_TIME=1 build/s1ref/s1ref batch /tmp/s.txt` (original), a
   `-arch x86_64` bench `./build/bench_x64 /tmp/s.txt` (ours; any job
-  file). 2026-11-10, Madame Eljay 010: Synth1 x31, ours x13 (x9 before
-  the SIMD / inlining work), without its detune x38 / x19. Rosetta can't
-  show denormal costs (ARM hardware). Instruction counts per run: macOS
-  `/usr/bin/time -l` ("instructions retired"; the voice runs at IPC ~6.5
-  on M4, so cost = instruction count: ~500 per voice-sample for that
-  patch without detune, ~800 with). Line-level profile: `xcrun xctrace
-  record --template 'Time Profiler' --launch -- <bin>`, export the
-  time-profile table, leaf addresses through `atos -i` (no perf on mac).
+  file). 2026-11-10, Madame Eljay 010 (osc1 pulse + detune, sine sub an
+  octave down, osc2 pulse, BP12, 4-voice unison): Synth1 x33, ours x17
+  (x13 before the per-case voice loop, x9 before the SIMD work); without
+  its detune x40 / x32, without detune, sub, LFO and fx x46 / x36. WHAT
+  IS LEFT IS THE DETUNE COPIES: ours 27 ms of CPU per second of audio
+  (31 voices), the original 5; its cost hardly moves with the detune
+  knob, ours is 8 (+ 8 with the sub) table reads or sines per sample,
+  ~10 instructions each, half of that patch's CPU. Rosetta can't show
+  denormal costs (ARM hardware), MSVC's code or a PC's caches / ports:
+  time a PC with `build_windows.bat --bench`. Instruction counts per
+  run: macOS `/usr/bin/time -l` ("instructions retired"; the voice runs
+  at IPC ~6 on M4, so cost ~ instruction count: per voice-sample 245 for
+  two oscillators + SVF, 310 for that patch without detune, 600 with;
+  arm64 counts every double literal the loop rematerializes as 5).
+  Line-level profile: `xcrun xctrace record --template 'Time Profiler'
+  --launch -- <bin>`, export the time-profile table, leaf addresses
+  through `atos -i` (no perf on mac; samples skid onto long dependency
+  chains: trust instruction-count A/B over the line profile).
+  TRIED, NO GAIN (2026-11-10): linear interpolation for the copies (own
+  {x, dx} table: -2.5..5 % instructions, images up to ~-62 dB; the
+  interpolation order is not what a read costs); skipping the filter's
+  coefficient lookup when the cutoff did not move; `[[unlikely]]` on the
+  SVF limiter's pow.
   ENGINE CPU CONTRACTS: wave tables store each point's Hermite cubic (one
   load per read, 11 MB at 44.1 kHz shared per process); osc1's detune
   copies use 64-bit fixed-point phases (`Phase64`, free wrap), ONE array
@@ -587,7 +603,24 @@ original AU; keeps both renders for listening).
   the oscillators; a synced osc1 wrap restarts it (the timbre of synced
   noise = that bit pattern).
 - Osc: per-note band-limited tables (EVERY harmonic below Nyquist, alias
-  free); osc silent when its note index > 127. Fundamentals of all shapes in
+  free); osc silent when its note index > 127 (OPEN: osc2 at key 72 with
+  pitch +60 = note 132, 16.7 kHz, DOES play in the original, notes 144 /
+  156 do not: the limit looks like Nyquist rather than 127 there).
+  PURITY (`measure_purity.py`: what a held note carries besides its
+  expected lines; LP24, resonance 0): the original's saw aliases a
+  little, lines at the harmonics next to k x fs (n ~ fs / f0, folded
+  beside DC and the fundamental) at -75..-80 dB re the fundamental,
+  falling ~1/f away from k x fs; its pulse 15..30 dB lower; ours -100 dB
+  or less. With osc1 DETUNE the original carries INTERMODULATION ours
+  has not on LP24: a detuned sine shows a 3rd harmonic (-48 dB at key
+  36, detune 26) and lines at odd multiples (9, 11, 17, 21 x) of the
+  copy spacing at -30..-47 dB, power outside the 9 expected lines -31..
+  -57 dB (ours -140 dB; saw / pulse -45..-53 dB, ours -80..-130). With
+  osc1 at 4 % of the mix it falls to -55..-65 dB: level dependent, so
+  mostly after the mix, a nonlinearity on the loud detune sum that our
+  ladder (linear at resonance 0) does not model. TODO(measure). So the
+  original's detune tells nothing about cheaper copy reads: its dirt is
+  not interpolation noise. Fundamentals of all shapes in
   phase (saw falling +1 at phase 0, tri peak at 0.25). osc1 shapes 0 sine 1
   saw 2 pulse 3 tri; osc2 1 saw 2 pulse 3 tri 4 noise; sub 0 sine 1 tri 2 saw
   3 square, sub phase-locked to osc1, auto level w = g/(g+32). Mix
@@ -600,7 +633,8 @@ original AU; keeps both renders for listening).
   at key 60, to ~102): the deviation is a FIXED phase step per sample
   (`measure_fm_key.py`): index halves per octave up (keys and key shift),
   grows with the sample rate. FM 0 = NO FM (sidebands at the -178 dB
-  floor; the table's fitted entry 0, 6.6e-6, is noise: `Voice::FmBeta`).
+  floor; the table's fitted entry 0, 6.6e-6, is noise: `Voice::FmBeta`;
+  `measure_zero_knobs.py`, with the LFO depth 0 probe).
   Ring: osc2 ×
   osc1_norm. Ring BUG kept on purpose (`measure_ring_detune.py`): ring +
   osc1 detune + sub on = the sub copies skip the 0.297 gain, then the osc1
