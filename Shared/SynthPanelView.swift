@@ -147,9 +147,9 @@ struct SynthPanelView: View {
 
     private static let twoDigits: (Int) -> String = { String(format: "%02d", $0) }
 
-    /// Dim separator line (section-header colour, mostly transparent).
+    /// Dim separator line (section-header colour, half transparent).
     private func divider(_ x1: CGFloat, _ y1: CGFloat, _ x2: CGFloat, _ y2: CGFloat) -> some View {
-        Rectangle().fill(theme.header.opacity(0.28))
+        Rectangle().fill(theme.header.opacity(0.55))
             .frame(width: max(1, x2 - x1), height: max(1, y2 - y1))
             .position(x: (x1 + x2) / 2, y: (y1 + y2) / 2)
             .allowsHitTesting(false)
@@ -176,7 +176,7 @@ struct SynthPanelView: View {
                     guard hypot(g.translation.width, g.translation.height) < 8 else { return }
                     model.showLogoMenu.toggle()
                 })
-            Text("Virtual Analog").font(.system(size: 12).italic()).foregroundColor(theme.dimInk)
+            Text("Virtual Analog").font(.system(size: 12, weight: .bold).italic()).foregroundColor(theme.dimInk)
             Spacer()
             if model.uiWidthModeStorage != nil {
                 UIModeToggle(model: model).alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
@@ -205,8 +205,8 @@ struct SynthPanelView: View {
                 // Synth1's sub-areas: osc1 | sub, osc2 + mod env | key shift
                 // column, osc2 / mod env (dim header-colour lines)
                 divider(166, 22, 166, 76)
-                divider(8, 81, 304, 81)
-                divider(212, 87, 212, 234)
+                divider(8, 78, 304, 78)
+                divider(212, 84, 212, 234)
                 divider(8, 163, 204, 163)
                 Badge(model: model, text: "1").position(x: 14, y: 36)
                 WaveRadio(model: model, id: 0, shapes: [(0, .sine), (1, .saw), (2, .pulse), (3, .tri)]).position(x: 50, y: 40)
