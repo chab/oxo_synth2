@@ -10,6 +10,8 @@
 //   triangle peak +1 at phase 0.25
 // Pulse = (saw(p) - saw(p + d)) / 2, sine is computed.
 
+#include "Simd.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -51,7 +53,6 @@ inline Phase64 ToPhase64(double cycles) {
     const double f = cycles >= 0.0 && cycles < 1.0 ? cycles : cycles - std::floor(cycles);
     return Phase64(int64_t(std::min(f, 0x1.fffffffffffffp-1) * 0x1p63)) << 1;
 }
-inline double FromPhase64(Phase64 ph) { return double(int64_t(ph >> 11)) * 0x1p-53; }
 
 struct WaveTable {
     // 4-point Hermite interpolation of the samples, its cubic stored per point
@@ -69,8 +70,17 @@ struct WaveTable {
         const uint32_t i = uint32_t(pos);
         return Eval(i, float(pos - i));
     }
-    float Read(Phase64 phase) const {
-        return Eval(uint32_t(phase >> (64 - bits)), float(uint32_t((phase << bits) >> 40)) * 0x1p-24f);
+    // the table at the phases (ph[k] << shift) + offset, k = 0..3, in one register
+    simd::F4 Read4(const Phase64 *ph, int shift = 0, Phase64 offset = 0) const {
+        using namespace simd;
+        Phase64 q[4];
+        for (int k = 0; k < 4; ++k) q[k] = (ph[k] << shift) + offset;
+        const auto at = [&](int k) { return Load(&cubic[uint32_t(q[k] >> (64 - bits))].c0); };
+        const auto frac = [&](int k) { return int32_t((q[k] << bits) >> 40); };
+        F4 c0 = at(0), c1 = at(1), c2 = at(2), c3 = at(3);
+        Transpose(c0, c1, c2, c3);
+        const F4 f = FromInts(frac(0), frac(1), frac(2), frac(3)) * Set(0x1p-24f);
+        return MulAdd(MulAdd(MulAdd(c3, f, c2), f, c1), f, c0);
     }
 
     void SetSamples(const std::vector<float> &x) {

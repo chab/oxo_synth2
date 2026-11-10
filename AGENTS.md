@@ -186,8 +186,11 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   ~4x lighter), `make -C tools/s1ref` (x86_64, needs the original AU).
   ENGINE CPU CONTRACTS: wave tables store each point's Hermite cubic (one
   load per read, 11 MB at 44.1 kHz shared per process); osc1's detune
-  copies use 64-bit fixed-point phases (`Phase64`, free wrap), their sines
-  in float into a member scratch array (vectorizes); `Voice::Wrap` calls
+  copies use 64-bit fixed-point phases (`Phase64`, free wrap), ONE array
+  shared by osc1's and the sub's copies (`copyPhase_`, sub octave = half
+  rate, osc1's = `<< 1`), read / sined 4 at a time through explicit SIMD
+  (`EngineCore/Simd.hpp`: SSE2 / NEON / plain C++, `-DOXO_SIMD_SCALAR`
+  forces the latter; gathers, which no compiler vectorizes); `Voice::Wrap` calls
   floor only out of range (a library call on x64 SSE2). Keep the voice in
   ONE per-sample loop: splitting the filter into its own pass made it
   latency-bound (slower everywhere). Engine changes: render every factory /
