@@ -582,7 +582,9 @@ original AU; keeps both renders for listening).
   FM: inst f1 = f1 + beta[v]·261.63 Hz·(sr/44100)·osc2_norm (table measured
   at key 60, to ~102): the deviation is a FIXED phase step per sample
   (`measure_fm_key.py`): index halves per octave up (keys and key shift),
-  grows with the sample rate. Ring: osc2 ×
+  grows with the sample rate. FM 0 = NO FM (sidebands at the -178 dB
+  floor; the table's fitted entry 0, 6.6e-6, is noise: `Voice::FmBeta`).
+  Ring: osc2 ×
   osc1_norm. Ring BUG kept on purpose (`measure_ring_detune.py`): ring +
   osc1 detune + sub on = the sub copies skip the 0.297 gain, then the osc1
   section is bounded (modelled 1.7·tanh(x/1.7), approximate; the original

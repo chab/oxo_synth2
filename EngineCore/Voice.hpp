@@ -246,7 +246,7 @@ private:
         const double inc1 = f1 / sampleRate_, inc2 = f2 / sampleRate_;
         const double width = p[kOscPulseWidth] / 254.0; // (measured) duty of the low part, 127 = square
         const double mix2 = p[kOscMix] / 127.0, mix1 = 1.0 - mix2; // (measured) linear crossfade
-        const double fmBeta = p[kOsc2Ring] ? 0.0 : tables::kFmBeta[p[kOsc1FM]];
+        const double fmBeta = p[kOsc2Ring] ? 0.0 : FmBeta(p[kOsc1FM]);
         const bool ring = p[kOsc2Ring] != 0, sync = p[kOsc2Sync] != 0;
         const int shape1 = p[kOsc1Shape], shape2 = p[kOsc2Shape];
         const double subGainKnob = p[kSubGain];
@@ -373,7 +373,7 @@ private:
                 }
                 const double k = std::clamp(knob, 0.0, 127.0);
                 const int j = std::min(int(k), 126);
-                fmB = tables::kFmBeta[j] + (tables::kFmBeta[j + 1] - tables::kFmBeta[j]) * (k - j);
+                fmB = FmBeta(j) + (FmBeta(j + 1) - FmBeta(j)) * (k - j);
             }
             curWidth = w;
             if (detuneOn && shape1 == 2) curWidth64 = ToPhase64(w);
@@ -527,6 +527,10 @@ private:
         copyHalf_ = half;
         for (int d = 0; d < kDetuneOscs; ++d) copyPhase_[d] = half ? osc1Copies[d] >> 1 : osc1Copies[d];
     }
+    // FM index per knob value. (measured: osc1 sine, osc2 a fifth up, mix on
+    // osc1) FM 0 = no FM at all, sidebands at the -178 dB floor: the table's
+    // entry 0 (6.6e-6, sidebands at -115 dB) is fit noise.
+    static OXO_INLINE double FmBeta(int knob) { return knob > 0 ? double(tables::kFmBeta[knob]) : 0.0; }
     // (measured, measure_porta.py) a glide aims 1.35 % of its starting
     // distance past the target (the curve scales with the interval)
     static constexpr double kGlideStep = 12.0 / 128, kGlideAim = 0.0135; // semitones, x distance
