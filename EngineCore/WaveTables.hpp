@@ -73,13 +73,10 @@ struct WaveTable {
     // the table at the phases (ph[k] << shift) + offset, k = 0..3, in one register
     OXO_INLINE simd::F4 Read4(const Phase64 *ph, int shift = 0, Phase64 offset = 0) const {
         using namespace simd;
-        Phase64 q[4];
-        for (int k = 0; k < 4; ++k) q[k] = (ph[k] << shift) + offset;
-        const auto at = [&](int k) { return Load(&cubic[uint32_t(q[k] >> (64 - bits))].c0); };
-        const auto frac = [&](int k) { return int32_t((q[k] << bits) >> 40); };
-        F4 c0 = at(0), c1 = at(1), c2 = at(2), c3 = at(3);
+        F4 c0 = Point((ph[0] << shift) + offset), c1 = Point((ph[1] << shift) + offset);
+        F4 c2 = Point((ph[2] << shift) + offset), c3 = Point((ph[3] << shift) + offset);
         Transpose(c0, c1, c2, c3);
-        const F4 f = FromInts(frac(0), frac(1), frac(2), frac(3)) * Set(0x1p-24f);
+        const F4 f = Top24(ShiftLeft(ShiftLeft(LoadPhases(ph), shift) + Phases(offset, offset, offset, offset), int(bits)));
         return MulAdd(MulAdd(MulAdd(c3, f, c2), f, c1), f, c0);
     }
 
@@ -94,6 +91,8 @@ struct WaveTable {
     }
 
 private:
+    // the cubic of phase q's table point
+    OXO_INLINE simd::F4 Point(Phase64 q) const { return simd::Load(&cubic[uint32_t(q >> (64 - bits))].c0); }
     OXO_INLINE float Eval(uint32_t i, float f) const {
         const Cubic &c = cubic[i];
         return ((c.c3 * f + c.c2) * f + c.c1) * f + c.c0;

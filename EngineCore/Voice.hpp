@@ -58,8 +58,7 @@ OXO_INLINE double Sin2Pi(double ph) {
 // The same in float for 4 detune copies at once (|error| < 2e-7).
 OXO_INLINE simd::F4 Sin2Pi4(const Phase64 *ph, int shift) {
     using namespace simd;
-    const auto cycles = [&](int k) { return int32_t((ph[k] << shift) >> 40); };
-    const F4 x = FromInts(cycles(0), cycles(1), cycles(2), cycles(3)) * Set(0x1p-24f) - Set(0.5f), a = Abs(x);
+    const F4 x = Top24(ShiftLeft(LoadPhases(ph), shift)) - Set(0.5f), a = Abs(x);
     const F4 r = Set(float(2 * M_PI)) * Min(a, Set(0.5f) - a), r2 = r * r;
     F4 s = MulAdd(Set(-1.0f / 39916800.0f), r2, Set(1.0f / 362880.0f));
     for (const float c : {-1.0f / 5040.0f, 1.0f / 120.0f, -1.0f / 6.0f, 1.0f}) s = MulAdd(s, r2, Set(c));
@@ -208,8 +207,10 @@ private:
         // LFO's cents; cutoff / FM / pw / pan = the law applied to the
         // depth-weighted sum of the LFO values; amp = product of the gains.
         LfoRoute r[8];
+        // (measured, bend on a step + a square LFO on pitch) depth 0 = no
+        // modulation at all, whatever the destination: no route
         for (int k = 0; k < 2; ++k) {
-            if (!lfo[k]) continue;
+            if (!lfo[k] || p[k ? kLfo2Depth : kLfo1Depth] <= 0) continue;
             LfoRoute &route = r[std::clamp<int>(p[k ? kLfo2Dest : kLfo1Dest], 1, 7)];
             route.v[route.n] = lfo[k];
             route.depth[route.n] = p[k ? kLfo2Depth : kLfo1Depth];
@@ -330,6 +331,8 @@ private:
 
         PitchRatio ratioAll, ratio2;
         double fmIncA = NAN, fmRef = 0; // kFmRefInc / incA, recomputed when incA changes
+        double copyStep = NAN; // the osc1 step copyInc holds (the copies' steps, recomputed when it changes)
+        simd::P4 copyInc[2] = {};
         for (int i = 0; i < frames; ++i) {
             // ---- per-sample modulation ----
             const double me = modOn ? modEnv_.Next() * modAmt : 0.0;
@@ -378,7 +381,7 @@ private:
             double o2 = 0;
             switch (shape2) {
             case 1: o2 = saw2.Read(osc2Phase_); break;
-            case 2: o2 = 0.5 * (saw2.Read(osc2Phase_) - saw2.Read(Wrap(osc2Phase_ + w))); break;
+            case 2: o2 = 0.5 * (saw2.Read(osc2Phase_) - saw2.Read(WrapNext(osc2Phase_ + w))); break;
             case 3: o2 = tri2.Read(osc2Phase_); break;
             default: {
                 const uint32_t bit = (noise_ >> 12 ^ noise_ >> 17 ^ noise_ >> 18 ^ noise_ >> 19) & 1;
@@ -402,12 +405,19 @@ private:
                 const double subAcc = subOn ? sub + CopiesSum(subAs1, sawSub, triSub, copyPhase_.data(), 0, Phase64(1) << 63) : sub;
                 // a step under one cycle either way converts directly (two's
                 // complement = mod 1)
-                const double step = incA * fm;
-                if (std::fabs(step) < kFastStepLimit) {
-                    for (int d = 0; d < kDetuneOscs; ++d) copyPhase_[d] += Phase64(int64_t(step * copyScale[d])) << 1;
-                } else {
-                    for (int d = 0; d < kDetuneOscs; ++d) copyPhase_[d] += ToPhase64(step * copyRatio * detuneRatio[d]);
+                if (const double step = incA * fm; step != copyStep) {
+                    copyStep = step;
+                    Phase64 inc[kDetuneOscs];
+                    if (std::fabs(step) < kFastStepLimit) {
+                        for (int d = 0; d < kDetuneOscs; ++d) inc[d] = Phase64(int64_t(step * copyScale[d])) << 1;
+                    } else {
+                        for (int d = 0; d < kDetuneOscs; ++d) inc[d] = ToPhase64(step * copyRatio * detuneRatio[d]);
+                    }
+                    copyInc[0] = simd::Phases(inc[0], inc[1], inc[2], inc[3]);
+                    copyInc[1] = simd::Phases(inc[4], inc[5], inc[6], inc[7]);
                 }
+                simd::StorePhases(copyPhase_.data(), simd::LoadPhases(copyPhase_.data()) + copyInc[0]);
+                simd::StorePhases(copyPhase_.data() + 4, simd::LoadPhases(copyPhase_.data() + 4) + copyInc[1]);
                 o1 = acc * detuneGain;
                 // (measured, measure_ring_detune.py) ring on: the sub copies
                 // skip the copy gain (~+10 dB), see the limiter below
@@ -470,7 +480,7 @@ private:
         switch (shape) {
         case 0: return Sin2Pi(ph);
         case 1: return saw.Read(ph);
-        case 2: return 0.5 * (saw.Read(ph) - saw.Read(Wrap(ph + width)));
+        case 2: return 0.5 * (saw.Read(ph) - saw.Read(WrapNext(ph + width)));
         default: return tri.Read(ph);
         }
     }
@@ -508,6 +518,8 @@ private:
     // ph - floor(ph); the floor (a library call on x64 without SSE4.1) only
     // when ph is out of [0, 1)
     static OXO_INLINE double Wrap(double ph) { return ph >= 0.0 && ph < 1.0 ? ph : ph - std::floor(ph); }
+    // the same for ph in [0, 2) (a phase + a pulse width), never a call
+    static OXO_INLINE double WrapNext(double ph) { return ph >= 1.0 ? ph - 1.0 : ph; }
     // osc1's detune copy d (the sub's copy d = copyPhase_[d])
     Phase64 CopyPhase(int d) const { return copyHalf_ ? copyPhase_[d] << 1 : copyPhase_[d]; }
     // osc1's copy phases, the sub's locked to them (half = sub octave)
@@ -522,10 +534,11 @@ private:
     // 1/128-octave steps, truncated toward 0 (the mod env's pitch does not)
     static double PitchMod(double cents) { return 9.375 * std::trunc(cents / 9.375); }
     // exp2(PitchMod(cents) / 1200), recomputed only when the step changes
+    // (the cast truncates like std::trunc, a library call on x64 SSE2)
     struct PitchRatio {
         double steps = NAN, ratio = 1;
-        double operator()(double cents) {
-            if (const double s = std::trunc(cents / 9.375); s != steps) steps = s, ratio = std::exp2(9.375 * s / 1200.0);
+        OXO_INLINE double operator()(double cents) {
+            if (const double s = double(int32_t(cents / 9.375)); s != steps) steps = s, ratio = std::exp2(9.375 * s / 1200.0);
             return ratio;
         }
     };

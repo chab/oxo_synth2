@@ -623,7 +623,13 @@ original AU; keeps both renders for listening).
   cents are summed and TRUNCATED toward 0 to 1/128-octave steps (9.375
   cents: slow vibratos and bends are staircases; `Voice::PitchMod`). Fine
   tune and the mod env's pitch are not quantized; the portamento has its
-  own steps (ceil, relative to the target).
+  own steps (ceil, relative to the target). An LFO at DEPTH 0 is no route
+  at all (kLfoPitchCents[0] is fit noise, 0.003 ct: summed with a bend
+  sitting on a step it dropped the pitch one step during the LFO's
+  negative half; the original stays put). OPEN (one probe: full bend,
+  range 12 = 128 steps, square LFO on pitch at depth 1 = 9.43 ct): the
+  original plays 1200 ± 9.375 ct, ours +9.375 / −18.75, so it seems to
+  truncate the bend and the LFO SEPARATELY, not their sum.
 - Mono / legato: a new note retriggers in mono (new velocity), glides in
   legato; releasing it falls back to the previous held key, mono
   RETRIGGERS there (last velocity), legato does not. A mono retrigger also
