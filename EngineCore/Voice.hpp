@@ -55,6 +55,13 @@ inline double Sin2Pi(double ph) {
     for (const double c : {1.0 / 362880.0, -1.0 / 5040.0, 1.0 / 120.0, -1.0 / 6.0, 1.0}) s = s * r2 + c;
     return std::copysign(s * r, -x);
 }
+// The same in float, for the detune copies (|error| < 2e-7; their loop vectorizes).
+inline float Sin2Pi(float ph) {
+    const float x = ph - 0.5f, a = std::fabs(x), r = float(2 * M_PI) * std::min(a, 0.5f - a), r2 = r * r;
+    const float s =
+        ((((-1.0f / 39916800.0f * r2 + 1.0f / 362880.0f) * r2 - 1.0f / 5040.0f) * r2 + 1.0f / 120.0f) * r2 - 1.0f / 6.0f) * r2 + 1.0f;
+    return std::copysign(s * r, -x);
+}
 
 class Voice {
 public:
@@ -273,12 +280,23 @@ private:
 
         double curWidth = width;
         Phase64 curWidth64 = 0;
-        // acc + the shape at each of the n phases (double: osc1 / sub, Phase64:
-        // the detune copies), summed in order; the shape switch outside the
-        // loop keeps the copies' loop tight
-        auto osc1Sum = [&](double acc, const auto *ph, int n) {
+        // acc + the shape at each phase (one double: osc1 / sub, kDetuneOscs
+        // Phase64: the detune copies), summed in order; the shape switch
+        // outside the loop keeps the copies' loop tight
+        auto sine = [&](double acc, const auto *ph) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(*ph)>, Phase64>) {
+                // stored (a member: kept as stores), then summed: the copies' sines vectorize
+                for (int d = 0; d < kDetuneOscs; ++d) copySines_[d] = Sin2Pi(Cycles(ph[d]));
+                for (int d = 0; d < kDetuneOscs; ++d) acc += copySines_[d];
+                return acc;
+            } else {
+                return acc + Sin2Pi(*ph);
+            }
+        };
+        auto osc1Sum = [&](double acc, const auto *ph) {
+            constexpr int n = std::is_same_v<std::decay_t<decltype(*ph)>, Phase64> ? kDetuneOscs : 1;
             switch (shape1) {
-            case 0: for (int d = 0; d < n; ++d) acc += Sin2Pi(Cycles(ph[d])); break;
+            case 0: return sine(acc, ph);
             case 1: for (int d = 0; d < n; ++d) acc += saw1.Read(ph[d]); break;
             case 2:
                 for (int d = 0; d < n; ++d) acc += 0.5 * (saw1.Read(ph[d]) - saw1.Read(Advance(ph[d], curWidth, curWidth64)));
@@ -287,9 +305,10 @@ private:
             }
             return acc;
         };
-        auto subSum = [&](double acc, const auto *ph, int n) {
+        auto subSum = [&](double acc, const auto *ph) {
+            constexpr int n = std::is_same_v<std::decay_t<decltype(*ph)>, Phase64> ? kDetuneOscs : 1;
             switch (subShape) {
-            case 0: for (int d = 0; d < n; ++d) acc += Sin2Pi(Cycles(ph[d])); break;
+            case 0: return sine(acc, ph);
             case 1: for (int d = 0; d < n; ++d) acc += triSub.Read(ph[d]); break;
             case 2: for (int d = 0; d < n; ++d) acc += sawSub.Read(ph[d]); break;
             default:
@@ -390,11 +409,11 @@ private:
             // per sample (beta x key 60 at 44.1 kHz): the index falls an octave
             // up, rises with the sample rate
             const double fm = 1.0 + fmB * o2 * (kFmRefInc / incA);
-            double o1 = osc1Sum(0.0, &osc1Phase_, 1);
-            double sub = subOn ? subSum(0.0, &subPhase_, 1) : 0.0;
+            double o1 = osc1Sum(0.0, &osc1Phase_);
+            double sub = subOn ? subSum(0.0, &subPhase_) : 0.0;
             if (detuneOn) {
-                const double acc = osc1Sum(o1, detunePhase_.data(), kDetuneOscs);
-                const double subAcc = subOn ? subSum(sub, subDetunePhase_.data(), kDetuneOscs) : sub;
+                const double acc = osc1Sum(o1, detunePhase_.data());
+                const double subAcc = subOn ? subSum(sub, subDetunePhase_.data()) : sub;
                 // a step under one cycle either way converts directly (two's
                 // complement = mod 1); a vectorizable loop
                 const double step = incA * fm;
@@ -483,7 +502,7 @@ private:
     static double Wrap(double ph) { return ph >= 0.0 && ph < 1.0 ? ph : ph - std::floor(ph); }
     // the same phase helpers for both phase types
     static double Cycles(double ph) { return ph; }
-    static double Cycles(Phase64 ph) { return FromPhase64(ph); }
+    static float Cycles(Phase64 ph) { return float(uint32_t(ph >> 40)) * 0x1p-24f; } // float precision (its sine)
     static double Advance(double ph, double by, Phase64) { return Wrap(ph + by); }
     static Phase64 Advance(Phase64 ph, double, Phase64 by) { return ph + by; }
     // (measured, measure_porta.py) a glide aims 1.35 % of its starting
@@ -523,6 +542,7 @@ private:
     bool gate_ = false;
     double osc1Phase_ = 0, osc2Phase_ = 0, subPhase_ = 0;
     std::array<Phase64, kDetuneOscs> detunePhase_{}, subDetunePhase_{};
+    float copySines_[kDetuneOscs] = {}; // RenderChunk scratch
     uint32_t noise_ = kNoiseSeed;
     bool tail_ = false; // envelope done, running silent to the block boundary
 };
