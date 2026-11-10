@@ -200,10 +200,12 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   (envelopes / LFO routes into arrays) was 5..15 % slower too. Engine changes: render every factory /
   starter patch before / after and compare (expected <= -120 dB).
 - Python: `.venv` (numpy, scipy) for `tools/s1ref` scripts.
-- WINDOWS: `build_windows.bat [--no-pause]` on Windows (Visual Studio 2022+
+- WINDOWS: `build_windows.bat [--clang] [--no-pause]` on Windows (Visual Studio 2022+
   C++ workload; CMake from `%CMAKE%`, PATH or VS's own; generator = CMake's
   default or `CMAKE_GENERATOR`) → `Windows_Build\build\VST3\Release\
-  OxoSynth2.vst3` + storage tests, installs nothing. On the mac,
+  OxoSynth2.vst3` + storage tests, installs nothing (`--clang` = clang-cl,
+  VS's ClangCL toolset, into `Windows_Build\build-clang`: to compare its
+  engine CPU with MSVC's; the installer still builds with MSVC). On the mac,
   `tools/win_check/check.sh` compile-checks the Windows sources with
   mingw-w64 (`brew install mingw-w64`; warnings = errors; the worktree's
   SDK or `VST3SDK=<path>`). `.bat` files are CRLF (`.gitattributes`).

@@ -409,6 +409,7 @@ public:
     bool PatchChanging() const { return switch_ != Switch::None; }
 
     void Render(float *left, float *right, int frames) {
+        const simd::ScopedNoDenormals noDenormals;
         std::fill(left, left + frames, 0.0f);
         std::fill(right, right + frames, 0.0f);
         // (measured, measure_pitch_mod.py) only the bend's 7-bit MSB counts:

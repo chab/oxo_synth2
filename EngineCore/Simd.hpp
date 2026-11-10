@@ -113,4 +113,26 @@ inline void Transpose(F4 &a, F4 &b, F4 &c, F4 &d) {
 
 #endif
 
+// While alive, denormals are flushed to zero (FTZ + DAZ): on x86 each
+// operation on one costs ~100 cycles (feedback tails and filter states
+// fading out in silence); arm64 runs them at full speed (no-op there).
+// The caller's (host thread's) mode comes back at the end.
+class ScopedNoDenormals {
+public:
+#if OXO_SIMD_SSE2
+    ScopedNoDenormals() : saved_(_mm_getcsr()) { _mm_setcsr(saved_ | 0x8040); }
+    ~ScopedNoDenormals() { _mm_setcsr(saved_); }
+#else
+    ScopedNoDenormals() {}
+    ~ScopedNoDenormals() {}
+#endif
+    ScopedNoDenormals(const ScopedNoDenormals &) = delete;
+    ScopedNoDenormals &operator=(const ScopedNoDenormals &) = delete;
+
+#if OXO_SIMD_SSE2
+private:
+    unsigned saved_;
+#endif
+};
+
 } // namespace oxo::s2::simd

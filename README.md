@@ -92,6 +92,9 @@ build_windows.bat
 
 It builds `Windows_Build\build\VST3\Release\OxoSynth2.vst3` and runs the
 storage tests; nothing is installed (no administrator rights needed).
+`build_windows.bat --clang` builds with clang-cl instead of MSVC (Visual
+Studio Installer, individual components "C++ Clang Compiler for Windows" and
+"MSBuild support for LLVM (clang-cl) toolset") into `Windows_Build\build-clang`.
 
 To try the plugin, copy the bundle into the system VST3 folder. That folder is
 under `Program Files`, so this step needs a Command Prompt **started as

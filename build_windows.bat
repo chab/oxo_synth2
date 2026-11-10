@@ -1,7 +1,12 @@
 @echo off
-rem Builds the Windows x64 VST3 (MSVC) into Windows_Build\build and runs the
-rem Windows storage tests. Installs nothing, touches nothing outside the repo.
-rem   build_windows.bat [--no-pause]
+rem Builds the Windows x64 VST3 (MSVC, or clang-cl) into Windows_Build\build and
+rem runs the Windows storage tests. Installs nothing, touches nothing outside the
+rem repo.
+rem   build_windows.bat [--clang] [--no-pause]
+rem --clang: clang-cl (Visual Studio's ClangCL toolset, components "C++ Clang
+rem Compiler for Windows" + "MSBuild support for LLVM (clang-cl) toolset")
+rem instead of MSVC, into Windows_Build\build-clang (to compare the engine's
+rem CPU load with the MSVC build's).
 rem Needs Visual Studio 2022 or later (workload "Desktop development with
 rem C++") and the submodules: git submodule update --init --recursive
 rem CMake: %CMAKE% if set, else cmake on PATH, else the one bundled with Visual
@@ -10,8 +15,15 @@ rem CMAKE_GENERATOR environment variable (CMake reads it).
 setlocal EnableExtensions DisableDelayedExpansion
 pushd "%~dp0" || exit /b 1
 set "NOPAUSE="
-if /i "%~1"=="--no-pause" set "NOPAUSE=1"
+set "CLANG="
+:args
+if "%~1"=="" goto args_done
+if /i "%~1"=="--no-pause" (set "NOPAUSE=1") else if /i "%~1"=="--clang" (set "CLANG=1") else (set "REASON=Unknown option %~1" & goto fail)
+shift
+goto args
+:args_done
 set "BUILD=%~dp0Windows_Build\build"
+if defined CLANG set "BUILD=%~dp0Windows_Build\build-clang"
 set "LOG=%BUILD%\build.log"
 set "EXIT_CODE=1"
 
@@ -28,9 +40,11 @@ if not exist "%BUILD%" mkdir "%BUILD%"
 >"%LOG%" echo Synth2 Windows VST3 build log
 set "ARCH=-A x64"
 if defined CMAKE_GENERATOR set "ARCH="
+set "TOOLSET="
+if defined CLANG set "TOOLSET=-T ClangCL"
 
 echo [1/3] Configuring (%CMAKE%)...
-"%CMAKE%" -S "%~dp0Windows_Build" -B "%BUILD%" %ARCH% -DCMAKE_POLICY_VERSION_MINIMUM=3.5 >>"%LOG%" 2>&1
+"%CMAKE%" -S "%~dp0Windows_Build" -B "%BUILD%" %ARCH% %TOOLSET% -DCMAKE_POLICY_VERSION_MINIMUM=3.5 >>"%LOG%" 2>&1
 if errorlevel 1 (set "REASON=CMake configuration failed" & goto fail)
 
 echo [2/3] Building OxoSynth2.vst3...
@@ -44,7 +58,7 @@ if not exist "%TESTS%" (set "REASON=Storage tests not built" & goto fail)
 if errorlevel 1 (set "REASON=Storage tests failed" & goto fail)
 
 echo.
-echo [PASS] Built Windows_Build\build\VST3\Release\OxoSynth2.vst3 (not installed).
+echo [PASS] Built %BUILD%\VST3\Release\OxoSynth2.vst3 (not installed).
 set "EXIT_CODE=0"
 goto done
 
