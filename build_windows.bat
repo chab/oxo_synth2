@@ -5,8 +5,9 @@ rem repo.
 rem   build_windows.bat [--clang] [--bench] [--no-pause]
 rem --clang: clang-cl (Visual Studio's ClangCL toolset, components "C++ Clang
 rem Compiler for Windows" + "MSBuild support for LLVM (clang-cl) toolset")
-rem instead of MSVC, into Windows_Build\build-clang (to compare the engine's
-rem CPU load with the MSVC build's).
+rem instead of MSVC, into Windows_Build\build-clang: the compiler of the
+rem released plugin (tools\prepare_win_installer.bat), its engine code is
+rem ~1.7x faster than MSVC's.
 rem --bench: also builds and runs the engine CPU bench (tools\bench, the
 rem plugin's compiler and options): realtime factors for a few scenarios, a
 rem keyboard scrub of the bundled Madame Eljay 010 patch and the "chords"

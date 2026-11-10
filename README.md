@@ -90,13 +90,17 @@ CMake.
 build_windows.bat
 ```
 
-It builds `Windows_Build\build\VST3\Release\OxoSynth2.vst3` and runs the
-storage tests; nothing is installed (no administrator rights needed).
-`build_windows.bat --clang` builds with clang-cl instead of MSVC (Visual
-Studio Installer, individual components "C++ Clang Compiler for Windows" and
-"MSBuild support for LLVM (clang-cl) toolset") into `Windows_Build\build-clang`.
-`--bench` also builds and runs the engine's CPU bench (`tools/bench`) with the
-same compiler: realtime factors on one core, to compare the two.
+It builds `Windows_Build\build\VST3\Release\OxoSynth2.vst3` with MSVC and
+runs the storage tests; nothing is installed (no administrator rights needed).
+
+The released plugin is built with **clang-cl** instead: its code for the
+engine is clearly faster than MSVC's (about 1.7x in our measurements).
+`build_windows.bat --clang` builds that way into `Windows_Build\build-clang`;
+it needs two more individual components from the Visual Studio Installer,
+"C++ Clang Compiler for Windows" and "MSBuild support for LLVM (clang-cl)
+toolset". `--bench` also builds and runs the engine's CPU bench
+(`tools/bench`) with the same compiler (realtime factors and the load of 32
+voices on one core), to compare the two on your machine.
 
 To try the plugin, copy the bundle into the system VST3 folder. That folder is
 under `Program Files`, so this step needs a Command Prompt **started as
@@ -110,19 +114,23 @@ xcopy Windows_Build\build\VST3\Release\OxoSynth2.vst3 "%CommonProgramFiles%\VST3
 ```
 
 The second line removes the previous copy (so no stale file stays in the
-bundle), the third copies the new one. An administrator prompt starts in
-`C:\Windows\System32`, hence the `cd` to your clone first.
+bundle), the third copies the new one (after `--clang`, from
+`Windows_Build\build-clang\VST3\Release\OxoSynth2.vst3`). An administrator
+prompt starts in `C:\Windows\System32`, hence the `cd` to your clone first.
 
 Options: `--no-pause` skips the final pause (scripted runs); the `CMAKE` and
 `CMAKE_GENERATOR` environment variables override the CMake found and its
-generator. The build log is `Windows_Build\build\build.log`.
+generator. The build log is `Windows_Build\build\build.log` (`build-clang`
+after `--clang`).
 
-The installer: `tools\prepare_win_installer.bat` builds the release (static
-runtime, no VC++ redistributable needed), validates it and packs it with
+The installer: `tools\prepare_win_installer.bat` builds the release with
+clang-cl (the two components above; static runtime, no VC++ redistributable
+needed), validates it and packs it with
 [Inno Setup](https://jrsoftware.org/isinfo.php) 6.3+ into
 `dist\win\OxoSynth2-<version>-<build>-Windows-x64.exe` + a `.zip` (installer,
 `README.pdf`, raw bundle). The installer puts the plugin in `C:\Program
-Files\Common Files\VST3`; `--help` lists the options.
+Files\Common Files\VST3`; `--msvc` builds it with MSVC when the clang
+components are missing, `--help` lists the options.
 
 On a Mac, `tools/win_check/check.sh` compile-checks the Windows sources with
 mingw-w64 (`brew install mingw-w64`), before they reach a Windows machine.

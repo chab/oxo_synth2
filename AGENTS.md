@@ -261,8 +261,9 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   C++ workload; CMake from `%CMAKE%`, PATH or VS's own; generator = CMake's
   default or `CMAKE_GENERATOR`) → `Windows_Build\build\VST3\Release\
   OxoSynth2.vst3` + storage tests, installs nothing (`--clang` = clang-cl,
-  VS's ClangCL toolset, into `Windows_Build\build-clang`: to compare its
-  engine CPU with MSVC's; the installer still builds with MSVC; `--bench`
+  VS's ClangCL toolset, into `Windows_Build\build-clang`: THE RELEASE'S
+  COMPILER, the installer builds with it; plain = MSVC, which every VS
+  install has; `--bench`
   = also build and run `tools/bench` (CMake target `synth2_bench`, the
   plugin's compiler and options: the scenarios + the bundled Madame Eljay
   010 scrub + `--chords 3`), THE way to time the engine on a PC: Rosetta on
@@ -271,8 +272,10 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   copy it alone to any PC; `synth2_bench.exe --chords [runs]` = 32 voices
   rotating (unison 4, detune + sub, long release), best / median % of one
   core. Time on a REAL x86 PC: the UTM VM is ARM64 Windows (QEMU), x64
-  code runs there under Prism emulation (2026-11-10, before d89340c, VM:
-  MSVC 10.6 %, clang-cl 7.7 %). The mac drives the VM with `utmctl` (guest agent):
+  code runs there under Prism emulation (2026-11-10, VM, `--chords`:
+  before d89340c MSVC 10.6 %, clang-cl 7.7 %; at 2c1356d, the per-case
+  voice loop, 9.1 % / 5.5 %, scrub x12 / x19: MSVC gains far less from
+  it, clang-cl is ~1.7x faster on everything but LPDL, x28 both). The mac drives the VM with `utmctl` (guest agent):
   `utmctl exec Windows --cmd cmd.exe /c "x.bat > C:\out.txt 2>&1"` returns
   no output and does not wait (poll `utmctl file pull Windows C:\out.txt`);
   `utmctl file push Windows <path> < file`; the VM's clone is
@@ -281,11 +284,14 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   mingw-w64 (`brew install mingw-w64`; warnings = errors; the worktree's
   SDK or `VST3SDK=<path>`). `.bat` files are CRLF (`.gitattributes`).
 - WINDOWS INSTALLER: `tools\prepare_win_installer.bat [--skip-build]
-  [--skip-validator] [--dynamic-crt] [--no-pause]` IN THE VM (+ Inno Setup
-  6.3+, `winget install JRSoftware.InnoSetup`) →
+  [--skip-validator] [--msvc] [--dynamic-crt] [--no-pause]` IN THE VM (+
+  Inno Setup 6.3+, `winget install JRSoftware.InnoSetup`) →
   `dist\win\<Product>-<ver>-<build>-Windows-x64.{exe,zip}` (zip = exe +
   `tools/win_installer/README.pdf` (SmartScreen walkthrough) + the raw
-  bundle). Own build dir `Windows_Build\build-dist`, STATIC CRT (/MT, no
+  bundle). Built with CLANG-CL (`-T ClangCL`, the engine's CPU above;
+  `--msvc` = MSVC, not for a release). Own build dir
+  `Windows_Build\build-dist-clang` (`--msvc`: `build-dist`; every
+  `Windows_Build/build-*` is gitignored), STATIC CRT (/MT, no
   VC++ redist; checked with dumpbin). Validator runs on the staged bundle
   in PORTABLE mode (temporary `stage\Synth2_Data`), so the dev's library
   stays out. Installer `tools/win_installer/synth2.iss`: elevated, fixed
