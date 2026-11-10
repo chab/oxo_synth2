@@ -55,6 +55,10 @@ final class HooksSynthHost: SynthHost {
     func allNotesOff() { h.allNotesOff(h.ctx) }
     var themeText: String { str(h.themeText(h.ctx)) }
     func setThemeText(_ text: String) { text.withCString { h.setThemeText(h.ctx, $0) } }
+    var programChange: Bool {
+        get { h.programChange(h.ctx) != 0 }
+        set { h.setProgramChange(h.ctx, newValue ? 1 : 0) }
+    }
     func loadedProgram() -> (bank: Int, slot: Int)? {
         var bank: Int32 = -1, slot: Int32 = -1
         h.loadedProgram(h.ctx, &bank, &slot)

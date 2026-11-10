@@ -21,6 +21,7 @@ namespace oxo {
 OxoSynth2Processor::OxoSynth2Processor() {
     setControllerClass(kOxoSynth2ControllerUID);
     const s2::MidiLearnTable learned = storage::LoadMidiLearn();
+    programChangeOn_ = storage::LoadProgramChange();
     // A fresh instance plays the library's first patch (Synth1: program 001
     // of the first bank); a session's setState replaces it.
     s2::Sy1Patch patch;
@@ -97,6 +98,11 @@ tresult PLUGIN_API OxoSynth2Processor::notify(Vst::IMessage *message) {
             std::memcpy(bank.get(), data, size);
             programs_.Publish(std::move(bank));
         }
+        return kResultOk;
+    }
+    if (message && strcmp(message->getMessageID(), "OxoProgramChangeOn") == 0) {
+        int64 on = 1;
+        if (message->getAttributes() && message->getAttributes()->getInt("on", on) == kResultOk) programChangeOn_ = on != 0;
         return kResultOk;
     }
     if (message && strcmp(message->getMessageID(), "OxoMidiLearn") == 0) {
@@ -180,7 +186,8 @@ void OxoSynth2Processor::applyParameter(Vst::ParamID id, double normalized, int3
     } else if (id == kPitchBendParamId) {
         synth_.PitchBend(std::clamp(int(std::lround(normalized * 16383.0)), 0, 16383));
     } else if (id == kProgramParamId) {
-        applyProgram(std::clamp(int(std::lround(normalized * 127.0)), 0, 127), offset, out);
+        if (programChangeOn_.load(std::memory_order_relaxed))
+            applyProgram(std::clamp(int(std::lround(normalized * 127.0)), 0, 127), offset, out);
     } else if (id == kAfterTouchParamId) {
         synth_.ChannelPressure(std::clamp(int(std::lround(normalized * 127.0)), 0, 127));
     } else if (id >= kCcParamIdBase && id < kCcParamIdBase + 128) {

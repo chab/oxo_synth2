@@ -107,6 +107,19 @@ int main() {
         ump2.MIDIEventsList.eventList = pcList;
         Synth2Render(inst, 512, abl, &ump2, 0, 120, 0, 0);
         expect(Synth2GetParam(inst, 0) == 3, "MIDI 2.0 program change");
+        // menu > Program change off: ignored, saved for new instances
+        expect(h.programChange(h.ctx) == 1, "program change on by default");
+        h.setProgramChange(h.ctx, 0);
+        Synth2SetParam(inst, 0, 1);
+        Synth2Render(inst, 512, abl, &pc, 0, 120, 0, 0);
+        expect(Synth2GetParam(inst, 0) == 1, "program change off: ignored");
+        void *later = Synth2Create("/tmp/oxo_s2_ios_harness_lib", nullptr, nullptr);
+        OxoSynth2Hooks hl = Synth2MakeHooks(later);
+        expect(hl.programChange(hl.ctx) == 0, "program change preference saved");
+        Synth2Destroy(later);
+        h.setProgramChange(h.ctx, 1);
+        Synth2Render(inst, 512, abl, &pc, 0, 120, 0, 0);
+        expect(Synth2GetParam(inst, 0) == 3, "program change back on");
     }
     {   // the session keeps the program; a fresh instance starts on the library's first patch
         const int32_t sz = Synth2EncodeState(other, nullptr, 0);

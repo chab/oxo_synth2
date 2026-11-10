@@ -111,6 +111,7 @@ tresult PLUGIN_API OxoSynth2Controller::initialize(FUnknown *context) {
     UString(unit.name, str16BufferSize(Vst::String128)).fromAscii("Root");
     addUnit(new Vst::Unit(unit));
     learnCc_ = storage::LoadMidiLearn();
+    programChangeOn_ = storage::LoadProgramChange(); // the processor reads it too
     ConfigureLibrary(storage::LibraryRoot(), storage::FactoryRoot(), OXO_BUILD_NUMBER);
     // A fresh instance starts on the library's first patch, like the
     // processor (hosts usually sync us with its state right after anyway).
@@ -288,6 +289,18 @@ void OxoSynth2Controller::SetMidiCC(int id, int32_t cc) {
         for (int i = 0; i < s2::kParamCount; ++i) table[i] = learnCc_[size_t(i)];
         if (Vst::IAttributeList *attributes = message->getAttributes())
             attributes->setBinary("cc", table, uint32(sizeof table));
+        sendMessage(message);
+        message->release();
+    }
+}
+
+void OxoSynth2Controller::SetProgramChangeOn(bool on) {
+    if (on == programChangeOn_) return;
+    programChangeOn_ = on;
+    storage::SaveProgramChange(on);
+    if (Vst::IMessage *message = allocateMessage()) {
+        message->setMessageID("OxoProgramChangeOn");
+        if (Vst::IAttributeList *attributes = message->getAttributes()) attributes->setInt("on", on ? 1 : 0);
         sendMessage(message);
         message->release();
     }

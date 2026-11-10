@@ -4,6 +4,7 @@
 // (on iPad: inside the extension's own container, $HOME is sandboxed).
 
 #include "EditorCore/Identity.h"
+#include "EditorCore/Settings.hpp"
 #include "EngineCore/MidiLearn.hpp"
 #include "EngineCore/PatchLibrary.hpp"
 
@@ -77,5 +78,11 @@ inline bool SaveMidiLearn(const s2::MidiLearnTable &cc) {
     std::filesystem::rename(tmp, path, ec);
     return !ec;
 }
+
+// Menu > Program change: MIDI program changes played (default) or ignored.
+// Per user (settings.json), read by each instance when it starts.
+inline constexpr const char *kProgramChangeKey = "programChange";
+inline bool LoadProgramChange() { return settings::LoadBool(Root(), kProgramChangeKey, true); }
+inline bool SaveProgramChange(bool on) { return settings::SaveBool(Root(), kProgramChangeKey, on); }
 
 } // namespace oxo::storage

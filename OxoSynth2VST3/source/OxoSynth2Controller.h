@@ -49,6 +49,8 @@ public:
     uint64_t VoiceStates() override;
     void AllNotesOff() override;
     bool ProgramBankChanged(const s2::ProgramBankValues &values) override;
+    bool ProgramChangeOn() override { return programChangeOn_; }
+    void SetProgramChangeOn(bool on) override;
 
     OBJ_METHODS(OxoSynth2Controller, EditControllerEx1)
     DEFINE_INTERFACES
@@ -58,6 +60,7 @@ public:
 
 private:
     s2::MidiLearnTable learnCc_{};
+    bool programChangeOn_ = true; // menu > Program change (per-user preference)
 };
 
 } // namespace oxo

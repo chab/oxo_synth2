@@ -26,6 +26,7 @@ public:
 
     Synth2Instance(const std::string &libraryRoot, const std::string &factoryRoot, const std::string &build) {
         const s2::MidiLearnTable learned = storage::LoadMidiLearn();
+        programChangeOn_ = storage::LoadProgramChange();
         for (int i = 0; i < s2::kParamCount; ++i) {
             values_[size_t(i)] = s2::kParams[size_t(i)].def;
             learnCc_[size_t(i)] = learned[size_t(i)];
@@ -77,6 +78,12 @@ public:
     bool ProgramBankChanged(const s2::ProgramBankValues &values) override {
         programs_.Publish(std::make_unique<s2::ProgramBankValues>(values));
         return true;
+    }
+    bool ProgramChangeOn() override { return programChangeOn_.load(std::memory_order_relaxed); }
+    void SetProgramChangeOn(bool on) override {
+        if (on == ProgramChangeOn()) return;
+        programChangeOn_.store(on, std::memory_order_relaxed);
+        storage::SaveProgramChange(on);
     }
     // The render switched program (MIDI program change): follow it.
     void PollProgramChange() override {
@@ -200,6 +207,7 @@ private:
     // MIDI program change: that slot of the current bank (EngineCore/
     // ProgramChange.hpp), the UI side follows on its next poll.
     void ProgramChange(int program) {
+        if (!programChangeOn_.load(std::memory_order_relaxed)) return;
         const s2::PatchValues *v = s2::SwitchProgram(synth_, programs_.Current(), program);
         if (!v) return;
         for (int p = 0; p < s2::kParamCount; ++p) values_[size_t(p)].store((*v)[size_t(p)], std::memory_order_relaxed);
@@ -220,6 +228,7 @@ private:
     uint32_t ccCounter_ = 0;
     s2::ProgramMailbox programs_;          // the current bank's values (UI -> render)
     std::atomic<int32_t> programToken_{0}; // render -> UI: (counter << 7) | slot
+    std::atomic<bool> programChangeOn_{true}; // menu > Program change (settings.json)
     uint32_t programCounter_ = 0;          // audio thread
     int32_t seenProgramToken_ = 0;         // UI thread
     std::vector<float> scratchL_, scratchR_;

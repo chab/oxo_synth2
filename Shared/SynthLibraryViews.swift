@@ -108,6 +108,7 @@ struct BottomBar: View {
             Button("Save patch file…") { model.fileAction = .savePatch }
             Divider()
             Button(model.learnActive ? "Exit MIDI Learn" : "MIDI Learn") { model.toggleLearn() }
+            Toggle("Program change", isOn: $model.programChange)
             Button("All notes off") { model.allNotesOff() }
             Divider()
             Button("Themes…") { model.showThemes = true }

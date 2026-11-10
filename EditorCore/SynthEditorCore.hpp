@@ -47,6 +47,10 @@ public:
     // values for the DSP, false = not delivered (retried by ResendProgramBank).
     virtual bool ProgramBankChanged(const s2::ProgramBankValues &) { return true; }
     virtual void PollProgramChange() {} // wrappers hearing of the DSP's switch by polling (AUv3)
+    // Menu > Program change (storage::LoadProgramChange): the DSP plays or
+    // ignores program changes; the setter also saves the preference.
+    virtual bool ProgramChangeOn() { return true; }
+    virtual void SetProgramChangeOn(bool) {}
 
     // ---- shared ----
     // `factory` = the read-only factory bank in the plugin bundle, `build` =
@@ -303,6 +307,8 @@ public:
             C(c)->theme_ = theme;
             C(c)->ThemeChanged(theme);
         };
+        h.programChange = [](void *c) { return int32_t(C(c)->ProgramChangeOn()); };
+        h.setProgramChange = [](void *c, int32_t on) { C(c)->SetProgramChangeOn(on != 0); };
         return h;
     }
 

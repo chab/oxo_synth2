@@ -2197,6 +2197,8 @@ void WindowsEditor::showMainMenu(int x,int y) {
     AppendMenuW(menu,MF_STRING,12,L"Save patch file...");
     AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
     AppendMenuW(menu,MF_STRING,13,midiLearn_?L"Exit MIDI Learn":L"MIDI Learn");
+    const bool programChange=!hooks_.programChange || hooks_.programChange(hooks_.ctx)!=0;
+    AppendMenuW(menu,MF_STRING|(programChange?MF_CHECKED:0),17,L"Program change");
     AppendMenuW(menu,MF_STRING,14,L"All notes off");
     HMENU themeMenu=CreatePopupMenu();
     std::vector<themes::Palette> picks;
@@ -2219,6 +2221,12 @@ void WindowsEditor::showMainMenu(int x,int y) {
         case 12: showFileDialog(true);break;
         case 13: setLearn(!midiLearn_);break;
         case 14: if(hooks_.allNotesOff) {hooks_.allNotesOff(hooks_.ctx);flash(L"all notes off");} break;
+        case 17: // SynthModel.programChange
+            if(hooks_.setProgramChange) {
+                hooks_.setProgramChange(hooks_.ctx,programChange?0:1);
+                flash(programChange?L"program change: off":L"program change: on");
+            }
+            break;
         case 15: showThemeEditor();break;
         case 16: checkForUpdates();break;
         default: pickTheme(selected,picks);break;

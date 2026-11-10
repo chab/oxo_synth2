@@ -58,6 +58,7 @@ private:
     // the controller); a switch reports its slot on kProgramTokenParamId.
     s2::ProgramMailbox programs_;
     uint32_t programCounter_ = 0;
+    std::atomic<bool> programChangeOn_{true}; // menu > Program change ("OxoProgramChangeOn", settings.json)
     uint64_t sentVoices_ = 0; // last voice activity reported (kVoiceStateParamIdBase)
     s2::Synth synth_;
     // Lock-free mirror of the patch for getState/setState (UI thread); the

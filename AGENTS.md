@@ -90,7 +90,9 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   between C++ and the Swift editor), `SynthEditorCore.hpp` (base of the
   VST3 controller and the AUv3 instance), `State.hpp` (state chunk),
   `Storage.hpp` (per-user files, mac library / factory paths), `Trash.hpp`,
-  `Json.hpp` (small strict JSON reader), `Themes.hpp` (the C++ mirror of
+  `Json.hpp` (small strict JSON reader), `Settings.hpp` (settings.json:
+  independent top-level keys, a save edits only its value in place; Windows
+  zoom, program change; `EngineCoreTests/SettingsTests.cpp`), `Themes.hpp` (the C++ mirror of
   `Shared/SynthTheme.swift` for C++ editors: 13 keys, factory themes,
   lenient hex map, `stateText`, the `themes.json` store;
   `EngineCoreTests/ThemesTests.cpp` PARSES the Swift file, so a key or a
@@ -370,6 +372,13 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   automatable, like the SDK sample), `getUnitByBus` = root for every
   channel. The AUv2 wrapper turns that list into AU factory presets (names
   as read at instantiation). AUv3: MIDI 1 0xC0 + UMP MIDI 2.0 program change.
+  MENU > PROGRAM CHANGE (checkmark, every platform): off = program
+  changes ignored by the DSP. Per-user preference `"programChange"`
+  (default true) in settings.json (`storage::LoadProgramChange`), read by
+  each instance when it starts (VST3 processor + controller, AUv3); the
+  toggle saves it and tells this instance's DSP (VST3 message
+  "OxoProgramChangeOn"), other open instances keep theirs until reloaded.
+  Hooks `programChange` / `setProgramChange`, LCD "program change: on/off".
   Checks: `EngineCoreTests/ProgramChangeTests.cpp`, au_harness.
 - STATE CHUNK (`EditorCore/State.hpp` `PluginState`; AUv3 fullState key
   "OXS2" = same bytes): `'OXS2'` + u32 version 4 + u32 master volume + i32
@@ -560,7 +569,8 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   delete, export, import, all notes off, the library notice 10 s, worded
   "Recycle Bin"). write = write
   dialog; menu = Initialize patch | Load / Save patch file… | MIDI Learn |
-  Themes… | Check for updates… (mac). The version box in the title band
+  Program change (checkmark) | All notes off | Themes… | Check for
+  updates… (mac). The version box in the title band
   opens the GitHub project (`SynthPanelView.projectURL`).
 - BROWSER KEYS (mac, `SynthModel.browserKey`): arrows load at once (up /
   down = ◀ ▶, left / right = next column, nearest non-empty slot), Return /
