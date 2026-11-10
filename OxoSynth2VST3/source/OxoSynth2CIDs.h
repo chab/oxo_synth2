@@ -27,5 +27,13 @@ inline constexpr double kLastCcTokenScale = double(1 << 20);
 inline constexpr Steinberg::Vst::ParamID kVoiceStateParamIdBase = 1301;
 inline constexpr int kVoiceStateParamCount = 4;
 inline constexpr double kVoiceStateScale = 65535.0;
+// MIDI program change: the root unit's program list (= the current bank's
+// 128 slots) and its kIsProgramChange parameter (0..127), which hosts feed
+// with MIDI program changes; the processor switches and reports the slot on
+// the hidden read-only token (counter << 7 | slot) / kProgramTokenScale, the
+// controller follows (name, LCD).
+inline constexpr Steinberg::Vst::ParamID kProgramParamId = 1400; // also the program list ID
+inline constexpr Steinberg::Vst::ParamID kProgramTokenParamId = 1401;
+inline constexpr double kProgramTokenScale = double(1 << 20);
 
 } // namespace oxo

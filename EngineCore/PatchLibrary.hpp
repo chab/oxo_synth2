@@ -329,6 +329,14 @@ public:
         if (!found_) ScanFolder(root, "", true);
     }
 
+    // One bank folder alone (its own .sy1 files, slots as Scan assigns them).
+    void ScanBank(const std::filesystem::path &dir) {
+        banks_.clear();
+        stopAtPatch_ = found_ = false;
+        std::error_code ec;
+        if (!dir.empty() && std::filesystem::is_directory(dir, ec)) AddFolderBank(dir, dir.filename().string(), FolderEntries(dir));
+    }
+
     const std::vector<PatchBank> &Banks() const { return banks_; }
 
 #if defined(_WIN32)

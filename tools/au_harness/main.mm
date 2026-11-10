@@ -85,6 +85,29 @@ int main() {
     int32_t pb = -1, ps = -1;
     h2.loadedProgram(h2.ctx, &pb, &ps);
     expect(pb == 0 && ps == 0, "loaded program = bank 0 slot 0");
+    {   // MIDI program change: slot of the current bank (inst wrote into User 001)
+        Synth2SetParam(inst, 0, 1);
+        h.setPatchName(h.ctx, "Tweaked");
+        AURenderEvent pc{};
+        pc.MIDI = {nullptr, 10, AURenderEventMIDI, 0, 2, 0, {0xC3, 5, 0}}; // empty slot 006: ignored
+        Synth2Render(inst, 512, abl, &pc, 0, 120, 0, 0);
+        expect(Synth2GetParam(inst, 0) == 1 && std::strcmp(h.patchName(h.ctx), "Tweaked") == 0, "program change to an empty slot");
+        pc.MIDI.data[1] = 0;
+        Synth2Render(inst, 512, abl, &pc, 0, 120, 0, 0);
+        expect(Synth2GetParam(inst, 0) == 3 && Synth2GetParam(inst, 19) == 127, "program change loads slot 001");
+        h.loadedProgram(h.ctx, &pb, &ps);
+        expect(std::strcmp(h.patchName(h.ctx), "Written") == 0 && pb == 0 && ps == 0, "UI follows the program change");
+        Synth2SetParam(inst, 0, 1);
+        MIDIEventList pcList{};
+        MIDIEventPacket *p2 = MIDIEventListInit(&pcList, kMIDIProtocol_2_0);
+        UInt32 pcWords[2] = {0x40C00000, 0x00000000}; // MIDI 2.0 program change, program 0
+        MIDIEventListAdd(&pcList, sizeof pcList, p2, 0, 2, pcWords);
+        AURenderEvent ump2{};
+        ump2.MIDIEventsList.eventType = AURenderEventMIDIEventList;
+        ump2.MIDIEventsList.eventList = pcList;
+        Synth2Render(inst, 512, abl, &ump2, 0, 120, 0, 0);
+        expect(Synth2GetParam(inst, 0) == 3, "MIDI 2.0 program change");
+    }
     {   // the session keeps the program; a fresh instance starts on the library's first patch
         const int32_t sz = Synth2EncodeState(other, nullptr, 0);
         std::vector<uint8_t> st(sz);

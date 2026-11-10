@@ -83,7 +83,8 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   `ParamFormat.hpp` (value labels; `DisplayName` = LCD name, effect knobs
   per effect type), `MidiLearn.hpp` (learn table, CC scaling, JSON),
   `PatchLibrary.hpp` (banks, zip reader, import, `PatchManager`),
-  `TextEncoding.hpp` (legacy names: Shift-JIS / Windows-1252 → UTF-8),
+  `ProgramChange.hpp` (MIDI program change: current bank snapshot,
+  `RtMailbox`, `SwitchProgram`), `TextEncoding.hpp` (legacy names: Shift-JIS / Windows-1252 → UTF-8),
   `Jobs.hpp` (s1ref job format → our engine, WAV writer).
 - `EditorCore/` portable editor services: `OxoSynth2Bridge.h` (C hooks
   between C++ and the Swift editor), `SynthEditorCore.hpp` (base of the
@@ -96,7 +97,7 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   factory theme changed on one side only fails the tests).
 - `EngineCoreTests/` — `make -C EngineCoreTests test`.
 - `OxoSynth2VST3/` — processor / controller / entry / editor view, CMake
-  (SDK + AUv2 wrapper with the hidden-param auwrapper.mm patch, Swift
+  (SDK + AUv2 wrapper with the auwrapper.mm patches, Swift
   static lib `OxoSynth2Editor`, links zlib).
 - `Shared/` — SwiftUI editor used by both formats: `SynthModel.swift`
   (`SynthHost` protocol + model polling the host at 30 Hz; MIDI learn
@@ -163,8 +164,9 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   `SMTG_OS_WINDOWS`.
 - `docs/images/` — README pictures (`synth2_preview.jpg`).
 - `third_party/` — submodules `vst3sdk` v3.8.1_build_84 (MIT) +
-  `AudioUnitSDK` 1.4.0 (Apache 2.0); remaining patches: hidden-param
-  auwrapper + AudioUnitSDK deployment target.
+  `AudioUnitSDK` 1.4.0 (Apache 2.0); remaining patches: auwrapper hidden
+  params + program count (SDK bug: read from parameter 0) + AudioUnitSDK
+  deployment target.
 
 ## Builds and tests
 
@@ -351,6 +353,24 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   CC" token; 1301..1304 = voice activity for the panel's 2x16 grid (8
   voices x 2 bits each, `Synth::VoiceStates`: 0 idle, 1 releasing, 2 held;
   sent on change; AUv3: atomic after each render, hook `voiceStates`).
+- MIDI PROGRAM CHANGE (any channel; no bank select): program 0..127 =
+  slot 001..128 of the CURRENT bank = the last library program's bank
+  (Init / a patch file keep it; fresh instance: the startup bank); an
+  empty slot is ignored. `SynthEditorCore::SyncProgramBank` reads that
+  bank folder (`ReadProgramBank`, same slots as the browser) when the bank
+  or the library revision changes and hands the values to the DSP (VST3
+  message "OxoProgramBank", resent on `connect`; AUv3 in-process), which
+  switches by itself (`SwitchProgram` = a browser load: delay cleared, fade,
+  notes keep playing; editor closed too) and reports the slot (VST3: hidden
+  read-only token 1401 + output changes of the changed params; AUv3: atomic
+  polled by the hooks / EncodeState) → `AdoptProgramChange` (name, LCD,
+  session program). VST3 plumbing (hosts' standard): root unit with program
+  list 1400 ("NNN:name", "----" = empty, renamed on bank change +
+  notifyProgramListChange), its kIsProgramChange parameter 1400 (not
+  automatable, like the SDK sample), `getUnitByBus` = root for every
+  channel. The AUv2 wrapper turns that list into AU factory presets (names
+  as read at instantiation). AUv3: MIDI 1 0xC0 + UMP MIDI 2.0 program change.
+  Checks: `EngineCoreTests/ProgramChangeTests.cpp`, au_harness.
 - STATE CHUNK (`EditorCore/State.hpp` `PluginState`; AUv3 fullState key
   "OXS2" = same bytes): `'OXS2'` + u32 version 4 + u32 master volume + i32
   program slot + u32 len + bank folder (relative to the library root) +

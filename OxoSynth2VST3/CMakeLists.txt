@@ -205,6 +205,25 @@ if(SMTG_MAC AND XCODE AND SMTG_ENABLE_AUV2_BUILDS)
     string(REPLACE "${OXO_AUWRAPPER_HIDE_ANCHOR}" "${OXO_AUWRAPPER_HIDE_PATCH}"
         OXO_AUWRAPPER_TEXT "${OXO_AUWRAPPER_TEXT}")
     message(STATUS "[Oxo] patched auwrapper.mm: hidden parameters skipped in the AU list")
+    # MIDI program change: updateProgramChangesCache re-reads the program
+    # parameter's info into a zeroed shadowing copy, by INDEX `paramInfo.id`
+    # = 0, so the program count came from parameter 0 (osc1 shape: 4
+    # programs, program 1 played as 42 of 127, 4..127 dropped). Use the
+    # info it already holds (programParameters, stepCount 127).
+    set(OXO_AUWRAPPER_PRG_DECL "ParameterInfo paramInfo = {};")
+    set(OXO_AUWRAPPER_PRG_CALL "editController->getParameterInfo (paramInfo.id, paramInfo) == kResultTrue")
+    string(FIND "${OXO_AUWRAPPER_TEXT}" "${OXO_AUWRAPPER_PRG_DECL}" OXO_AUWRAPPER_PRG_DECL_POS)
+    string(FIND "${OXO_AUWRAPPER_TEXT}" "${OXO_AUWRAPPER_PRG_CALL}" OXO_AUWRAPPER_PRG_CALL_POS)
+    if(OXO_AUWRAPPER_PRG_DECL_POS EQUAL -1 OR OXO_AUWRAPPER_PRG_CALL_POS EQUAL -1)
+        message(FATAL_ERROR
+            "[Oxo] auwrapper.mm updateProgramChangesCache lookup not found - re-check the "
+            "program-count patch in OxoSynth2VST3/CMakeLists.txt against ${OXO_AUWRAPPER_SRC}")
+    endif()
+    string(REPLACE "${OXO_AUWRAPPER_PRG_DECL}"
+        "ParameterInfo paramInfo = programParameters.at (i); // OXO SYNTH2: the info held (stepCount)"
+        OXO_AUWRAPPER_TEXT "${OXO_AUWRAPPER_TEXT}")
+    string(REPLACE "${OXO_AUWRAPPER_PRG_CALL}" "true" OXO_AUWRAPPER_TEXT "${OXO_AUWRAPPER_TEXT}")
+    message(STATUS "[Oxo] patched auwrapper.mm: program count from the program parameter")
     file(WRITE "${OXO_AUWRAPPER_PATCHED}" "${OXO_AUWRAPPER_TEXT}")
 
     get_target_property(OXO_AUV2_SOURCES OxoSynth2AUv2 SOURCES)

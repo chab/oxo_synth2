@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EngineCore/PatchLibrary.hpp"
+#include "EngineCore/ProgramChange.hpp"
 #include "EngineCore/Sy1Codec.hpp"
 #include "EngineCore/Synth.hpp"
 #include "pluginterfaces/vst/ivstevents.h"
@@ -44,6 +45,7 @@ private:
 
     void applyParameter(Steinberg::Vst::ParamID id, double normalized, Steinberg::int32 offset,
                         Steinberg::Vst::IParameterChanges *out);
+    void applyProgram(int program, Steinberg::int32 offset, Steinberg::Vst::IParameterChanges *out);
 
     std::vector<TimedInput> inputs_; // reserved once, reused per block
     // MIDI learn table (param -> CC, 0 = none), plugin-global: loaded from
@@ -52,6 +54,10 @@ private:
     // change so the controller / host follow.
     std::array<std::atomic<int>, s2::kParamCount> learnCc_;
     uint32_t ccCounter_ = 0;
+    // MIDI program change: the current bank's values ("OxoProgramBank" from
+    // the controller); a switch reports its slot on kProgramTokenParamId.
+    s2::ProgramMailbox programs_;
+    uint32_t programCounter_ = 0;
     uint64_t sentVoices_ = 0; // last voice activity reported (kVoiceStateParamIdBase)
     s2::Synth synth_;
     // Lock-free mirror of the patch for getState/setState (UI thread); the
