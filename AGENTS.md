@@ -261,13 +261,17 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   e237a62 / 62ef63c are from it; right ones: LFO depth 0 changes 102
   patches, FM 0 319).
 - Python: `.venv` (numpy, scipy) for `tools/s1ref` scripts.
-- WINDOWS: `build_windows.bat [--clang] [--bench] [--no-pause]` on Windows (Visual Studio 2022+
-  C++ workload; CMake from `%CMAKE%`, PATH or VS's own; generator = CMake's
-  default or `CMAKE_GENERATOR`) → `Windows_Build\build\VST3\Release\
-  OxoSynth2.vst3` + storage tests, installs nothing (`--clang` = clang-cl,
-  VS's ClangCL toolset, into `Windows_Build\build-clang`: THE RELEASE'S
-  COMPILER, the installer builds with it; plain = MSVC, which every VS
-  install has; `--bench`
+- WINDOWS: `build_windows.bat [--msvc] [--bench] [--no-pause]` on Windows (Visual Studio 2022+
+  C++ workload + components "C++ Clang Compiler for Windows" and "MSBuild
+  support for LLVM (clang-cl) toolset"; CMake from `%CMAKE%`, PATH or VS's
+  own; generator = CMake's default or `CMAKE_GENERATOR`) →
+  `Windows_Build\build\VST3\Release\OxoSynth2.vst3` + storage tests,
+  installs nothing. Compiler = CLANG-CL (VS's ClangCL toolset), THE
+  RELEASE'S, so dev and release builds match (2026-11-11; it was MSVC by
+  default, clang-cl opt-in). `--msvc` = MSVC into
+  `Windows_Build\build-msvc` (no clang components; compare the code). A
+  build dir whose cache holds the other toolset is reconfigured with
+  CMake `--fresh` (an old MSVC `build`); `--bench`
   = also build and run `tools/bench` (CMake target `synth2_bench`, the
   plugin's compiler and options: the scenarios + the bundled Madame Eljay
   010 scrub + `--chords 3`), THE way to time the engine on a PC: Rosetta on

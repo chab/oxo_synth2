@@ -1,6 +1,6 @@
 #!/bin/bash
 # Compile check of the Windows VST3 sources on a mac, with mingw-w64
-# (`brew install mingw-w64`). Not a Windows build (that is MSVC,
+# (`brew install mingw-w64`). Not a Windows build (that is clang-cl,
 # build_windows.bat): it only catches compile errors / warnings in our code
 # before the code reaches a Windows machine. Objects go to build/win_check.
 #   tools/win_check/check.sh            our files, warnings = errors

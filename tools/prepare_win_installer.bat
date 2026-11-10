@@ -12,7 +12,7 @@ rem  Output: dist\win\<Product>-<version>-<build>-Windows-x64.{exe,zip}
 rem  (gitignored). VST3 only, x64.
 rem
 rem  Steps: 1. build Release x64 (CMake + Visual Studio's clang-cl, like
-rem  build_windows.bat --clang) into Windows_Build\build-dist-clang + run the
+rem  build_windows.bat) into Windows_Build\build-dist-clang + run the
 rem  storage tests,
 rem  2. stage the bundle and check it is COMPLETE (dll, factory bank, starter
 rem  banks, no VC++ runtime import), 3. Steinberg's validator on the staged

@@ -3,14 +3,14 @@
 //   clang++ -std=c++20 -O2 tools/bench/main.cpp -o build/bench && ./build/bench [patch.sy1...]
 // Each .sy1 given is also played as a keyboard "scrub" (a mouse dragged
 // over the keys: a new key every 60 ms, each released after 120 ms).
-// Windows: build_windows.bat [--clang] --bench (the plugin's compiler and options).
+// Windows: build_windows.bat [--msvc] --bench (the plugin's compiler and options).
 // Against the original (both x86_64 under Rosetta: build the bench with
 // -arch x86_64), the same scrub as an s1ref job:
 //   ./build/bench --job x.sy1 /tmp/scrub.wav > /tmp/scrub.txt
 //   S1REF_TIME=1 build/s1ref/s1ref batch /tmp/scrub.txt   (the original)
 //   ./build/bench /tmp/scrub.txt                          (ours: any job file)
 // --chords [runs]: only the chords load (below), 7 runs by default, best and
-// median: compares the MSVC and --clang builds of synth2_bench.exe.
+// median: compares the clang-cl and --msvc builds of synth2_bench.exe.
 #include "../../EngineCore/Jobs.hpp"
 #include "../../EngineCore/Sy1Codec.hpp"
 #include "../../EngineCore/Synth.hpp"
