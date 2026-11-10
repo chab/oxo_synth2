@@ -739,16 +739,28 @@ original AU; keeps both renders for listening).
   bend range, unison pitch) are NOT routed.
 - PITCH MOD RESOLUTION (`measure_pitch_mod.py`): the pitch bend uses its
   7-bit MSB only (trunc((v−8192)/128), ±63 = ±range); bend + LFO pitch
-  cents are summed and TRUNCATED toward 0 to 1/128-octave steps (9.375
-  cents: slow vibratos and bends are staircases; `Voice::PitchMod`). Fine
-  tune and the mod env's pitch are not quantized; the portamento has its
-  own steps (ceil, relative to the target). An LFO at DEPTH 0 is no route
-  at all (kLfoPitchCents[0] is fit noise, 0.003 ct: summed with a bend
-  sitting on a step it dropped the pitch one step during the LFO's
-  negative half; the original stays put). OPEN (one probe: full bend,
-  range 12 = 128 steps, square LFO on pitch at depth 1 = 9.43 ct): the
-  original plays 1200 ± 9.375 ct, ours +9.375 / −18.75, so it seems to
-  truncate the bend and the LFO SEPARATELY, not their sum.
+  cents are TRUNCATED toward 0 to 1/128-octave steps (9.375 cents: slow
+  bends are staircases). An LFO ON PITCH (`measure_lfo_pitch.py`, LFO1
+  on pitch + the same LFO2 on amp = the LFO value at every sample) plays
+  whole steps of ITS OWN, added to the bend's truncated steps (a bend
+  between two steps leaves the LFO's thresholds where they were) and to
+  the other LFO's: N = the square's steps at that depth
+  (`Lfo::PitchSteps` = kLfoPitchCents / 9.375, whole numbers), the law
+  PER WAVEFORM (v = -1..1), same at every speed, depth, destination:
+  saw = 2N + 1 equal bands of v; triangle = rising floor(N v), falling
+  ceil(N v) (a step is taken when the wave reaches it: depth 1 sits on -1
+  until the wave crosses 0); square ±N; sine = sign(v) floor(N |v| +
+  1/4); S&H / smooth random floor(N v) (-N .. N - 1). Computed once per
+  LFO in `Lfo::Render` (steps buffer, only when routed to pitch), summed
+  in the voice's pitch pre-pass (`PitchRatio` takes steps). Until
+  2026-11-11 ours truncated bend + LFO cents together: a triangle / sine
+  at depth 1 hardly moved (fixed; every patch without an LFO that can
+  reach pitch renders bit-identically). Fine tune and the mod env's pitch
+  are not quantized; the portamento has its own steps (ceil, relative to
+  the target). An LFO at DEPTH 0 is no route at all (kLfoPitchCents[0]
+  is fit noise). OPEN: the original's first smooth-random cycle after the
+  instance starts ramps down from ~+13 steps whatever the depth (a start
+  value outside -1..1?), not modelled.
 - Mono / legato: a new note retriggers in mono (new velocity), glides in
   legato; releasing it falls back to the previous held key, mono
   RETRIGGERS there (last velocity), legato does not. A mono retrigger also
@@ -910,7 +922,7 @@ original AU; keeps both renders for listening).
   arp random sequence (+ S&H / smooth LFO: not the original's PRNG), LPDL
   resonance frequency near the top cutoffs.
 - Random sequences (arp random, S&H / smooth LFO): not identified. Leads:
-  S&H read through LFO -> pitch is quantized by PitchMod (useless), through
+  S&H read through LFO -> pitch is quantized to whole steps (useless), through
   LFO -> amp it sits on a 1/1024 grid; the two destinations gave
   DIFFERENT sequences from fresh processes (unexplained); not mac rand(),
   not common 32-bit LCGs, not windows of the noise LFSR. Presets using

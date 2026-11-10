@@ -166,13 +166,15 @@ public:
     int Note() const { return note_; }
     uint64_t Age() const { return age_; }
 
-    // lfo[k] = LFO k's per-sample value (nullptr when that LFO is off).
+    // lfo[k] = LFO k's per-sample value (nullptr when that LFO is off);
+    // lfoSteps[k] = its pitch steps when it is routed to pitch (Lfo.hpp).
     // cutoffKnob / cutoffStep: the smoothed cutoff knob at the block start and
     // its per-sample ramp (Synth's 50 ms glide, measured).
     // pos: the chunk's first sample in the host block; blockEnd: the host
     // block's length.
     void Render(float *left, float *right, int frames, int64_t pos, int64_t blockEnd, const PatchValues &p,
-                double bendSemis, const double *const lfo[2], double cutoffKnob, double cutoffStep) {
+                double bendSemis, const double *const lfo[2], const int32_t *const lfoSteps[2], double cutoffKnob,
+                double cutoffStep) {
         if (!Active()) return;
         if (p[kPortaTime] <= 0) glide_ = note_;
         // (measured, measure_porta.py) a glide moves every 16 samples
@@ -180,7 +182,9 @@ public:
             const bool gliding = glide_ != note_;
             const int n = std::min(gliding ? std::min(frames - off, glideTick_) : frames - off, kMaxChunk);
             const double *at[2] = {lfo[0] ? lfo[0] + off : nullptr, lfo[1] ? lfo[1] + off : nullptr};
-            RenderChunk(left + off, right + off, n, pos + off, blockEnd, p, bendSemis, at, cutoffKnob + cutoffStep * off, cutoffStep);
+            const int32_t *stepsAt[2] = {lfoSteps[0] ? lfoSteps[0] + off : nullptr, lfoSteps[1] ? lfoSteps[1] + off : nullptr};
+            RenderChunk(left + off, right + off, n, pos + off, blockEnd, p, bendSemis, at, stepsAt, cutoffKnob + cutoffStep * off,
+                        cutoffStep);
             off += n;
             if (gliding && (glideTick_ -= n) == 0) {
                 glideTick_ = 16;
@@ -213,7 +217,8 @@ private:
         kOscCross,  // FM, ring or sync (osc1 and osc2 depend on each other), anything else too
     };
     void RenderChunk(float *left, float *right, int frames, int64_t pos, int64_t blockEnd, const PatchValues &p,
-                     double bendSemis, const double *const lfo[2], double cutoffKnob, double cutoffStep) {
+                     double bendSemis, const double *const lfo[2], const int32_t *const lfoSteps[2], double cutoffKnob,
+                     double cutoffStep) {
         const bool modEnv = p[kModEnvOn] != 0;
         bool cross = p[kOsc2Ring] || p[kOsc2Sync] || p[kOsc1FM] > 0 || (modEnv && p[kModEnvDest] == 1), moving = modEnv;
         for (int k = 0; k < 2; ++k) {
@@ -222,7 +227,7 @@ private:
             moving |= dest == 1 || dest == 2 || dest == 5;
         }
         using Chunk = void (Voice::*)(float *, float *, int, int64_t, int64_t, const PatchValues &, double,
-                                      const double *const[2], double, double);
+                                      const double *const[2], const int32_t *const[2], double, double);
 #define OXO_CHUNKS(osc, detune) \
     {&Voice::RenderChunkAs<osc, detune, VoiceFilter::kSvf>, &Voice::RenderChunkAs<osc, detune, VoiceFilter::kLadder>, \
      &Voice::RenderChunkAs<osc, detune, VoiceFilter::kDiode>}
@@ -232,12 +237,13 @@ private:
 #undef OXO_CHUNKS
         (this->*kChunk[cross ? kOscCross : moving ? kOscMoving : kOscStatic][p[kOsc1Detune] > 0]
                       [VoiceFilter::KindOf(p[kFilterType])])(left, right, frames, pos, blockEnd, p, bendSemis, lfo,
-                                                              cutoffKnob, cutoffStep);
+                                                              lfoSteps, cutoffKnob, cutoffStep);
     }
 
     template <int kOsc, bool kDetune, int kFilter>
     void RenderChunkAs(float *left, float *right, int frames, int64_t pos, int64_t blockEnd, const PatchValues &p,
-                       double bendSemis, const double *const lfo[2], double cutoffKnob, double cutoffStep) {
+                       double bendSemis, const double *const lfo[2], const int32_t *const lfoSteps[2], double cutoffKnob,
+                     double cutoffStep) {
         // ---- LFO routing (measured depth laws per destination). Both LFOs on
         // one destination (measured, measure_lfo_sum.py): pitch = sum of each
         // LFO's cents; cutoff / FM / pw / pan = the law applied to the
@@ -248,28 +254,32 @@ private:
             if (!dest) continue;
             LfoRoute &route = r[dest];
             route.v[route.n] = lfo[k];
+            route.steps[route.n] = lfoSteps[k];
             route.depth[route.n] = p[k ? kLfo2Depth : kLfo1Depth];
             route.scale[route.n] = route.depth[route.n] / 127.0;
             ++route.n;
         }
-        const auto pitchCents = [&](const LfoRoute &route, int i) {
-            double c = 0;
-            for (int k = 0; k < route.n; ++k) c += tables::kLfoPitchCents[route.depth[k]] * route.v[k][i];
-            return c;
+        // (measured) an LFO on pitch plays its own whole steps (Lfo.hpp), added
+        // to the bend's truncated steps; both LFOs' steps add
+        const auto pitchSteps = [&](const LfoRoute &route, int i) {
+            int s = 0;
+            for (int k = 0; k < route.n; ++k) s += route.steps[k][i];
+            return s;
         };
         // ---- per-block parameters ----
         const double tuneSemis = tables::kFineCents[p[kOscFineTune]] / 100.0;
         // (measured) a glide plays in 1/128-octave steps: target + ceil(r / step)
         const double gap = glide_ - note_;
         const double played = note_ + (gap < 0 ? -1 : 1) * kGlideStep * std::ceil(std::abs(gap) / kGlideStep - 1e-9);
-        // bend + LFO pitch: added per sample, quantized (PitchMod)
+        // bend + LFO pitch: added per sample, in whole steps (PitchRatio)
         const double base = played + p[kOscKeyShift] + tuneSemis + unisonSemis_;
         const double f1 = NoteHz(base);
         const double osc2Note = (p[kOsc2KbdTrack] ? base : 57.0 + tuneSemis) +
                                 tables::kOsc2PitchSemis[p[kOsc2Pitch]] + tables::kFineCents[p[kOsc2Fine]] / 100.0;
         const double f2 = NoteHz(osc2Note);
         const int t1 = int(std::lround(base + bendSemis)), t2 = int(std::lround(osc2Note + bendSemis));
-        const double bendCents = bendSemis * 100.0, bendRatio = std::exp2(PitchMod(bendCents) / 1200.0);
+        const int bendSteps = int(std::trunc(bendSemis * 100.0 / 9.375));
+        const double bendRatio = std::exp2(9.375 * bendSteps / 1200.0);
         const bool osc1Silent = t1 > 127, osc2Silent = t2 > 127; // (measured) no table above note 127
         const WaveTable &saw1 = tables_->Saw(std::clamp(t1, 0, 127));
         const WaveTable &tri1 = tables_->Triangle(std::clamp(t1, 0, 127));
@@ -391,9 +401,9 @@ private:
             if (r[1] || r[2] || envPitch) {
                 PitchRatio ratioAll, ratio2;
                 for (int i = 0; i < frames; ++i) {
-                    const double lfoAll = r[2] ? pitchCents(r[2], i) : 0.0;
-                    const double mAll = r[2] ? ratioAll(bendCents + lfoAll) : bendRatio;
-                    const double m2 = r[1] ? ratio2(bendCents + lfoAll + pitchCents(r[1], i)) : mAll;
+                    const int lfoAll = r[2] ? pitchSteps(r[2], i) : 0;
+                    const double mAll = r[2] ? ratioAll(bendSteps + lfoAll) : bendRatio;
+                    const double m2 = r[1] ? ratio2(bendSteps + lfoAll + pitchSteps(r[1], i)) : mAll;
                     // (measured) mod env -> osc2 pitch: +-60 semitones at env 1 (not quantized)
                     const double mEnv2 = envPitch ? std::exp2(modEnv_.Next() * modAmt * 60.0 / 12.0) : 1.0;
                     incAs[i] = inc1 * mAll, incBs[i] = inc2 * m2 * mEnv2;
@@ -606,6 +616,7 @@ private:
     // The LFOs (0..2) routed to one destination.
     struct LfoRoute {
         const double *v[2] = {nullptr, nullptr};
+        const int32_t *steps[2] = {nullptr, nullptr}; // pitch steps (pitch routes only)
         int depth[2] = {0, 0};
         double scale[2] = {0, 0}; // depth / 127
         int n = 0;
@@ -639,15 +650,16 @@ private:
     // (measured, measure_porta.py) a glide aims 1.35 % of its starting
     // distance past the target (the curve scales with the interval)
     static constexpr double kGlideStep = 12.0 / 128, kGlideAim = 0.0135; // semitones, x distance
-    // (measured, measure_pitch_mod.py) pitch bend + LFO pitch (cents) play in
-    // 1/128-octave steps, truncated toward 0 (the mod env's pitch does not)
-    static double PitchMod(double cents) { return 9.375 * std::trunc(cents / 9.375); }
-    // exp2(PitchMod(cents) / 1200), recomputed only when the step changes
-    // (the cast truncates like std::trunc, a library call on x64 SSE2)
+    // (measured, measure_pitch_mod.py, measure_lfo_pitch.py) pitch bend and
+    // LFO pitch play in 1/128-octave steps (9.375 cents): the bend truncated
+    // toward 0, each LFO its own steps (Lfo.hpp), added (the mod env's pitch
+    // is not quantized). exp2(steps * 9.375 / 1200), recomputed only when
+    // the step count changes.
     struct PitchRatio {
-        double steps = NAN, ratio = 1;
-        OXO_INLINE double operator()(double cents) {
-            if (const double s = double(int32_t(cents / 9.375)); s != steps) steps = s, ratio = std::exp2(9.375 * s / 1200.0);
+        int steps = INT32_MIN;
+        double ratio = 1;
+        OXO_INLINE double operator()(int s) {
+            if (s != steps) steps = s, ratio = std::exp2(9.375 * s / 1200.0);
             return ratio;
         }
     };
