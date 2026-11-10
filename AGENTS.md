@@ -258,9 +258,18 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   engine CPU with MSVC's; the installer still builds with MSVC; `--bench`
   = also build and run `tools/bench` (CMake target `synth2_bench`, the
   plugin's compiler and options: the scenarios + the bundled Madame Eljay
-  010 scrub), THE way to time the engine on a PC: Rosetta on an M4 shows
-  neither MSVC's code nor a PC's caches / ports, and runs AVX2 2x slower
-  than SSE2). On the mac,
+  010 scrub + `--chords 3`), THE way to time the engine on a PC: Rosetta on
+  an M4 shows neither MSVC's code nor a PC's caches / ports, and runs AVX2
+  2x slower than SSE2). `bin\Release\synth2_bench.exe` has a static CRT:
+  copy it alone to any PC; `synth2_bench.exe --chords [runs]` = 32 voices
+  rotating (unison 4, detune + sub, long release), best / median % of one
+  core. Time on a REAL x86 PC: the UTM VM is ARM64 Windows (QEMU), x64
+  code runs there under Prism emulation (2026-11-10, before d89340c, VM:
+  MSVC 10.6 %, clang-cl 7.7 %). The mac drives the VM with `utmctl` (guest agent):
+  `utmctl exec Windows --cmd cmd.exe /c "x.bat > C:\out.txt 2>&1"` returns
+  no output and does not wait (poll `utmctl file pull Windows C:\out.txt`);
+  `utmctl file push Windows <path> < file`; the VM's clone is
+  `C:\Users\chab\dev\synth2` (synced through GitHub). On the mac,
   `tools/win_check/check.sh` compile-checks the Windows sources with
   mingw-w64 (`brew install mingw-w64`; warnings = errors; the worktree's
   SDK or `VST3SDK=<path>`). `.bat` files are CRLF (`.gitattributes`).

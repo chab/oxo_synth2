@@ -106,11 +106,15 @@ foreach(OXO_BANK IN LISTS OXO_STARTER_BANKS)
 endforeach()
 
 # Engine CPU bench (tools/bench, the mac's program) with the plugin's
-# compiler and options: build_windows.bat --bench.
+# compiler and options: build_windows.bat --bench. Static CRT: the exe runs
+# alone on another PC.
 add_executable(synth2_bench EXCLUDE_FROM_ALL "${OXO_ROOT}/tools/bench/main.cpp")
 target_compile_features(synth2_bench PRIVATE cxx_std_20)
 target_compile_definitions(synth2_bench PRIVATE NOMINMAX _USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS)
 target_compile_options(synth2_bench PRIVATE /EHsc /fp:precise /utf-8)
+get_target_property(OXO_BENCH_OPTIONS synth2_bench COMPILE_OPTIONS) # the SDK's directory-wide /MD out
+list(REMOVE_ITEM OXO_BENCH_OPTIONS "$<$<CONFIG:Debug>:/MDd>" "$<$<CONFIG:Release>:/MD>")
+set_target_properties(synth2_bench PROPERTIES COMPILE_OPTIONS "${OXO_BENCH_OPTIONS}" MSVC_RUNTIME_LIBRARY "MultiThreaded")
 
 add_executable(synth2_storage_tests Tests/StorageSelectionTests.cpp)
 target_compile_features(synth2_storage_tests PRIVATE cxx_std_20)

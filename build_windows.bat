@@ -8,9 +8,11 @@ rem Compiler for Windows" + "MSBuild support for LLVM (clang-cl) toolset")
 rem instead of MSVC, into Windows_Build\build-clang (to compare the engine's
 rem CPU load with the MSVC build's).
 rem --bench: also builds and runs the engine CPU bench (tools\bench, the
-rem plugin's compiler and options): realtime factors for a few scenarios and
-rem a keyboard scrub of the bundled Madame Eljay 010 patch, one core. Run it
-rem with and without --clang, on a quiet machine.
+rem plugin's compiler and options): realtime factors for a few scenarios, a
+rem keyboard scrub of the bundled Madame Eljay 010 patch and the "chords"
+rem load (32 voices rotating), one core. Run it with and without --clang, on
+rem a quiet machine. The exe (bin\Release\synth2_bench.exe, static CRT) also
+rem runs alone on another PC: synth2_bench.exe --chords [runs].
 rem Needs Visual Studio 2022 or later (workload "Desktop development with
 rem C++") and the submodules: git submodule update --init --recursive
 rem CMake: %CMAKE% if set, else cmake on PATH, else the one bundled with Visual
@@ -70,6 +72,7 @@ set "BENCHEXE=%BUILD%\bin\Release\synth2_bench.exe"
 if not exist "%BENCHEXE%" (set "REASON=Bench not built" & goto fail)
 "%BENCHEXE%"
 "%BENCHEXE%" "%~dp0Shared\Resources\Synth2 Starter Banks\Madame Eljay\010.sy1"
+"%BENCHEXE%" --chords 3
 
 :built
 echo.

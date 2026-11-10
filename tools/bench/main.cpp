@@ -9,13 +9,17 @@
 //   ./build/bench --job x.sy1 /tmp/scrub.wav > /tmp/scrub.txt
 //   S1REF_TIME=1 build/s1ref/s1ref batch /tmp/scrub.txt   (the original)
 //   ./build/bench /tmp/scrub.txt                          (ours: any job file)
+// --chords [runs]: only the chords load (below), 7 runs by default, best and
+// median: compares the MSVC and --clang builds of synth2_bench.exe.
 #include "../../EngineCore/Jobs.hpp"
 #include "../../EngineCore/Sy1Codec.hpp"
 #include "../../EngineCore/Synth.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <vector>
@@ -99,6 +103,42 @@ static void Scrub(const char *path) {
     std::printf("  scrub %-22s x%.1f realtime (%.1f voices)\n", patch.name.c_str(), 10.0 / cpu, double(voices) / blocks);
 }
 
+// A DAW-like load: init patch + osc1 detune and sub at 50, unison 4 voices,
+// polyphony 32, long amp release; 6 four-note chords, a new one every 0.5 s
+// (held 0.4 s), round and round: a chord takes 16 voices, the releasing ones
+// fill the other 16, steals rotate over the 32. Prints each run's realtime
+// factor and its load in % of one core (what a DAW meter shows, roughly).
+static double Chords(double seconds) {
+    static constexpr int kChords[6][4] = {{48, 52, 55, 59}, {45, 48, 52, 55}, {41, 45, 48, 52},
+                                          {43, 47, 50, 53}, {40, 43, 47, 50}, {38, 41, 45, 48}};
+    PatchValues p = DefaultValues();
+    p[kOsc1Detune] = 50, p[kSubGain] = 50, p[kUnisonOn] = 1, p[kUnisonVoices] = 4, p[kPolyphony] = 32;
+    p[kAmpRelease] = 100;
+    Synth s;
+    s.SetSampleRate(44100);
+    s.SetPatch(p);
+    std::vector<float> l(kScrubBlock), r(kScrubBlock);
+    const int blocks = int(44100 * seconds / kScrubBlock), step = 44100 / 2 / kScrubBlock, hold = step * 4 / 5;
+    int voices = 0;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int b = 0; b < blocks; ++b) {
+        const int *chord = kChords[b / step % 6];
+        if (b % step == 0)
+            for (int k = 0; k < 4; ++k) s.NoteOn(chord[k], 100);
+        if (b % step == hold)
+            for (int k = 0; k < 4; ++k) s.NoteOff(chord[k]);
+        s.BeginBlock(kScrubBlock);
+        s.Render(l.data(), r.data(), kScrubBlock);
+        const uint64_t st = s.VoiceStates();
+        voices += std::popcount((st | st >> 1) & 0x5555555555555555ull);
+    }
+    const double cpu = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    const double audio = double(blocks) * kScrubBlock / 44100;
+    std::printf("  chords  x%.2f realtime, %.2f %% of one core (%.1f voices)\n", audio / cpu, 100 * cpu / audio,
+                double(voices) / blocks);
+    return cpu / audio;
+}
+
 int main(int argc, char **argv) {
     if (argc == 4 && std::string(argv[1]) == "--job") return PrintScrubJob(argv[2], argv[3]), 0;
 #if defined(__clang__)
@@ -106,6 +146,15 @@ int main(int argc, char **argv) {
 #elif defined(_MSC_VER)
     std::printf("compiler: MSVC %d\n", _MSC_FULL_VER);
 #endif
+    if (argc >= 2 && std::string(argv[1]) == "--chords") {
+        const int runs = argc > 2 ? std::max(1, std::atoi(argv[2])) : 7;
+        std::vector<double> load;
+        for (int i = 0; i < runs; ++i) load.push_back(Chords(20));
+        std::sort(load.begin(), load.end());
+        std::printf("chords: best %.2f %%, median %.2f %% of one core (%d runs x 20 s)\n", 100 * load.front(),
+                    100 * load[load.size() / 2], runs);
+        return 0;
+    }
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a.size() > 4 && a.substr(a.size() - 4) == ".sy1") Scrub(argv[i]);
@@ -126,4 +175,5 @@ int main(int argc, char **argv) {
     Run("detune + sub + LP12", with({{kFilterType, 0}, {kOsc1Detune, 40}, {kSubGain, 60}}));
     Run("LPDL + filter env", with({{kFilterType, 4}, {kFilterRes, 100}}));
     Run("all fx on", with({{kEffectOn, 1}, {kDelayOn, 1}, {kChorusOn, 1}, {kEqLevel, 90}}));
+    Chords(10);
 }
