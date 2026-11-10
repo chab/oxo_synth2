@@ -10,6 +10,7 @@
 //   triangle peak +1 at phase 0.25
 // Pulse = (saw(p) - saw(p + d)) / 2, sine is computed.
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -42,22 +43,50 @@ inline void InverseRealFft(std::vector<std::complex<double>> &a) {
     }
 }
 
-struct WaveTable {
-    uint32_t size = 0; // power of two
-    uint32_t mask = 0;
-    std::vector<float> data; // size + 3 guard samples for cubic reads
+// An oscillator phase as a 64-bit fixed-point fraction of a cycle: it wraps
+// for free (the detune copies' phases).
+using Phase64 = uint64_t;
+// cycles taken mod 1 (negative steps included)
+inline Phase64 ToPhase64(double cycles) {
+    const double f = cycles >= 0.0 && cycles < 1.0 ? cycles : cycles - std::floor(cycles);
+    return Phase64(int64_t(std::min(f, 0x1.fffffffffffffp-1) * 0x1p63)) << 1;
+}
+inline double FromPhase64(Phase64 ph) { return double(int64_t(ph >> 11)) * 0x1p-53; }
 
-    // phase in [0, 1); 4-point Hermite interpolation.
+struct WaveTable {
+    // 4-point Hermite interpolation of the samples, its cubic stored per point
+    // (one load per read: the detune copies' reads cost half as much)
+    struct Cubic {
+        float c0, c1, c2, c3;
+    };
+    uint32_t size = 0; // power of two
+    uint32_t bits = 0; // log2(size)
+    std::vector<Cubic> cubic; // size + 1 (a phase of exactly 1 reads point 0 again)
+
+    // phase in [0, 1]
     float Read(double phase) const {
         const double pos = phase * size;
         const uint32_t i = uint32_t(pos);
-        const float f = float(pos - i);
-        const float xm1 = data[(i + size - 1) & mask], x0 = data[i & mask];
-        const float x1 = data[(i + 1) & mask], x2 = data[(i + 2) & mask];
-        const float c1 = 0.5f * (x1 - xm1);
-        const float c2 = xm1 - 2.5f * x0 + 2.0f * x1 - 0.5f * x2;
-        const float c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
-        return ((c3 * f + c2) * f + c1) * f + x0;
+        return Eval(i, float(pos - i));
+    }
+    float Read(Phase64 phase) const {
+        return Eval(uint32_t(phase >> (64 - bits)), float(uint32_t((phase << bits) >> 40)) * 0x1p-24f);
+    }
+
+    void SetSamples(const std::vector<float> &x) {
+        size = uint32_t(x.size());
+        for (bits = 0; (1u << bits) < size; ++bits) {}
+        cubic.resize(size + 1);
+        for (uint32_t i = 0; i <= size; ++i) {
+            const float xm1 = x[(i + size - 1) % size], x0 = x[i % size], x1 = x[(i + 1) % size], x2 = x[(i + 2) % size];
+            cubic[i] = {x0, 0.5f * (x1 - xm1), xm1 - 2.5f * x0 + 2.0f * x1 - 0.5f * x2, 0.5f * (x2 - xm1) + 1.5f * (x0 - x1)};
+        }
+    }
+
+private:
+    float Eval(uint32_t i, float f) const {
+        const Cubic &c = cubic[i];
+        return ((c.c3 * f + c.c2) * f + c.c1) * f + c.c0;
     }
 };
 
@@ -103,11 +132,10 @@ private:
             spec[size - h] = std::complex<double>(0, a / 2);
         }
         InverseRealFft(spec);
+        std::vector<float> x(size);
+        for (uint32_t i = 0; i < size; ++i) x[i] = float(spec[i].real());
         WaveTable t;
-        t.size = size;
-        t.mask = size - 1;
-        t.data.resize(size + 3);
-        for (uint32_t i = 0; i < size + 3; ++i) t.data[i] = float(spec[i % size].real());
+        t.SetSamples(x);
         return t;
     }
 

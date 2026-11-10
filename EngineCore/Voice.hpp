@@ -46,6 +46,16 @@ inline constexpr double kDetuneOffsets[kDetuneOscs] = {-7, -5, -3, -1, 1, 3, 5, 
 
 inline double NoteHz(double note) { return 440.0 * std::exp2((note - 69.0) / 12.0); }
 
+// sin(2 pi ph) for ph in [0, 1]: folded to a quarter wave, Taylor to x^11
+// (|error| < 6e-8 = -145 dB; std::sin costs several times more per detune
+// copy).
+inline double Sin2Pi(double ph) {
+    const double x = ph - 0.5, a = std::fabs(x), r = 2 * M_PI * std::min(a, 0.5 - a), r2 = r * r;
+    double s = -1.0 / 39916800.0;
+    for (const double c : {1.0 / 362880.0, -1.0 / 5040.0, 1.0 / 120.0, -1.0 / 6.0, 1.0}) s = s * r2 + c;
+    return std::copysign(s * r, -x);
+}
+
 class Voice {
 public:
     void Prepare(double sampleRate) {
@@ -60,7 +70,10 @@ public:
     void InitSlot(int slot) {
         osc1Phase_ = tables::kSlotOsc1Phase[slot % 32];
         osc2Phase_ = tables::kSlotOsc2Phase[slot % 32];
-        for (int i = 0; i < kDetuneOscs; ++i) detunePhase_[i] = tables::kSlotCopyPhase[(slot % 32) * kDetuneOscs + i];
+        // (a phase of 1.0 in the table stays just below 1: the sub copies
+        // start at half of it, 0.5, not 0)
+        for (int i = 0; i < kDetuneOscs; ++i)
+            detunePhase_[i] = ToPhase64(std::min(double(tables::kSlotCopyPhase[(slot % 32) * kDetuneOscs + i]), 0x1.fffffffffffffp-1));
     }
 
     // glide: portamento from this voice's own last pitch (measured).
@@ -105,14 +118,14 @@ public:
             // (measured) copy i starts kCopyPhaseDeg[i] * (v - 1) / 126 after osc1
             static constexpr double kCopyPhaseDeg[kDetuneOscs] = {321, 172, 291, 202, 0, 69, 210, 126};
             for (int i = 0; i < kDetuneOscs; ++i)
-                detunePhase_[i] = Wrap(osc1Phase_ + kCopyPhaseDeg[i] / 360.0 * (p[kOscPhase] - 1) / 126.0);
+                detunePhase_[i] = ToPhase64(osc1Phase_ + kCopyPhaseDeg[i] / 360.0 * (p[kOscPhase] - 1) / 126.0);
         }
         // (measured) the sub runs phase-locked to osc1: its harmonic at osc1's
         // pitch is in phase with osc1's fundamental.
         if (relockSub || p[kOscPhase] > 0) {
             const double subRatio = p[kSubOctave] ? 0.5 : 1.0;
             subPhase_ = osc1Phase_ * subRatio;
-            for (int i = 0; i < kDetuneOscs; ++i) subDetunePhase_[i] = detunePhase_[i] * subRatio;
+            for (int i = 0; i < kDetuneOscs; ++i) subDetunePhase_[i] = p[kSubOctave] ? detunePhase_[i] >> 1 : detunePhase_[i];
         }
     }
 
@@ -259,22 +272,38 @@ private:
                                std::pow(10.0, -15.0 * (p[kAmpVelSens] / 64.0) * (127 - velocity_) / 126.0 / 20.0);
 
         double curWidth = width;
-        auto shape1At = [&](double ph) -> double {
+        Phase64 curWidth64 = 0;
+        // acc + the shape at each of the n phases (double: osc1 / sub, Phase64:
+        // the detune copies), summed in order; the shape switch outside the
+        // loop keeps the copies' loop tight
+        auto osc1Sum = [&](double acc, const auto *ph, int n) {
             switch (shape1) {
-            case 0: return std::sin(2 * M_PI * ph);
-            case 1: return saw1.Read(ph);
-            case 2: return 0.5 * (saw1.Read(ph) - saw1.Read(Wrap(ph + curWidth)));
-            default: return tri1.Read(ph);
+            case 0: for (int d = 0; d < n; ++d) acc += Sin2Pi(Cycles(ph[d])); break;
+            case 1: for (int d = 0; d < n; ++d) acc += saw1.Read(ph[d]); break;
+            case 2:
+                for (int d = 0; d < n; ++d) acc += 0.5 * (saw1.Read(ph[d]) - saw1.Read(Advance(ph[d], curWidth, curWidth64)));
+                break;
+            default: for (int d = 0; d < n; ++d) acc += tri1.Read(ph[d]); break;
             }
+            return acc;
         };
-        auto subAt = [&](double ph) -> double {
+        auto subSum = [&](double acc, const auto *ph, int n) {
             switch (subShape) {
-            case 0: return std::sin(2 * M_PI * ph);
-            case 1: return triSub.Read(ph);
-            case 2: return sawSub.Read(ph);
-            default: return 0.5 * (sawSub.Read(ph) - sawSub.Read(Wrap(ph + 0.5)));
+            case 0: for (int d = 0; d < n; ++d) acc += Sin2Pi(Cycles(ph[d])); break;
+            case 1: for (int d = 0; d < n; ++d) acc += triSub.Read(ph[d]); break;
+            case 2: for (int d = 0; d < n; ++d) acc += sawSub.Read(ph[d]); break;
+            default:
+                for (int d = 0; d < n; ++d) acc += 0.5 * (sawSub.Read(ph[d]) - sawSub.Read(Advance(ph[d], 0.5, Phase64(1) << 63)));
+                break;
             }
+            return acc;
         };
+        // the copies' step ratios in Phase64 units / 2 (see the phase update)
+        double copyScale[kDetuneOscs], subCopyScale[kDetuneOscs];
+        for (int d = 0; d < kDetuneOscs; ++d)
+            copyScale[d] = detuneRatio[d] * 0x1p63, subCopyScale[d] = subRatio * detuneRatio[d] * 0x1p63;
+        // copyScale <= 2^63 * 2^(140 / 1200): |step| below this stays under one cycle
+        static constexpr double kFastStepLimit = 0.9;
 
         // (measured, key-synced square LFO: measure_lfo_keysync.py /
         // measure_lfo_cutoff.py) cutoff, amp and pan are UNIPOLAR, u =
@@ -296,12 +325,13 @@ private:
             panR *= std::min(1.0, 1.0 + q);
         }
 
+        PitchRatio ratioAll, ratio2;
         for (int i = 0; i < frames; ++i) {
             // ---- per-sample modulation ----
             const double me = modOn ? modEnv_.Next() * modAmt : 0.0;
             const double lfoAll = r[2] ? pitchCents(r[2], i) : 0.0;
-            const double mAll = r[2] ? std::exp2(PitchMod(bendCents + lfoAll) / 1200.0) : bendRatio;
-            const double m2 = r[1] ? std::exp2(PitchMod(bendCents + lfoAll + pitchCents(r[1], i)) / 1200.0) : mAll;
+            const double mAll = r[2] ? ratioAll(bendCents + lfoAll) : bendRatio;
+            const double m2 = r[1] ? ratio2(bendCents + lfoAll + pitchCents(r[1], i)) : mAll;
             // (measured) mod env -> osc2 pitch: +-60 semitones at env 1 (not quantized)
             const double mEnv2 = (modOn && modDest == 0) ? std::exp2(me * 60.0 / 12.0) : 1.0;
             const double incA = inc1 * mAll, incB = inc2 * m2 * mEnv2;
@@ -339,6 +369,7 @@ private:
                 fmB = tables::kFmBeta[j] + (tables::kFmBeta[j + 1] - tables::kFmBeta[j]) * (k - j);
             }
             curWidth = w;
+            if (detuneOn && shape1 == 2) curWidth64 = ToPhase64(w);
             // ---- osc2 ----
             double o2 = 0;
             switch (shape2) {
@@ -359,15 +390,20 @@ private:
             // per sample (beta x key 60 at 44.1 kHz): the index falls an octave
             // up, rises with the sample rate
             const double fm = 1.0 + fmB * o2 * (kFmRefInc / incA);
-            double o1 = shape1At(osc1Phase_);
-            double sub = subOn ? subAt(subPhase_) : 0.0;
+            double o1 = osc1Sum(0.0, &osc1Phase_, 1);
+            double sub = subOn ? subSum(0.0, &subPhase_, 1) : 0.0;
             if (detuneOn) {
-                double acc = o1, subAcc = sub;
-                for (int d = 0; d < kDetuneOscs; ++d) {
-                    acc += shape1At(detunePhase_[d]);
-                    if (subOn) subAcc += subAt(subDetunePhase_[d]);
-                    detunePhase_[d] = Wrap(detunePhase_[d] + incA * detuneRatio[d] * fm);
-                    subDetunePhase_[d] = Wrap(subDetunePhase_[d] + incA * subRatio * detuneRatio[d] * fm);
+                const double acc = osc1Sum(o1, detunePhase_.data(), kDetuneOscs);
+                const double subAcc = subOn ? subSum(sub, subDetunePhase_.data(), kDetuneOscs) : sub;
+                // a step under one cycle either way converts directly (two's
+                // complement = mod 1); a vectorizable loop
+                const double step = incA * fm;
+                if (std::fabs(step) < kFastStepLimit) {
+                    for (int d = 0; d < kDetuneOscs; ++d) detunePhase_[d] += Phase64(int64_t(step * copyScale[d])) << 1;
+                    for (int d = 0; d < kDetuneOscs; ++d) subDetunePhase_[d] += Phase64(int64_t(step * subCopyScale[d])) << 1;
+                } else {
+                    for (int d = 0; d < kDetuneOscs; ++d) detunePhase_[d] += ToPhase64(step * detuneRatio[d]);
+                    for (int d = 0; d < kDetuneOscs; ++d) subDetunePhase_[d] += ToPhase64(step * subRatio * detuneRatio[d]);
                 }
                 o1 = acc * detuneGain;
                 // (measured, measure_ring_detune.py) ring on: the sub copies
@@ -442,13 +478,28 @@ private:
         double Unipolar(int i) const { return Sum(i, [](double x) { return 0.5 * (x + 1.0); }); }
     };
 
-    static double Wrap(double ph) { return ph - std::floor(ph); }
+    // ph - floor(ph); the floor (a library call on x64 without SSE4.1) only
+    // when ph is out of [0, 1)
+    static double Wrap(double ph) { return ph >= 0.0 && ph < 1.0 ? ph : ph - std::floor(ph); }
+    // the same phase helpers for both phase types
+    static double Cycles(double ph) { return ph; }
+    static double Cycles(Phase64 ph) { return FromPhase64(ph); }
+    static double Advance(double ph, double by, Phase64) { return Wrap(ph + by); }
+    static Phase64 Advance(Phase64 ph, double, Phase64 by) { return ph + by; }
     // (measured, measure_porta.py) a glide aims 1.35 % of its starting
     // distance past the target (the curve scales with the interval)
     static constexpr double kGlideStep = 12.0 / 128, kGlideAim = 0.0135; // semitones, x distance
     // (measured, measure_pitch_mod.py) pitch bend + LFO pitch (cents) play in
     // 1/128-octave steps, truncated toward 0 (the mod env's pitch does not)
     static double PitchMod(double cents) { return 9.375 * std::trunc(cents / 9.375); }
+    // exp2(PitchMod(cents) / 1200), recomputed only when the step changes
+    struct PitchRatio {
+        double steps = NAN, ratio = 1;
+        double operator()(double cents) {
+            if (const double s = std::trunc(cents / 9.375); s != steps) steps = s, ratio = std::exp2(9.375 * s / 1200.0);
+            return ratio;
+        }
+    };
 
     void SetNote(int note, bool glide) {
         note_ = note;
@@ -471,7 +522,7 @@ private:
     uint64_t age_ = 0;
     bool gate_ = false;
     double osc1Phase_ = 0, osc2Phase_ = 0, subPhase_ = 0;
-    std::array<double, kDetuneOscs> detunePhase_{}, subDetunePhase_{};
+    std::array<Phase64, kDetuneOscs> detunePhase_{}, subDetunePhase_{};
     uint32_t noise_ = kNoiseSeed;
     bool tail_ = false; // envelope done, running silent to the block boundary
 };
