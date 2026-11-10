@@ -571,6 +571,31 @@ final class SynthModel: ObservableObject {
         return true
     }
 
+    /// The bank the write dialog proposes for a patch out of a read-only bank
+    /// (EngineCore kUserBankName: a new library's first bank).
+    static let userBankName = "User"
+    /// Slots per bank (EngineCore kBankSlots).
+    static let bankSlots = 128
+    static let bankFullMessage = "Bank is full (128 patches): cannot add a patch"
+
+    /// The library's own "User" bank, nil when the user deleted it.
+    var userBank: Int? {
+        banks.firstIndex { !$0.readOnly && $0.name == Self.userBankName }
+    }
+
+    /// Write into a bank that does not exist yet (the write dialog's
+    /// proposed "User" bank): the folder is made by the write, not before.
+    @discardableResult
+    func write(newBank bankName: String, slot: Int, name: String) -> Bool {
+        let i = host.newBank(bankName)
+        loadLibrary()
+        guard i >= 0, i < banks.count else {
+            flash("write failed")
+            return false
+        }
+        return write(bank: i, slot: slot, name: name)
+    }
+
     /// Alt-click on write: the current sound straight back into the loaded
     /// program (same name), no dialog. False = no loaded program, or it is
     /// in the read-only factory bank.
@@ -641,7 +666,7 @@ final class SynthModel: ObservableObject {
         loadLibrary()
         switch s {
         case 0...: flash(String(format: "copied to %@ %03d", target, s + 1), seconds: 3)
-        case -1: flash("Bank is full (128 patches): cannot add a patch", seconds: 5)
+        case -1: flash(Self.bankFullMessage, seconds: 5)
         default: flash("copy failed")
         }
     }

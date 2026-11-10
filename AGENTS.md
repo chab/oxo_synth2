@@ -64,8 +64,12 @@ Synth2"; iPad (iOS 17, iPad only) app `com.oxo.music.oxosynth2`, appex
 `group.com.oxo.music.oxosynth2`. The panel title reads "Synth2".
 Per-user settings: mac `~/Library/Application Support/Oxo Music/Oxo Synth2`
 (`midi_mappings.json`, `themes.json`, `settings.json`), iPad the appex's
-container. Bank library: mac `~/Music/Oxo Music/Oxo Synth2`, iPad `<app
-group>/Synth2`.
+container, Windows `%APPDATA%\Oxo Music\Oxo Synth2` (+
+`preset_index.bin`, theme files `Themes\*.json`: one flat hex map each,
+listed after the saved themes, never written). Bank library: mac `~/Music/Oxo Music/Oxo Synth2`, iPad
+`<app group>/Synth2`, Windows `Documents\Oxo Music\Oxo Synth2`. Windows
+portable mode: a `Synth2_Data` folder next to the `.vst3` bundle holds all
+of it (banks in `Synth2_Data\Presets`).
 VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
 + the two plists' AudioComponents integer `version` (by hand, 65536 = 1.0).
 
@@ -84,7 +88,12 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
 - `EditorCore/` portable editor services: `OxoSynth2Bridge.h` (C hooks
   between C++ and the Swift editor), `SynthEditorCore.hpp` (base of the
   VST3 controller and the AUv3 instance), `State.hpp` (state chunk),
-  `Storage.hpp` (per-user files, mac library / factory paths), `Trash.hpp`.
+  `Storage.hpp` (per-user files, mac library / factory paths), `Trash.hpp`,
+  `Json.hpp` (small strict JSON reader), `Themes.hpp` (the C++ mirror of
+  `Shared/SynthTheme.swift` for C++ editors: 13 keys, factory themes,
+  lenient hex map, `stateText`, the `themes.json` store;
+  `EngineCoreTests/ThemesTests.cpp` PARSES the Swift file, so a key or a
+  factory theme changed on one side only fails the tests).
 - `EngineCoreTests/` — `make -C EngineCoreTests test`.
 - `OxoSynth2VST3/` — processor / controller / entry / editor view, CMake
   (SDK + AUv2 wrapper with the hidden-param auwrapper.mm patch, Swift
@@ -137,8 +146,22 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   the tables' sources). `reference/renders/` + `reference/derived/`
   (download, README "Reference data") and `reference/presets/` are
   gitignored.
-- `docs/images/` — README pictures (`synth2_preview.png` = a copy of the
-  site's gallery_2).
+- `Windows_Build/` — Windows x64 VST3 port (contributed, PR #3): CMake
+  project (parses `Identity.xcconfig` like the mac one, vendored zlib
+  1.3.1 = byte-identical upstream), `Source/` = native Win32 / GDI+ editor
+  (`WindowsEditor.cpp`: the SwiftUI panel's layout redrawn; static layer
+  cached in a bitmap, dynamic parts redrawn in the invalid rect only,
+  `TextCache` for outlines, parameter values polled like SynthModel),
+  `WindowsThemeEditor.hpp` (ThemeDialog as a window), `WindowsModule.hpp`
+  (window classes on OUR module, unregistered with the last window),
+  `WindowsTrash.cpp` (Recycle Bin; false where Windows cannot recycle),
+  `WindowsStorage.hpp` / `StorageSelection.hpp` (folders, portable mode),
+  `WindowsPresetIndex.hpp` (bank index cache, rescanned in the background
+  on every editor / browser open), zoom, `WindowsPrompt.hpp`. The browser
+  is the mac's (no favourites: removed), incl. drag and drop.
+  Windows-only code in shared files stays under `#if defined(_WIN32)` /
+  `SMTG_OS_WINDOWS`.
+- `docs/images/` — README pictures (`synth2_preview.jpg`).
 - `third_party/` — submodules `vst3sdk` v3.8.1_build_84 (MIT) +
   `AudioUnitSDK` 1.4.0 (Apache 2.0); remaining patches: hidden-param
   auwrapper + AudioUnitSDK deployment target.
@@ -157,9 +180,42 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   compact comma style). Then `tools/au_harness`.
 - `make -C EngineCoreTests test`, `make -C tools/s2render`, CPU bench
   `clang++ -std=c++20 -O2 tools/bench/main.cpp -o build/bench && ./build/bench`
-  (16 voices, one core: LP12 x80, LP24 x70, LPDL x34, detune+sub x22, all
-  fx x60 realtime), `make -C tools/s1ref` (x86_64, needs the original AU).
+  (16 voices, one core, Apple M: LP12 x80, LP24 x70, LPDL x34, detune+sub
+  x40, all fx x60 realtime; `./build/bench <x.sy1>...` = a keyboard scrub,
+  ~31 voices: Madame Eljay 010 x20, the heaviest case reported, Synth1
+  ~4x lighter), `make -C tools/s1ref` (x86_64, needs the original AU).
+  ENGINE CPU CONTRACTS: wave tables store each point's Hermite cubic (one
+  load per read, 11 MB at 44.1 kHz shared per process); osc1's detune
+  copies use 64-bit fixed-point phases (`Phase64`, free wrap), their sines
+  in float into a member scratch array (vectorizes); `Voice::Wrap` calls
+  floor only out of range (a library call on x64 SSE2). Keep the voice in
+  ONE per-sample loop: splitting the filter into its own pass made it
+  latency-bound (slower everywhere). Engine changes: render every factory /
+  starter patch before / after and compare (expected <= -120 dB).
 - Python: `.venv` (numpy, scipy) for `tools/s1ref` scripts.
+- WINDOWS: `build_windows.bat [--no-pause]` on Windows (Visual Studio 2022+
+  C++ workload; CMake from `%CMAKE%`, PATH or VS's own; generator = CMake's
+  default or `CMAKE_GENERATOR`) → `Windows_Build\build\VST3\Release\
+  OxoSynth2.vst3` + storage tests, installs nothing. On the mac,
+  `tools/win_check/check.sh` compile-checks the Windows sources with
+  mingw-w64 (`brew install mingw-w64`; warnings = errors; the worktree's
+  SDK or `VST3SDK=<path>`). `.bat` files are CRLF (`.gitattributes`).
+- WINDOWS INSTALLER: `tools\prepare_win_installer.bat [--skip-build]
+  [--skip-validator] [--dynamic-crt] [--no-pause]` IN THE VM (+ Inno Setup
+  6.3+, `winget install JRSoftware.InnoSetup`) →
+  `dist\win\<Product>-<ver>-<build>-Windows-x64.{exe,zip}` (zip = exe +
+  `tools/win_installer/README.pdf` (SmartScreen walkthrough) + the raw
+  bundle). Own build dir `Windows_Build\build-dist`, STATIC CRT (/MT, no
+  VC++ redist; checked with dumpbin). Validator runs on the staged bundle
+  in PORTABLE mode (temporary `stage\Synth2_Data`), so the dev's library
+  stays out. Installer `tools/win_installer/synth2.iss`: elevated, fixed
+  `{commoncf64}\VST3\<bundle>` (no dir page), AppId = `<OXO_BUNDLE_ID>.vst3`
+  (never change), wipes the bundle's `Contents` before copying (mirror) +
+  our bundle from the other VST3 folders (stale copies), never touches
+  `Synth2_Data` or user folders, `CloseApplications=no` (never kill a DAW).
+  Identity / version from `Identity.xcconfig` (+ local), passed as `/D`.
+  Signing optional, env `OXO_WIN_SIGN_SHA1` or `OXO_WIN_SIGN_PFX` (+
+  `_PASSWORD`), `OXO_WIN_SIGN_TIMESTAMP_URL`; dll signed, then the exe.
 - MAC INSTALLER: `tools/prepare_mac_installer [--skip-build]
   [--skip-notarize]` → `dist/mac/OxoSynth2-<ver>-<build>-macOS.{pkg,dmg}`
   (gitignored). Components `auv2` + `vst3` (pkg ids
@@ -172,14 +228,23 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   notarization is the default. Under a sandbox `pkgbuild` prints `write:
   Permission denied` lines but succeeds. While testing the pkg, remove the
   ~/Library dev copies (same UIDs twice).
-- UPDATE CHECK (mac): menu > "Check for updates…" fetches
-  `https://<OXO_VENDOR_WEBSITE>/releases.json` (`{ products: { <slug>: {
-  page, mac: { version, build, url }, win: … } } }`), looks up
-  `OXO_UPDATE_PRODUCT` (empty = no menu entry: forks, iPad, tools) +
-  `mac`, compares with CFBundleShortVersionString / CFBundleVersion: newer
-  = higher BUILD only (the version is only shown), absent entry = latest.
-  In-panel `UpdateDialog`. Releasing an official mac build = bump
-  `oxo_synth2: mac:` in the oxo-music.com site's `config/releases.yml`.
+- UPDATE CHECK (mac + Windows): menu > "Check for updates…" (after a
+  divider) fetches `https://<OXO_VENDOR_WEBSITE>/releases.json` (`{
+  products: { <slug>: { page, mac: { version, build, url }, win: … } } }`),
+  looks up `OXO_UPDATE_PRODUCT` (empty = no menu entry: forks, iPad, tools)
+  + its platform (`mac` / `win`), compares with this build: newer = higher
+  BUILD only (the version is only shown), absent entry = latest. Mac: Swift
+  `UpdateCheck` (CFBundleShortVersionString / CFBundleVersion), in-panel
+  `UpdateDialog`. Windows: `EditorCore/UpdateCheck.hpp` (same rules and
+  texts, `UpdateCheckTests` compares them with the Swift file) +
+  `Windows_Build/Source/WindowsHttp.hpp` (WinHTTP GET on a worker that
+  closing the editor cancels and joins: no thread outlives the plugin), LCD
+  "Checking…", then a message box ("Open the download page?").
+  RELEASES: one version line for every platform (Identity.xcconfig; one
+  build number = one commit, tag it, never reused); releasing a platform =
+  set THAT platform's entry (`oxo_synth2: mac:` / `win:`) in the
+  oxo-music.com site's `config/releases.yml`, leave the others: platforms
+  may sit on different builds, each check reads only its own entry.
 
 ## Parameters and state
 
@@ -293,7 +358,12 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   bank…" (the only in-app way to make one); writes `NNN.sy1` (replaces a
   differently named file that held the slot), "Overwrite NNN" when
   occupied; default target = the loaded slot if writing back into its
-  bank, else the first empty slot.
+  bank, else the first empty slot. Default BANK = the loaded program's if
+  writable; out of a read-only bank (factory) or no bank: "User"
+  (`kUserBankName`, the new library's bank). Deleted? The dialog still
+  lists "--:User  new" last (all slots free) and the write makes the
+  folder (`newBank` then write; Swift `write(newBank:)`, Windows
+  `kNewUserBank`). Snapshot modes `write-factory`, `write-new-user`.
 - MOVE (browser drag and drop): renames every patch of the bank to its
   `NNN.sy1` in two phases (hidden temp names), an occupied target swaps.
   The browser stays on the bank it shows (so does a rescan landing; only
@@ -302,9 +372,17 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   `PatchManager::Copy` → byte copy into the bank's first free slot as
   `NNN.sy1` (its own bank = a duplicate); hook `copyPatch` → slot, -1 =
   full (LCD: "Bank is full (128 patches): cannot add a patch"), -2 =
-  refused. The browser stays on the source bank (favorites workflow).
+  refused. The browser stays on the source bank (favorites workflow). A
+  FULL bank refuses the drop up front: forbidden cursor (mac `.forbidden` +
+  `NSCursor.operationNotAllowed`, Windows IDC_NO), no highlight, the full
+  message on the LCD when the drag enters it.
   Factory patches are draggable for copying only (no move / drop inside
-  the factory bank, never a copy into it).
+  the factory bank, never a copy into it). Windows: the same in its own
+  window (`dragMove` / `dragEnd`: a patch click acts on RELEASE so a press
+  can become a drag past SM_CXDRAG; label under the pointer; cursors =
+  arrow for a move, arrow + "+" (`makeCopyCursor`, drawn: no stock one) for
+  a copy, IDC_NO elsewhere; Esc / capture loss cancel; indices found again
+  by bank source at the drop).
 - DELETE (`PatchManager::DeleteBank`, hook `deleteBank`; patches: Swift
   `deleteSlot`): mac moves to the Trash, iPad deletes (`Trash.hpp` returns
   false on iOS: a container Trash nobody can empty). A bank = its folder,
@@ -318,8 +396,10 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   multiple) / Refresh / Close. Rescans on every open. Bank / slot menu
   (`libraryMenu`): mac right click = [Export bank…,] Show in Finder[,
   Delete / Delete bank…]; iPad long press = [Export bank…,] [Delete /
-  Delete bank…] (no delete on the factory bank). Rename banks = Finder
-  (mac only).
+  Delete bank…] (no delete on the factory bank); Windows right click = the
+  mac's menu with "Show in Explorer" (`showLibraryMenu`; bank delete =
+  MessageBox confirmation, Recycle Bin). Rename banks =
+  Finder (mac only).
 - SCAN SPEED (measured on 150 banks x 128 = 19,200 .sy1): `PatchNameCache`
   (process-wide, path + size + mtime) → only new / changed files are
   opened for their name (rescan 60 ms vs 0.5–1.5 s uncached);
@@ -372,7 +452,10 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   defaults).
 - Bottom LCD: line 1 "NNN:name" (click = browser) + ◀ ▶ (next / previous
   NON-EMPTY slot, rolls over banks), line 2 = bank "NN:name" or a 1.5 s
-  readout ("filter freq: 64", learn / library messages). write = write
+  readout ("filter freq: 64", learn / library messages). Windows: the
+  same (`WindowsEditor::show` / `flash`: panel edits only, learn, write,
+  delete, export, import, all notes off, the library notice 10 s, worded
+  "Recycle Bin"). write = write
   dialog; menu = Initialize patch | Load / Save patch file… | MIDI Learn |
   Themes… | Check for updates… (mac). The version box in the title band
   opens the GitHub project (`SynthPanelView.projectURL`).
@@ -380,7 +463,13 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   down = ◀ ▶, left / right = next column, nearest non-empty slot), Return /
   Enter / Esc close (write dialog: Esc only), Esc closes the logo menu.
   Routed by `Synth2HostingView`: local NSEvent monitor + own keyDown; Logic
-  fallback = editor is the front window.
+  fallback = editor is the front window. Windows: `WindowsEditor::keyDown`
+  (WM_KEYDOWN + `IPlugView::onKeyDown`, WM_GETDLGCODE wants all keys; Ctrl
+  / Alt / Win = the host's): the same keys, plus Return / Enter in the
+  write dialog = Write (the name field forwards Return / Esc); < > and up /
+  down roll over banks in list order. Both: the bottom bar's write clicked
+  again while the write dialog is open = its Write (save in place: click,
+  click).
 - MIDI LEARN: menu > MIDI Learn → every control wears a hotspot (dim =
   unlearned, bright = armed, blue + CC badge = learned); tap arms,
   double-tap clears, the next CC (any channel, 1..127) is assigned, one CC

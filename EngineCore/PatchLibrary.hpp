@@ -217,6 +217,10 @@ struct PatchRef {
 // The bank shipped inside the plugin (read-only, first in the list, updated
 // with the plugin); also its folder name in the bundle resources.
 inline constexpr const char *kFactoryBankName = "Synth2 Factory";
+// The empty bank a new library starts with; also where the write dialog
+// proposes to save a patch out of a read-only bank (created by that write
+// when the user deleted it). Swift mirror: SynthModel.userBankName.
+inline constexpr const char *kUserBankName = "User";
 // Its LibraryProgram::bank (sessions): not a path, so it survives the
 // bundle moving. ':' can't come from Finder in a folder name.
 inline constexpr const char *kFactoryProgramBank = ":factory";
@@ -275,6 +279,10 @@ public:
         names_[key] = {size, time, name};
         return true;
     }
+    void Forget(const std::filesystem::path &path) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        names_.erase(path.string());
+    }
 
 private:
     struct Entry {
@@ -322,6 +330,12 @@ public:
     }
 
     const std::vector<PatchBank> &Banks() const { return banks_; }
+
+#if defined(_WIN32)
+    // Restore a previously scanned Windows-only preset index. The index
+    // contains names and paths, never preset bytes or synthesis parameters.
+    void AdoptIndex(std::vector<PatchBank> banks) { banks_ = std::move(banks); }
+#endif
 
     int FindBySource(const std::string &source) const {
         for (size_t i = 0; i < banks_.size(); ++i)
@@ -756,6 +770,15 @@ public:
     const std::filesystem::path &Factory() const { return factory_; }
     const PatchLibrary &Library() const { return lib_; }
 
+#if defined(_WIN32)
+    void AdoptIndex(std::vector<PatchBank> banks) {
+        if (scanned_) return;
+        lib_.AdoptIndex(std::move(banks));
+        scanned_ = true;
+        ++revision_;
+    }
+#endif
+
     void Rescan() {
         EnsureRoot();
         ++generation_;
@@ -809,7 +832,11 @@ public:
             for (const auto &x : v) s += (s.empty() ? "" : ", ") + x;
             return s;
         };
+#if defined(_WIN32)
+        if (!trashed_.empty()) n = list(trashed_) + " imported and moved to the Recycle Bin";
+#else
         if (!trashed_.empty()) n = list(trashed_) + " imported and moved to Trash";
+#endif
         if (!removed_.empty()) n += (n.empty() ? "" : "; ") + list(removed_) + " imported (zip removed)";
         trashed_.clear(), removed_.clear();
         return n;
@@ -861,7 +888,11 @@ public:
             const std::filesystem::path temp = dir / (".oxo_move_" + std::to_string(s) + ".tmp");
             std::filesystem::rename(file, temp, ec);
             ok = !ec;
-            if (ok) renames.push_back({temp, final});
+            if (ok) {
+                PatchNameCache::Shared().Forget(file);
+                PatchNameCache::Shared().Forget(final);
+                renames.push_back({temp, final});
+            }
         }
         for (const auto &[temp, final] : renames) {
             std::filesystem::rename(temp, final, ec);
@@ -993,7 +1024,7 @@ private:
 
     void EnsureRoot() const {
         std::error_code ec;
-        if (!root_.empty() && !std::filesystem::exists(root_, ec)) std::filesystem::create_directories(root_ / "User", ec);
+        if (!root_.empty() && !std::filesystem::exists(root_, ec)) std::filesystem::create_directories(root_ / kUserBankName, ec);
     }
 
     std::filesystem::path root_, factory_;

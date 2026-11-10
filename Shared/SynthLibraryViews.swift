@@ -194,7 +194,11 @@ struct PatchBrowserView: View {
     @State private var dropTarget: Int?
     /// Bank row under a drag (copy highlight).
     @State private var dropBank: Int?
+    /// Write dialog on the proposed "User" bank the library lacks (an extra
+    /// row; the write creates the folder).
+    @State private var newUserBank = false
     private static let dragPrefix = SlotDrop.prefix
+    private static let newUserBankRow = -1 // its scroll id (real rows: bank indices)
 
     private var bank: PatchBankInfo? {
         model.currentBank.flatMap { $0 < model.banks.count ? model.banks[$0] : nil }
@@ -227,8 +231,16 @@ struct PatchBrowserView: View {
         .onChange(of: model.currentBank) { _, _ in pickTarget() }
         .onChange(of: model.writing) { _, _ in
             name = model.patchName
+            newUserBank = false
             leaveReadOnlyBank()
             pickTarget()
+        }
+        // a scan landing while the dialog is open (opened before the list
+        // arrived, or a User bank appeared)
+        .onChange(of: model.banks.map(\.id)) { _, _ in
+            let was = newUserBank
+            leaveReadOnlyBank()
+            if was != newUserBank { pickTarget() }
         }
         .onChange(of: model.writeCommits) { _, _ in commitWrite() }
     }
@@ -271,10 +283,11 @@ struct PatchBrowserView: View {
     }
 
     private var writeButton: some View {
+        let bank = newUserBank ? nil : self.bank
         let occupied = target.flatMap { t in bank.map { !$0.slots[t].isEmpty } } ?? false
         let label = target.map { occupied ? String(format: "Overwrite %03d", $0 + 1) : String(format: "Write to %03d", $0 + 1) }
             ?? "Write"
-        let off = target == nil || bank == nil || bank?.readOnly == true
+        let off = target == nil || (!newUserBank && (bank == nil || bank?.readOnly == true))
         return PanelButton(title: label, width: 110, height: 20, fill: occupied ? Theme.red : theme.button) { commitWrite() }
             .disabled(off)
             .opacity(off ? 0.5 : 1)
@@ -302,6 +315,7 @@ struct PatchBrowserView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(model.banks.indices, id: \.self) { b in bankRow(b) }
+                    if model.writing && !model.banks.isEmpty && model.userBank == nil { newUserBankRow }
                     if model.banks.isEmpty {
                         Text(model.libraryLoading ? "Loading…"
                              : "No banks. Import… copies bank folders, zip banks or .sy1 patches into the library.")
@@ -313,32 +327,58 @@ struct PatchBrowserView: View {
             .scrollDeadZone()
             // Keyboard steps roll into other banks: keep the bank in view.
             .onChange(of: model.currentBank) { _, b in if let b { proxy.scrollTo(b) } }
-            .onAppear { if let b = model.currentBank { proxy.scrollTo(b) } }
+            .onChange(of: newUserBank) { _, on in if on { proxy.scrollTo(Self.newUserBankRow) } }
+            .onAppear {
+                if newUserBank { proxy.scrollTo(Self.newUserBankRow) } else if let b = model.currentBank { proxy.scrollTo(b) }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading) // also with no rows (loading)
         .background(theme.lcdBottom)
     }
 
-    private func bankRow(_ b: Int) -> some View {
-        let info = model.banks[b]
-        let selected = b == model.currentBank
-        let locked = model.writing && info.readOnly // the write dialog can't pick it
-        return HStack(spacing: 4) {
-            Text(String(format: "%02d:", b) + info.name).lineLimit(1)
-                .oxoTruncationTooltip(String(format: "%02d:", b) + info.name, size: 11, monospaced: true, optional: false)
+    private func bankLabel(_ label: String, count: String, selected: Bool) -> some View {
+        HStack(spacing: 4) {
+            Text(label).lineLimit(1)
+                .oxoTruncationTooltip(label, size: 11, monospaced: true, optional: false)
             Spacer(minLength: 2)
-            Text("\(info.count)").opacity(0.6)
+            Text(count).opacity(0.6)
         }
         .font(.system(size: 11, design: .monospaced))
         .foregroundColor(selected ? theme.lcdBottom : Theme.lcdText)
         .padding(.horizontal, 6).padding(.vertical, 3)
         .background(selected ? theme.displayText : Color.clear)
+    }
+
+    /// The write dialog's "User" bank when the library has none: listed
+    /// last, no number (it has no index yet), made by the write.
+    private var newUserBankRow: some View {
+        bankLabel("--:" + SynthModel.userBankName, count: "new", selected: newUserBank)
+            .id(Self.newUserBankRow)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                newUserBank = true
+                pickTarget()
+            }
+    }
+
+    private func bankRow(_ b: Int) -> some View {
+        let info = model.banks[b]
+        let selected = !newUserBank && b == model.currentBank
+        let locked = model.writing && info.readOnly // the write dialog can't pick it
+        return bankLabel(String(format: "%02d:", b) + info.name, count: "\(info.count)", selected: selected)
         .overlay(Rectangle().strokeBorder(theme.displayText, lineWidth: dropBank == b ? 1.5 : 0))
         .opacity(locked ? 0.35 : 1)
         .contentShape(Rectangle())
-        .onTapGesture { if !locked { model.currentBank = b } }
+        .onTapGesture {
+            guard !locked else { return }
+            newUserBank = false
+            model.currentBank = b
+            pickTarget()
+        }
         // a patch dragged onto a bank: copied into its first free slot
-        .onDrop(of: SlotDrop.types, delegate: BankDrop(bank: b, enabled: !info.readOnly && !model.writing, target: $dropBank) {
+        .onDrop(of: SlotDrop.types, delegate: BankDrop(bank: b, enabled: !info.readOnly && !model.writing,
+                                                       isFull: info.count >= SynthModel.bankSlots, target: $dropBank,
+                                                       full: { model.flash(SynthModel.bankFullMessage, seconds: 3) }) {
             model.copyPatch(bank: $0, slot: $1, to: b)
         })
         .libraryMenu(enabled: !locked, export: { model.fileAction = .exportBank(info.id) }, deleteTitle: "Delete bank…",
@@ -352,16 +392,14 @@ struct PatchBrowserView: View {
     private var slotGrid: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                if let b = model.currentBank, b < model.banks.count {
-                    // 4 columns filled top to bottom (1-32, 33-64, ...); ids =
-                    // slot numbers, so the keyboard selection can scroll in.
-                    let count = model.banks[b].slots.count, rows = SynthModel.browserRows(count)
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 4), spacing: 2) {
-                        ForEach((0..<rows * 4).map { $0 % 4 * rows + $0 / 4 }, id: \.self) { s in
-                            if s < count { slotCell(b, s) } else { Color.clear }
-                        }
+                if model.writing && newUserBank { // the bank to be made: all slots free
+                    slotColumns(SynthModel.bankSlots) { s in
+                        slotFace(s, "", selected: target == s)
+                            .contentShape(Rectangle())
+                            .onTapGesture { target = s }
                     }
-                    .padding(6)
+                } else if let b = model.currentBank, b < model.banks.count {
+                    slotColumns(model.banks[b].slots.count) { s in slotCell(b, s) }
                 }
             }
             .scrollDeadZone()
@@ -376,11 +414,20 @@ struct PatchBrowserView: View {
         if let p = model.currentProgram, model.loadedBank == model.currentBank { proxy.scrollTo(p) }
     }
 
-    private func slotCell(_ b: Int, _ s: Int) -> some View {
-        let patch = model.banks[b].slots[s]
-        let readOnly = model.banks[b].readOnly
-        let selected = model.writing ? target == s : (b == model.loadedBank && s == model.currentProgram)
-        return Text(String(format: "%03d:", s + 1) + patch)
+    /// 4 columns filled top to bottom (1-32, 33-64, ...); ids = slot
+    /// numbers, so the keyboard selection can scroll in.
+    private func slotColumns<Cell: View>(_ count: Int, @ViewBuilder cell: @escaping (Int) -> Cell) -> some View {
+        let rows = SynthModel.browserRows(count)
+        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 4), spacing: 2) {
+            ForEach((0..<rows * 4).map { $0 % 4 * rows + $0 / 4 }, id: \.self) { s in
+                if s < count { cell(s) } else { Color.clear }
+            }
+        }
+        .padding(6)
+    }
+
+    private func slotFace(_ s: Int, _ patch: String, selected: Bool) -> some View {
+        Text(String(format: "%03d:", s + 1) + patch)
             .font(.system(size: 11, design: .monospaced))
             .foregroundColor(selected ? theme.lcdBottom : patch.isEmpty ? Theme.lcdText.opacity(0.3) : Theme.lcdText)
             .lineLimit(1)
@@ -389,6 +436,13 @@ struct PatchBrowserView: View {
             .padding(.horizontal, 5).padding(.vertical, 3)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 2).fill(selected ? theme.displayText : theme.display))
+    }
+
+    private func slotCell(_ b: Int, _ s: Int) -> some View {
+        let patch = model.banks[b].slots[s]
+        let readOnly = model.banks[b].readOnly
+        let selected = model.writing ? target == s : (b == model.loadedBank && s == model.currentProgram)
+        return slotFace(s, patch, selected: selected)
             .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(theme.displayText, lineWidth: dropTarget == s ? 1.5 : 0))
             .contentShape(Rectangle())
             .onTapGesture {
@@ -421,20 +475,37 @@ struct PatchBrowserView: View {
     /// Write dialog default: the loaded slot when writing back into its bank,
     /// else the bank's first empty slot.
     private func pickTarget() {
-        guard model.writing, let b = model.currentBank, b < model.banks.count else { return target = nil }
+        guard model.writing else { return target = nil }
+        if newUserBank { return target = 0 }
+        guard let b = model.currentBank, b < model.banks.count else { return target = nil }
         if b == model.loadedBank, let p = model.currentProgram { return target = p }
         target = model.banks[b].slots.firstIndex(where: \.isEmpty) ?? 0
     }
 
-    /// The write dialog never targets the read-only factory bank: it opens
-    /// on the first writable one.
+    /// The write dialog never targets the read-only factory bank: out of it
+    /// (or out of no bank) it opens on the "User" bank, proposed even when
+    /// the library has none (the write makes it). A writable bank in view
+    /// stays (the loaded one: written back).
     private func leaveReadOnlyBank() {
-        guard model.writing, let b = model.currentBank, b < model.banks.count, model.banks[b].readOnly else { return }
-        model.currentBank = model.banks.firstIndex { !$0.readOnly }
+        guard model.writing, !model.banks.isEmpty else { return }
+        if newUserBank { // keep the proposal until a real User bank shows up
+            if let u = model.userBank {
+                newUserBank = false
+                model.currentBank = u
+            }
+            return
+        }
+        if let b = model.currentBank, b < model.banks.count, !model.banks[b].readOnly { return }
+        if let u = model.userBank { model.currentBank = u } else { newUserBank = true }
     }
 
     private func commitWrite() {
-        guard let b = model.currentBank, b < model.banks.count, !model.banks[b].readOnly, let t = target else { return }
+        guard let t = target else { return }
+        if newUserBank {
+            if model.write(newBank: SynthModel.userBankName, slot: t, name: name) { model.closeBrowser() }
+            return
+        }
+        guard let b = model.currentBank, b < model.banks.count, !model.banks[b].readOnly else { return }
         if model.write(bank: b, slot: t, name: name) { model.closeBrowser() }
     }
 
@@ -444,8 +515,10 @@ struct PatchBrowserView: View {
     }
 
     private func createBank() {
+        newUserBank = false
         model.newBank(newBankName)
         naming = false
+        pickTarget()
     }
 }
 
@@ -487,19 +560,35 @@ private struct SlotDrop: DropDelegate {
 
 /// Drop on a bank row: proposes a COPY ("+" on the cursor) into the bank's
 /// first free slot; the browser stays on the bank shown. Not on the
-/// read-only factory bank.
+/// read-only factory bank. A FULL bank refuses it: forbidden cursor, no
+/// highlight, `full` (the LCD says why) on entering.
 private struct BankDrop: DropDelegate {
-    let bank: Int, enabled: Bool
+    let bank: Int, enabled: Bool, isFull: Bool
     @Binding var target: Int?
+    let full: () -> Void
     let copy: (_ bank: Int, _ slot: Int) -> Void
 
     func validateDrop(info: DropInfo) -> Bool { enabled }
-    func dropEntered(info: DropInfo) { target = bank }
-    func dropExited(info: DropInfo) { if target == bank { target = nil } }
-    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .copy) }
+    func dropEntered(info: DropInfo) {
+        if isFull { full() } else { target = bank }
+    }
+    func dropExited(info: DropInfo) {
+        if target == bank { target = nil }
+        #if os(macOS)
+        if isFull { NSCursor.arrow.set() }
+        #endif
+    }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        #if os(macOS)
+        // .forbidden alone leaves the plain arrow on macOS
+        if isFull { NSCursor.operationNotAllowed.set() }
+        #endif
+        return DropProposal(operation: isFull ? .forbidden : .copy)
+    }
 
     func performDrop(info: DropInfo) -> Bool {
         target = nil
+        guard !isFull else { return false }
         return SlotDrop.read(info) { from in copy(from.bank, from.slot) }
     }
 }

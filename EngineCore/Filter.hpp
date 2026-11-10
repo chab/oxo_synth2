@@ -51,16 +51,20 @@ public:
     }
 
     // SVF f (cutoff clamped at 125), ladder one-pole a and feedback comp.
-    void Lookup(double knob, double &svfF, double &ladderA, double &ladderComp) const {
-        const double x = std::clamp(knob, 0.0, 127.0) * kSteps;
-        const int i = std::min(int(x), kSize - 2);
-        const double t = x - i;
-        svfF = svfF_[i] + (svfF_[i + 1] - svfF_[i]) * t;
-        ladderA = ladderA_[i] + (ladderA_[i + 1] - ladderA_[i]) * t;
-        ladderComp = comp_[i] + (comp_[i + 1] - comp_[i]) * t;
+    double SvfF(double knob) const { return At(svfF_, knob); }
+    void Ladder(double knob, double &ladderA, double &ladderComp) const {
+        ladderA = At(ladderA_, knob);
+        ladderComp = At(comp_, knob);
     }
 
 private:
+    static double At(const std::vector<double> &table, double knob) {
+        const double x = std::clamp(knob, 0.0, 127.0) * kSteps;
+        const int i = std::min(int(x), kSize - 2);
+        const double t = x - i;
+        return table[i] + (table[i + 1] - table[i]) * t;
+    }
+
     explicit FilterTables(double sr) : sampleRate_(sr), svfF_(kSize), ladderA_(kSize), comp_(kSize) {
         for (int k = 0; k < kSize; ++k) {
             const double knob = std::min(double(k) / kSteps, 127.0);
@@ -103,10 +107,14 @@ public:
     void SetParams(int type, double cutoffKnob, int res) {
         type_ = type;
         if (type == 4) return SetDiode(cutoffKnob, res);
+        if (type == 1) {
+            double comp;
+            tables_->Ladder(cutoffKnob, ladderA_, comp);
+            ladderK_ = std::max(0.0, 0.0297 * res - 0.076) * comp;
+            return;
+        }
         const double r = res / 127.0;
-        double comp;
-        tables_->Lookup(cutoffKnob, svfF_, ladderA_, comp);
-        ladderK_ = std::max(0.0, 0.0297 * res - 0.076) * comp;
+        svfF_ = tables_->SvfF(cutoffKnob);
         svfD_ = std::max(1.0 - r, 0.0);
         svfG_ = 1.0 - 0.7 * r;
     }

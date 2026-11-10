@@ -1,6 +1,6 @@
 // Renders the editor with a mock host to PNG (layout eye-check without a DAW).
 //   swiftc Shared/*.swift tools/ui_snapshot/main.swift -o build/ui/snap
-//   ./build/ui/snap out.png [browser|browser-loading|loading|write|learn|themes|logo|logo-ipad|ipad|ipad-wide|effect|update|delete-bank]
+//   ./build/ui/snap out.png [browser|browser-loading|loading|write|write-factory|write-new-user|learn|themes|logo|logo-ipad|ipad|ipad-wide|effect|update|delete-bank]
 import AppKit
 import SwiftUI
 
@@ -33,11 +33,19 @@ final class MockHost: SynthHost {
         func slots(_ names: [String]) -> String {
             "[" + (0..<128).map { $0 < names.count ? "\"\(names[$0])\"" : "\"\"" }.joined(separator: ",") + "]"
         }
-        return #"{"root":"/Users/me/Music/Oxo Music/Oxo Synth2","banks":["#
+        // write-factory / write-new-user: the read-only factory bank first
+        // (loaded), with / without a User bank
+        let factory = factoryLoaded
+            ? #"{"name":"Synth2 Factory","source":"f","readOnly":true,"slots":"# + slots(["INIT", "Brass"]) + "},"
+            : ""
+        let user = hasUser ? #",{"name":"User","source":"a","slots":"# + slots(["My Lead", "", "Pad"]) + "}" : ""
+        return #"{"root":"/Users/me/Music/Oxo Music/Oxo Synth2","banks":["# + factory
             + #"{"name":"Leads","source":"b","slots":"# + slots(["Mono Lead", "Sync Lead", "Fat Saw"]) + "},"
-            + #"{"name":"Synth1Patches / Pads","source":"c","slots":"# + slots(["Init"]) + "},"
-            + #"{"name":"User","source":"a","slots":"# + slots(["My Lead", "", "Pad"]) + "}]}"
+            + #"{"name":"Synth1Patches / Pads","source":"c","slots":"# + slots(["Init"]) + "}"
+            + user + "]}"
     }
+    var factoryLoaded = false
+    var hasUser = true
     func rescanLibrary() {}
     func startLibraryScan() {}
     var libraryRevision = 1
@@ -73,6 +81,8 @@ let mock = MockHost()
 // loading: first browser open, no list yet; browser-loading: a rescan over a shown list
 let mode = args.count > 2 ? args[2] : ""
 if mode == "loading" { mock.libraryRevision = 0 }
+mock.factoryLoaded = mode == "write-factory" || mode == "write-new-user"
+mock.hasUser = mode != "write-new-user"
 mock.libraryScanning = mode == "loading" || mode == "browser-loading"
 let model = SynthModel(host: mock)
 if args.count > 2 {
@@ -97,7 +107,7 @@ if args.count > 2 {
     } else if args[2] == "learn" {
         model.toggleLearn()
         model.learnSelect(21)
-    } else if args[2] == "write" {
+    } else if args[2] == "write" || args[2] == "write-factory" || args[2] == "write-new-user" {
         model.load(bank: 0, slot: 0)
         model.openBrowser(write: true)
     } else {

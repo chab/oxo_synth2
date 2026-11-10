@@ -16,3 +16,5 @@ EngineCoreTests/build/
 reference/derived/
 dist/
 app_store_screenshots/
+OxoSynth2VST3/build-preview/
+Windows_Build/build-dist/

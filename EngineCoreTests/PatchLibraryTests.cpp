@@ -485,6 +485,23 @@ OXO_TEST(PatchManagerMoveRenamesAndSwaps) {
     OXO_EXPECT_EQ(files, 2); // no temp left behind
 }
 
+// A swap renames files and a rename keeps the mtime: two same-size patches
+// with the same mtime must not show each other's cached name afterwards.
+OXO_TEST(PatchManagerMoveForgetsCachedNames) {
+    const fs::path root = FreshDir("oxo_s2_move_cache_test");
+    fs::create_directories(root / "Bank");
+    WriteFile(root / "Bank" / "001.sy1", "Alpha\nver=112\n");
+    WriteFile(root / "Bank" / "002.sy1", "Bravo\nver=112\n");
+    fs::last_write_time(root / "Bank" / "002.sy1", fs::last_write_time(root / "Bank" / "001.sy1"));
+    PatchManager m;
+    m.Configure(root);
+    m.Rescan(); // both names now in the process-wide cache
+    OXO_EXPECT(m.Move(0, 0, 1));
+    const auto &slots = m.Library().Banks()[0].slots;
+    OXO_EXPECT_EQ(slots[0].name, std::string("Bravo"));
+    OXO_EXPECT_EQ(slots[1].name, std::string("Alpha"));
+}
+
 // Rescans read a patch name only when its file changed (name cache keyed by
 // path + size + mtime): an edited file shows its new name.
 OXO_TEST(RescanRereadsChangedPatchNames) {
