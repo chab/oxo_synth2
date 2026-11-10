@@ -577,7 +577,7 @@ private:
         return pick;
     }
 
-    static constexpr int kLfoBlock = 64;
+    static constexpr int kLfoBlock = Voice::kMaxChunk;
     PatchValues base_{};
     PatchValues values_{};
     int routed_[2] = {-1, -1};

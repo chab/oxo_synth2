@@ -104,16 +104,22 @@ public:
         diodeX_ = 0;
     }
 
+    // The three filter structures: the voice loop is compiled per kind
+    // (Set<Kind> + Process<Kind>, no dispatch per sample).
+    enum Kind { kSvf, kLadder, kDiode };
+    static constexpr Kind KindOf(int type) { return type == 4 ? kDiode : type == 1 ? kLadder : kSvf; }
+
     // type 0..4, cutoff in knob units (may be fractional / out of range), res 0..127.
     OXO_INLINE void SetParams(int type, double cutoffKnob, int res) {
-        type_ = type;
         if (type == 4) return SetDiode(cutoffKnob, res);
-        if (type == 1) {
-            double comp;
-            tables_->Ladder(cutoffKnob, ladderA_, comp);
-            ladderK_ = std::max(0.0, 0.0297 * res - 0.076) * comp;
-            return;
-        }
+        if (type == 1) return SetLadder(cutoffKnob, res);
+        SetSvf(type, cutoffKnob, res);
+    }
+    OXO_INLINE double Process(double x) { return type_ == 4 ? ProcessDiode(x) : type_ == 1 ? ProcessLadder(x) : ProcessSvf(x); }
+
+    // LP12 / HP12 / BP12 (type 0 / 2 / 3)
+    OXO_INLINE void SetSvf(int type, double cutoffKnob, int res) {
+        type_ = type;
         svfF_ = tables_->SvfF(cutoffKnob);
         if (res != svfRes_) {
             const double r = res / 127.0;
@@ -122,25 +128,37 @@ public:
             svfG_ = 1.0 - 0.7 * r;
         }
     }
+    // LP24
+    OXO_INLINE void SetLadder(double cutoffKnob, int res) {
+        type_ = 1;
+        double comp;
+        tables_->Ladder(cutoffKnob, ladderA_, comp);
+        ladderK_ = std::max(0.0, 0.0297 * res - 0.076) * comp;
+    }
+    // LPDL
+    void SetDiode(double cutoffKnob, int res) {
+        type_ = 4;
+        SetDiodeCoefficients(cutoffKnob, res);
+    }
 
-    OXO_INLINE double Process(double x) {
-        if (type_ == 4) return Diode(x);
-        if (type_ == 1) {
-            // The limiter rides the FEEDBACK here (in-loop), which is what
-            // bounds the measured self-oscillation at res 127 (~1.8 FS).
-            double u = x - ladderK_ * ladderGain_ * fb_;
-            for (double &s : stage_) {
-                const double v = (u - s) * ladderA_;
-                const double y = v + s;
-                s = y + v;
-                u = y;
-            }
-            fb_ = u;
-            const double a = std::fabs(u);
-            agcEnv_ += (a > agcEnv_ ? agcAttack_ : agcRelease_) * (a - agcEnv_);
-            ladderGain_ = agcEnv_ > kLadderAgcThreshold ? std::pow(kLadderAgcThreshold / agcEnv_, kAgcExponent) : 1.0;
-            return u;
+    double ProcessDiode(double x) { return Diode(x); }
+    OXO_INLINE double ProcessLadder(double x) {
+        // The limiter rides the FEEDBACK here (in-loop), which is what
+        // bounds the measured self-oscillation at res 127 (~1.8 FS).
+        double u = x - ladderK_ * ladderGain_ * fb_;
+        for (double &s : stage_) {
+            const double v = (u - s) * ladderA_;
+            const double y = v + s;
+            s = y + v;
+            u = y;
         }
+        fb_ = u;
+        const double a = std::fabs(u);
+        agcEnv_ += (a > agcEnv_ ? agcAttack_ : agcRelease_) * (a - agcEnv_);
+        ladderGain_ = agcEnv_ > kLadderAgcThreshold ? std::pow(kLadderAgcThreshold / agcEnv_, kAgcExponent) : 1.0;
+        return u;
+    }
+    OXO_INLINE double ProcessSvf(double x) {
         const double in = svfG_ * x;
         double high = 0;
         for (int i = 0; i < 2; ++i) {
@@ -163,7 +181,7 @@ private:
     // The feedback saturation (gain G <= 1 on k) is applied as the explicit
     // extra input w k (1 - G) f from the state before the step, so the
     // linear (G = 1) solve stays implicit and precomputed.
-    void SetDiode(double cutoffKnob, int res) {
+    void SetDiodeCoefficients(double cutoffKnob, int res) {
         // coefficients follow the cutoff in 1/8-knob steps (a 5x5 inversion each)
         if (res == diodeRes_ && std::fabs(cutoffKnob - diodeCut_) < 0.125) return;
         diodeRes_ = res, diodeCut_ = cutoffKnob;

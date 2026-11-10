@@ -204,18 +204,35 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   shared by osc1's and the sub's copies (`copyPhase_`, sub octave = half
   rate, osc1's = `<< 1`), read / sined 4 at a time through explicit SIMD
   (`EngineCore/Simd.hpp`: SSE2 / NEON / plain C++, `-DOXO_SIMD_SCALAR`
-  forces the latter; gathers, which no compiler vectorizes); `Voice::Wrap`
-  calls floor only out of range (a library call on x64 SSE2). Everything
-  the voice loop calls is `OXO_INLINE` (forced; no lambdas there: clang
-  left them as calls, each spilling the loop's live values; MSVC inlines
-  even less): +10..25 %. Per-chunk exps are cached (`Adsr::Configure`,
-  detune ratios). `Synth::Render` flushes denormals (FTZ / DAZ, x86).
-  Keep the voice in ONE per-sample loop: splitting the filter into its
-  own pass made it latency-bound, and a separate modulation pass
-  (envelopes / LFO routes into arrays) was 5..15 % slower too. Engine
-  changes: render every factory / starter / library patch before / after
-  and compare (expected <= -120 dB; the x86_64 and arm64 renders differ
-  slightly from each other: FMA).
+  forces the latter; gathers, which no compiler vectorizes; the phase
+  arithmetic too, `P4`: clang builds it from scalar source, MSVC does
+  not). THE VOICE LOOP IS COMPILED PER CASE: `Voice::RenderChunk` picks
+  one of 18 `RenderChunkAs<kOsc, kDetune, kFilter>` (osc static / moving
+  / cross = FM, ring, sync; detune; SVF / ladder / diode), same
+  statements in each (`if constexpr`), so they render bit-identically.
+  With every feature as a run-time test the loop carried ~1.6x the
+  instructions. The oscillators' modulation (steps, pulse width, FM
+  index: mod env, LFOs on pitch / pw / FM) is computed AHEAD per chunk
+  into arrays, each part in its own loop and only when routed (the mod
+  env runs ahead there: restored when the voice ends mid-chunk);
+  envelopes, filter and the LFOs on cutoff / amp / pan stay in the loop.
+  NO LIBRARY CALL SITE in the voice loop unless its case needs it: a
+  never-taken `pow` (the pan LFO's cube) cost every voice ~40
+  instructions per sample (live values spilled around it); floor / trunc
+  are calls on x64 SSE2 (MSVC), so `Wrap` calls floor only out of range,
+  a pulse's second read wraps by compare (`WrapNext`), pitch steps
+  truncate by cast. Delay / chorus indices wrap by compare (`% size` = a
+  64-bit division). Everything the loop calls is `OXO_INLINE` (forced).
+  Per-chunk exps are cached (`Adsr::Configure`, detune ratios).
+  `Synth::Render` flushes denormals (FTZ / DAZ, x86). Keep the voice in
+  ONE per-sample loop (splitting the filter into its own pass made it
+  latency-bound). A value the original plays as exactly 0 must be 0, not
+  a fit's residue (FM 0, LFO depth 0): the residue is inaudible but
+  keeps the slow path on. Engine changes: render every factory /
+  starter / library patch before / after and compare (the per-case loop
+  was bit-identical on all 747, arm64 and x86_64, two phrases incl.
+  staccato notes reusing voice slots; the x86_64 and arm64 renders
+  differ slightly from each other: FMA).
 - Python: `.venv` (numpy, scipy) for `tools/s1ref` scripts.
 - WINDOWS: `build_windows.bat [--clang] [--bench] [--no-pause]` on Windows (Visual Studio 2022+
   C++ workload; CMake from `%CMAKE%`, PATH or VS's own; generator = CMake's

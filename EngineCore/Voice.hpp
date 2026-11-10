@@ -67,6 +67,10 @@ OXO_INLINE simd::F4 Sin2Pi4(const Phase64 *ph, int shift) {
 
 class Voice {
 public:
+    // The longest run rendered in one go (Synth renders in chunks of it:
+    // the LFOs' buffers, the voice's per-chunk modulation arrays).
+    static constexpr int kMaxChunk = 64;
+
     void Prepare(double sampleRate) {
         sampleRate_ = sampleRate;
         tables_ = WaveTableSet::ForSampleRate(sampleRate);
@@ -185,7 +189,7 @@ public:
         // (measured, measure_porta.py) a glide moves every 16 samples
         for (int off = 0; off < frames;) {
             const bool gliding = glide_ != note_;
-            const int n = gliding ? std::min(frames - off, glideTick_) : frames - off;
+            const int n = std::min(gliding ? std::min(frames - off, glideTick_) : frames - off, kMaxChunk);
             const double *at[2] = {lfo[0] ? lfo[0] + off : nullptr, lfo[1] ? lfo[1] + off : nullptr};
             RenderChunk(left + off, right + off, n, pos + off, blockEnd, p, bendSemis, at, cutoffKnob + cutoffStep * off, cutoffStep);
             off += n;
@@ -200,18 +204,60 @@ public:
     }
 
 private:
+    // LFO k's destination (1..7), 0 = no route. (measured, bend on a step +
+    // a square LFO on pitch) depth 0 = no modulation at all, whatever the
+    // destination: no route
+    static int LfoDest(const PatchValues &p, const double *const lfo[2], int k) {
+        return lfo[k] && p[k ? kLfo2Depth : kLfo1Depth] > 0 ? std::clamp<int>(p[k ? kLfo2Dest : kLfo1Dest], 1, 7) : 0;
+    }
+
+    // The per-sample loop is compiled once per case (RenderChunkAs), so each
+    // holds only what its case computes: with every feature as a run-time
+    // test it carried twice the instructions (and live values to spill).
+    //   kOsc     what moves the oscillators within the chunk (OscKind)
+    //   kDetune  osc1 detune on (its 8 copies)
+    //   kFilter  the filter structure (VoiceFilter::Kind)
+    // Same statements in every case, so the cases render bit-identically.
+    enum OscKind {
+        kOscStatic, // nothing: steps and pulse width are constants
+        kOscMoving, // mod env or LFOs on pitch / pulse width
+        kOscCross,  // FM, ring or sync (osc1 and osc2 depend on each other), anything else too
+    };
     void RenderChunk(float *left, float *right, int frames, int64_t pos, int64_t blockEnd, const PatchValues &p,
                      double bendSemis, const double *const lfo[2], double cutoffKnob, double cutoffStep) {
+        const bool modEnv = p[kModEnvOn] != 0;
+        bool cross = p[kOsc2Ring] || p[kOsc2Sync] || p[kOsc1FM] > 0 || (modEnv && p[kModEnvDest] == 1), moving = modEnv;
+        for (int k = 0; k < 2; ++k) {
+            const int dest = LfoDest(p, lfo, k);
+            cross |= dest == 6;
+            moving |= dest == 1 || dest == 2 || dest == 5;
+        }
+        using Chunk = void (Voice::*)(float *, float *, int, int64_t, int64_t, const PatchValues &, double,
+                                      const double *const[2], double, double);
+#define OXO_CHUNKS(osc, detune) \
+    {&Voice::RenderChunkAs<osc, detune, VoiceFilter::kSvf>, &Voice::RenderChunkAs<osc, detune, VoiceFilter::kLadder>, \
+     &Voice::RenderChunkAs<osc, detune, VoiceFilter::kDiode>}
+        static constexpr Chunk kChunk[3][2][3] = {{OXO_CHUNKS(kOscStatic, false), OXO_CHUNKS(kOscStatic, true)},
+                                                  {OXO_CHUNKS(kOscMoving, false), OXO_CHUNKS(kOscMoving, true)},
+                                                  {OXO_CHUNKS(kOscCross, false), OXO_CHUNKS(kOscCross, true)}};
+#undef OXO_CHUNKS
+        (this->*kChunk[cross ? kOscCross : moving ? kOscMoving : kOscStatic][p[kOsc1Detune] > 0]
+                      [VoiceFilter::KindOf(p[kFilterType])])(left, right, frames, pos, blockEnd, p, bendSemis, lfo,
+                                                              cutoffKnob, cutoffStep);
+    }
+
+    template <int kOsc, bool kDetune, int kFilter>
+    void RenderChunkAs(float *left, float *right, int frames, int64_t pos, int64_t blockEnd, const PatchValues &p,
+                       double bendSemis, const double *const lfo[2], double cutoffKnob, double cutoffStep) {
         // ---- LFO routing (measured depth laws per destination). Both LFOs on
         // one destination (measured, measure_lfo_sum.py): pitch = sum of each
         // LFO's cents; cutoff / FM / pw / pan = the law applied to the
         // depth-weighted sum of the LFO values; amp = product of the gains.
         LfoRoute r[8];
-        // (measured, bend on a step + a square LFO on pitch) depth 0 = no
-        // modulation at all, whatever the destination: no route
         for (int k = 0; k < 2; ++k) {
-            if (!lfo[k] || p[k ? kLfo2Depth : kLfo1Depth] <= 0) continue;
-            LfoRoute &route = r[std::clamp<int>(p[k ? kLfo2Dest : kLfo1Dest], 1, 7)];
+            const int dest = LfoDest(p, lfo, k);
+            if (!dest) continue;
+            LfoRoute &route = r[dest];
             route.v[route.n] = lfo[k];
             route.depth[route.n] = p[k ? kLfo2Depth : kLfo1Depth];
             route.scale[route.n] = route.depth[route.n] / 127.0;
@@ -246,8 +292,8 @@ private:
         const double inc1 = f1 / sampleRate_, inc2 = f2 / sampleRate_;
         const double width = p[kOscPulseWidth] / 254.0; // (measured) duty of the low part, 127 = square
         const double mix2 = p[kOscMix] / 127.0, mix1 = 1.0 - mix2; // (measured) linear crossfade
-        const double fmBeta = p[kOsc2Ring] ? 0.0 : FmBeta(p[kOsc1FM]);
-        const bool ring = p[kOsc2Ring] != 0, sync = p[kOsc2Sync] != 0;
+        const bool ring = kOsc == kOscCross && p[kOsc2Ring] != 0, sync = kOsc == kOscCross && p[kOsc2Sync] != 0;
+        const double fmBeta = ring ? 0.0 : FmBeta(p[kOsc1FM]);
         const int shape1 = p[kOsc1Shape], shape2 = p[kOsc2Shape];
         const double subGainKnob = p[kSubGain];
         const double subW = subGainKnob / (subGainKnob + 32.0), mainW = 1.0 - subW; // (measured) auto level
@@ -257,7 +303,7 @@ private:
         const double mixNorm = 1.0 / (1.0 - mix2 * subW), mixA = mix1 * mixNorm, mixB = mix2 * mainW * mixNorm;
         const int subShape = p[kSubShape];
         const double subRatio = p[kSubOctave] ? 0.5 : 1.0;
-        const bool detuneOn = p[kOsc1Detune] > 0;
+        const bool detuneOn = kDetune;
         if (p[kOsc1Detune] != detuneKnob_) {
             detuneKnob_ = p[kOsc1Detune];
             for (int i = 0; i < kDetuneOscs; ++i)
@@ -282,7 +328,7 @@ private:
         amp_.Configure(sampleRate_, p[kAmpAttack], p[kAmpDecay], p[kAmpSustain], p[kAmpRelease]);
         const double satA = tables::kSaturationA[p[kFilterSat]];
         modEnv_.Configure(sampleRate_, p[kModEnvAttack], p[kModEnvDecay], 0, 0, Adsr::SustainLaw::Linear);
-        const bool modOn = p[kModEnvOn] != 0;
+        const bool modOn = kOsc != kOscStatic && p[kModEnvOn] != 0;
         const int modDest = p[kModEnvDest];
         // (measured) amount -> -1..+1: (amt - 64) / 63 above 64, / 64 below
         const double modAmt = (p[kModEnvAmount] - 64) / (p[kModEnvAmount] > 64 ? 63.0 : 64.0);
@@ -290,8 +336,14 @@ private:
         const double ampGain = kOscAmplitude * tables::kAmpGain[p[kAmpGain]] *
                                std::pow(10.0, -15.0 * (p[kAmpVelSens] / 64.0) * (127 - velocity_) / 126.0 / 20.0);
 
-        double curWidth = width;
-        Phase64 curWidth64 = 0;
+        // (measured, measure_pw_limits.py) the final duty never reaches 0 / 1:
+        // pw 0 = pw 1 = 1.25 / 254, modulation tops out at 1 - 1.375 / 254
+        static constexpr double kWidthMin = 1.25 / 254.0, kWidthMax = 1.0 - 1.375 / 254.0;
+        // a static oscillator section's steps and width (else per sample, below)
+        const double staticIncA = inc1 * bendRatio, staticIncB = inc2 * bendRatio;
+        const double staticWidth = std::clamp(width, kWidthMin, kWidthMax);
+        double curWidth = staticWidth;
+        Phase64 curWidth64 = detuneOn && shape1 == 2 ? WidthToPhase64(staticWidth) : 0;
         // a sub-octave change on a sounding voice re-locks the sub copies
         if (copyHalf_ != (p[kSubOctave] != 0)) {
             Phase64 copies[kDetuneOscs];
@@ -329,54 +381,86 @@ private:
             panR *= std::min(1.0, 1.0 + q);
         }
 
-        PitchRatio ratioAll, ratio2;
+        // ---- the oscillators' per-sample modulation, computed ahead for the
+        // chunk: osc1 / osc2 steps, pulse width, FM index, each in its own
+        // loop and only when something is routed to it. Kept out of the voice
+        // loop below: there its branches and library calls (exp2, log) cost
+        // ~100 instructions per sample even with nothing routed.
+        double incAs[kMaxChunk], incBs[kMaxChunk], widths[kMaxChunk], fmBs[kMaxChunk];
+        const Adsr modEnvBefore = modEnv_;
+        if constexpr (kOsc != kOscStatic) {
+            // (the mod env has one destination: the loop of that one advances it)
+            const bool envPitch = modOn && modDest == 0, envFm = modOn && modDest == 1, envWidth = modOn && modDest == 2;
+            if (r[1] || r[2] || envPitch) {
+                PitchRatio ratioAll, ratio2;
+                for (int i = 0; i < frames; ++i) {
+                    const double lfoAll = r[2] ? pitchCents(r[2], i) : 0.0;
+                    const double mAll = r[2] ? ratioAll(bendCents + lfoAll) : bendRatio;
+                    const double m2 = r[1] ? ratio2(bendCents + lfoAll + pitchCents(r[1], i)) : mAll;
+                    // (measured) mod env -> osc2 pitch: +-60 semitones at env 1 (not quantized)
+                    const double mEnv2 = envPitch ? std::exp2(modEnv_.Next() * modAmt * 60.0 / 12.0) : 1.0;
+                    incAs[i] = inc1 * mAll, incBs[i] = inc2 * m2 * mEnv2;
+                }
+            } else {
+                std::fill_n(incAs, frames, staticIncA);
+                std::fill_n(incBs, frames, staticIncB);
+            }
+            if (r[5] || envWidth) {
+                for (int i = 0; i < frames; ++i) {
+                    double w = width;
+                    if (r[5]) {
+                        const double l = r[5].Signed(i);
+                        w += l * (l > 0 ? 1.0 - width : width);
+                    }
+                    if (envWidth) {
+                        // (measured, measure_modenv_pw.py) same room-left law
+                        const double m = std::clamp(modEnv_.Next() * modAmt, -1.0, 1.0);
+                        w += m * (m > 0 ? 1.0 - w : w);
+                    }
+                    widths[i] = std::clamp(w, kWidthMin, kWidthMax);
+                }
+            } else {
+                std::fill_n(widths, frames, staticWidth);
+            }
+            if constexpr (kOsc == kOscCross) {
+                if (!ring && (r[6] || envFm)) {
+                    for (int i = 0; i < frames; ++i) {
+                        // (measured, measure_fm_mod.py) in FM knob units (fractional):
+                        // LFO unipolar toward 127 by depth / 127 * u; mod env
+                        // bipolar room-left, m = (amt - 64) / 64 at env 1.
+                        double knob = p[kOsc1FM];
+                        if (r[6]) knob += (127.0 - knob) * r[6].Unipolar(i);
+                        if (envFm) {
+                            // the DECAY reaches FM in dB: 0 dB -> 1, -80 dB -> 0 (the
+                            // offset falls LINEARLY in time, to 0 at 9.2 taus); the
+                            // attack ramp is linear as elsewhere
+                            const double e = (modEnv_.Next(), modEnv_.Level());
+                            const double g = modEnv_.Attacking() ? e : e > 1e-4 ? 1.0 + std::log(e) / std::log(1e4) : 0.0;
+                            const double m = std::clamp(modAmt * g, -1.0, 1.0);
+                            knob += m * (m > 0 ? 127.0 - knob : knob);
+                        }
+                        const double k = std::clamp(knob, 0.0, 127.0);
+                        const int j = std::min(int(k), 126);
+                        fmBs[i] = FmBeta(j) + (FmBeta(j + 1) - FmBeta(j)) * (k - j);
+                    }
+                } else {
+                    std::fill_n(fmBs, frames, fmBeta);
+                    if (envFm) // (ring on: no FM, the env still runs)
+                        for (int i = 0; i < frames; ++i) modEnv_.Next();
+                }
+            }
+        }
+
         double fmIncA = NAN, fmRef = 0; // kFmRefInc / incA, recomputed when incA changes
         double copyStep = NAN; // the osc1 step copyInc holds (the copies' steps, recomputed when it changes)
         simd::P4 copyInc[2] = {};
         for (int i = 0; i < frames; ++i) {
-            // ---- per-sample modulation ----
-            const double me = modOn ? modEnv_.Next() * modAmt : 0.0;
-            const double lfoAll = r[2] ? pitchCents(r[2], i) : 0.0;
-            const double mAll = r[2] ? ratioAll(bendCents + lfoAll) : bendRatio;
-            const double m2 = r[1] ? ratio2(bendCents + lfoAll + pitchCents(r[1], i)) : mAll;
-            // (measured) mod env -> osc2 pitch: +-60 semitones at env 1 (not quantized)
-            const double mEnv2 = (modOn && modDest == 0) ? std::exp2(me * 60.0 / 12.0) : 1.0;
-            const double incA = inc1 * mAll, incB = inc2 * m2 * mEnv2;
-            double w = width;
-            if (r[5]) {
-                const double l = r[5].Signed(i);
-                w += l * (l > 0 ? 1.0 - width : width);
+            double incA = staticIncA, incB = staticIncB, w = staticWidth;
+            if constexpr (kOsc != kOscStatic) {
+                incA = incAs[i], incB = incBs[i], w = widths[i];
+                curWidth = w;
+                if (detuneOn && shape1 == 2) curWidth64 = WidthToPhase64(w);
             }
-            if (modOn && modDest == 2) {
-                // (measured, measure_modenv_pw.py) same room-left law
-                const double m = std::clamp(me, -1.0, 1.0);
-                w += m * (m > 0 ? 1.0 - w : w);
-            }
-            // (measured, measure_pw_limits.py) the final duty never reaches 0 / 1:
-            // pw 0 = pw 1 = 1.25 / 254, modulation tops out at 1 - 1.375 / 254
-            w = std::clamp(w, 1.25 / 254.0, 1.0 - 1.375 / 254.0);
-            double fmB = fmBeta;
-            if (!ring && (r[6] || (modOn && modDest == 1))) {
-                // (measured, measure_fm_mod.py) in FM knob units (fractional):
-                // LFO unipolar toward 127 by depth / 127 * u; mod env
-                // bipolar room-left, m = (amt - 64) / 64 at env 1.
-                double knob = p[kOsc1FM];
-                if (r[6]) knob += (127.0 - knob) * r[6].Unipolar(i);
-                if (modOn && modDest == 1) {
-                    // the DECAY reaches FM in dB: 0 dB -> 1, -80 dB -> 0 (the
-                    // offset falls LINEARLY in time, to 0 at 9.2 taus); the
-                    // attack ramp is linear as elsewhere
-                    const double e = modEnv_.Level();
-                    const double g = modEnv_.Attacking() ? e : e > 1e-4 ? 1.0 + std::log(e) / std::log(1e4) : 0.0;
-                    const double m = std::clamp(modAmt * g, -1.0, 1.0);
-                    knob += m * (m > 0 ? 127.0 - knob : knob);
-                }
-                const double k = std::clamp(knob, 0.0, 127.0);
-                const int j = std::min(int(k), 126);
-                fmB = FmBeta(j) + (FmBeta(j + 1) - FmBeta(j)) * (k - j);
-            }
-            curWidth = w;
-            if (detuneOn && shape1 == 2) curWidth64 = ToPhase64(w);
             // ---- osc2 ----
             double o2 = 0;
             switch (shape2) {
@@ -396,8 +480,11 @@ private:
             // (measured, measure_fm_key.py) the deviation is a FIXED phase step
             // per sample (beta x key 60 at 44.1 kHz): the index falls an octave
             // up, rises with the sample rate
-            if (incA != fmIncA) fmIncA = incA, fmRef = kFmRefInc / incA;
-            const double fm = 1.0 + fmB * o2 * fmRef;
+            double fm = 1.0;
+            if constexpr (kOsc == kOscCross) {
+                if (incA != fmIncA) fmIncA = incA, fmRef = kFmRefInc / incA;
+                fm = 1.0 + fmBs[i] * o2 * fmRef;
+            }
             double o1 = OscRead(shape1, saw1, tri1, osc1Phase_, curWidth);
             double sub = subOn ? OscRead(subAs1, sawSub, triSub, subPhase_, 0.5) : 0.0;
             if (detuneOn) {
@@ -451,8 +538,18 @@ private:
             const double base = cutoffBase + cutoffStep * i, low = base - 2.1;
             double cutoff = low + (std::clamp(base + envDepth, -2.0, 125.0) - low) * filterEnv_.Next();
             if (r[3]) cutoff += std::max(0.0, 125.0 - cutoff) * std::min(1.0, r[3].Unipolar(i)); // tops out (measured)
-            filter_.SetParams(filterType, cutoff, filterRes);
-            const double filtered = Saturate(filter_.Process(mixed), satA);
+            double filterOut;
+            if constexpr (kFilter == VoiceFilter::kSvf) {
+                filter_.SetSvf(filterType, cutoff, filterRes);
+                filterOut = filter_.ProcessSvf(mixed);
+            } else if constexpr (kFilter == VoiceFilter::kLadder) {
+                filter_.SetLadder(cutoff, filterRes);
+                filterOut = filter_.ProcessLadder(mixed);
+            } else {
+                filter_.SetDiode(cutoff, filterRes);
+                filterOut = filter_.ProcessDiode(mixed);
+            }
+            const double filtered = Saturate(filterOut, satA);
             const double env = amp_.Next();
             double gainMod = 1.0;
             for (int k = 0; k < r[4].n; ++k) gainMod *= 1.0 - r[4].scale[k] * 0.5 * (1.0 - r[4].v[k][i]);
@@ -461,7 +558,9 @@ private:
             double gl = panL, gr = panR;
             if (r[7]) {
                 const double s = r[7].Signed(i); // + = left; unclamped (measured: 127 + 127 -> gains 2 / -1)
-                const double q = s >= 0 ? 1.0 - std::pow(1.0 - s, 3.0) : std::pow(1.0 + s, 3.0) - 1.0;
+                // (the cube by hand: a pow call here, even never taken, cost the loop ~40 instructions)
+                const double u = 1.0 - std::fabs(s), cube = u * u * u;
+                const double q = s >= 0 ? 1.0 - cube : cube - 1.0;
                 gl *= q >= 0 ? 1.0 + 0.5 * q : 1.0 + q;
                 gr *= q >= 0 ? 1.0 - q : 1.0 - 0.5 * q;
             }
@@ -469,6 +568,13 @@ private:
             right[i] += float(y * gr);
             if (!amp_.Active() && (((pos + i + 1) & 255) == 0 || pos + i + 1 >= blockEnd)) {
                 tail_ = false;
+                // the voice ends here: the mod env stops with it (it ran ahead)
+                if constexpr (kOsc != kOscStatic) {
+                    if (modOn) {
+                        modEnv_ = modEnvBefore;
+                        for (int k = 0; k <= i; ++k) modEnv_.Next();
+                    }
+                }
                 break;
             }
             tail_ = !amp_.Active();
@@ -520,6 +626,8 @@ private:
     static OXO_INLINE double Wrap(double ph) { return ph >= 0.0 && ph < 1.0 ? ph : ph - std::floor(ph); }
     // the same for ph in [0, 2) (a phase + a pulse width), never a call
     static OXO_INLINE double WrapNext(double ph) { return ph >= 1.0 ? ph - 1.0 : ph; }
+    // a pulse width (always inside (0, 1)) as a phase offset = ToPhase64 without its wrap
+    static OXO_INLINE Phase64 WidthToPhase64(double width) { return Phase64(int64_t(width * 0x1p63)) << 1; }
     // osc1's detune copy d (the sub's copy d = copyPhase_[d])
     Phase64 CopyPhase(int d) const { return copyHalf_ ? copyPhase_[d] << 1 : copyPhase_[d]; }
     // osc1's copy phases, the sub's locked to them (half = sub octave)
