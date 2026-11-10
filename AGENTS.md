@@ -180,25 +180,42 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   compact comma style). Then `tools/au_harness`.
 - `make -C EngineCoreTests test`, `make -C tools/s2render`, CPU bench
   `clang++ -std=c++20 -O2 tools/bench/main.cpp -o build/bench && ./build/bench`
-  (16 voices, one core, Apple M: LP12 x80, LP24 x70, LPDL x34, detune+sub
-  x40, all fx x60 realtime; `./build/bench <x.sy1>...` = a keyboard scrub,
-  ~31 voices: Madame Eljay 010 x20, the heaviest case reported, Synth1
-  ~4x lighter), `make -C tools/s1ref` (x86_64, needs the original AU).
+  (16 voices, one core, Apple M4: LP12 x94, LP24 x81, LPDL x34, detune+sub
+  x49, all fx x71 realtime; `./build/bench <x.sy1>...` = a keyboard scrub,
+  ~31 voices: Madame Eljay 010 x21..24, the heaviest case reported),
+  `make -C tools/s1ref` (x86_64, needs the original AU).
+  VS THE ORIGINAL: time both as x86_64 under Rosetta (the only Synth1 we
+  can run; its ratio, 3.4x before, was close to a real Windows PC's DAW
+  meter, 4.4x; same session only, the machine's speed drifts ~10 %):
+  `./build/bench --job x.sy1 /tmp/s.wav > /tmp/s.txt` (the scrub as a
+  job), `S1REF_TIME=1 build/s1ref/s1ref batch /tmp/s.txt` (original), a
+  `-arch x86_64` bench `./build/bench_x64 /tmp/s.txt` (ours; any job
+  file). 2026-11-10, Madame Eljay 010: Synth1 x31, ours x13 (x9 before
+  the SIMD / inlining work), without its detune x38 / x19. Rosetta can't
+  show denormal costs (ARM hardware). Instruction counts per run: macOS
+  `/usr/bin/time -l` ("instructions retired"; the voice runs at IPC ~6.5
+  on M4, so cost = instruction count: ~500 per voice-sample for that
+  patch without detune, ~800 with). Line-level profile: `xcrun xctrace
+  record --template 'Time Profiler' --launch -- <bin>`, export the
+  time-profile table, leaf addresses through `atos -i` (no perf on mac).
   ENGINE CPU CONTRACTS: wave tables store each point's Hermite cubic (one
   load per read, 11 MB at 44.1 kHz shared per process); osc1's detune
   copies use 64-bit fixed-point phases (`Phase64`, free wrap), ONE array
   shared by osc1's and the sub's copies (`copyPhase_`, sub octave = half
   rate, osc1's = `<< 1`), read / sined 4 at a time through explicit SIMD
   (`EngineCore/Simd.hpp`: SSE2 / NEON / plain C++, `-DOXO_SIMD_SCALAR`
-  forces the latter; gathers, which no compiler vectorizes); `Voice::Wrap` calls
-  floor only out of range (a library call on x64 SSE2). Everything the
-  voice loop calls is `OXO_INLINE` (forced; no lambdas there: clang left
-  them as calls, each spilling the loop's live values; MSVC inlines even
-  less): +10..25 %. Per-chunk exps are cached (`Adsr::Configure`, detune
-  ratios). Keep the voice in ONE per-sample loop: splitting the filter
-  into its own pass made it latency-bound, and a separate modulation pass
-  (envelopes / LFO routes into arrays) was 5..15 % slower too. Engine changes: render every factory /
-  starter patch before / after and compare (expected <= -120 dB).
+  forces the latter; gathers, which no compiler vectorizes); `Voice::Wrap`
+  calls floor only out of range (a library call on x64 SSE2). Everything
+  the voice loop calls is `OXO_INLINE` (forced; no lambdas there: clang
+  left them as calls, each spilling the loop's live values; MSVC inlines
+  even less): +10..25 %. Per-chunk exps are cached (`Adsr::Configure`,
+  detune ratios). `Synth::Render` flushes denormals (FTZ / DAZ, x86).
+  Keep the voice in ONE per-sample loop: splitting the filter into its
+  own pass made it latency-bound, and a separate modulation pass
+  (envelopes / LFO routes into arrays) was 5..15 % slower too. Engine
+  changes: render every factory / starter / library patch before / after
+  and compare (expected <= -120 dB; the x86_64 and arm64 renders differ
+  slightly from each other: FMA).
 - Python: `.venv` (numpy, scipy) for `tools/s1ref` scripts.
 - WINDOWS: `build_windows.bat [--clang] [--no-pause]` on Windows (Visual Studio 2022+
   C++ workload; CMake from `%CMAKE%`, PATH or VS's own; generator = CMake's

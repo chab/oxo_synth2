@@ -3,6 +3,12 @@
 //   clang++ -std=c++20 -O2 tools/bench/main.cpp -o build/bench && ./build/bench [patch.sy1...]
 // Each .sy1 given is also played as a keyboard "scrub" (a mouse dragged
 // over the keys: a new key every 60 ms, each released after 120 ms).
+// Against the original (both x86_64 under Rosetta: build the bench with
+// -arch x86_64), the same scrub as an s1ref job:
+//   ./build/bench --job x.sy1 /tmp/scrub.wav > /tmp/scrub.txt
+//   S1REF_TIME=1 build/s1ref/s1ref batch /tmp/scrub.txt   (the original)
+//   ./build/bench /tmp/scrub.txt                          (ours: any job file)
+#include "../../EngineCore/Jobs.hpp"
 #include "../../EngineCore/Sy1Codec.hpp"
 #include "../../EngineCore/Synth.hpp"
 
@@ -30,16 +36,50 @@ static double Run(const char *name, PatchValues p) {
     return cpu;
 }
 
-static void Scrub(const char *path) {
+static std::string ReadFile(const char *path) {
     std::ifstream in(path, std::ios::binary);
     std::stringstream text;
     text << in.rdbuf();
-    const Sy1Patch patch = ParseSy1(text.str());
+    return text.str();
+}
+
+static constexpr int kScrubBlock = 256, kScrubStep = 44100 * 60 / 1000 / kScrubBlock; // blocks per key
+
+// Scrub's notes as an s1ref job (10 s, no preroll)
+static void PrintScrubJob(const char *path, const char *out) {
+    const Sy1Patch patch = ParseSy1(ReadFile(path));
+    std::printf("job %s\nlen 10\npreroll 0\n", out);
+    for (int k = 0; k < kParamCount; ++k) std::printf("n %d %d\n", k, patch.values[k]);
+    const double step = kScrubStep * kScrubBlock / 44100.0;
+    for (int k = 0; k * kScrubStep < 44100 * 10 / kScrubBlock; ++k)
+        std::printf("note %.6f %.6f %d 100\n", k * step, (k + 2) * step, 48 + k % 24);
+    std::printf("end\n");
+}
+
+// every job of an s1ref job file through our engine, one core
+static void TimeJobs(const char *path) {
+    std::vector<Job> jobs;
+    std::string error;
+    if (!ParseJobs(ReadFile(path), jobs, error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return;
+    }
+    std::vector<float> l, r;
+    for (const Job &job : jobs) {
+        const auto t0 = std::chrono::steady_clock::now();
+        RenderJob(job, l, r);
+        const double cpu = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("  %-40s x%.1f realtime\n", job.out.c_str(), (job.length + job.preroll) / cpu);
+    }
+}
+
+static void Scrub(const char *path) {
+    const Sy1Patch patch = ParseSy1(ReadFile(path));
     Synth s;
     s.SetSampleRate(44100);
     s.SetPatch(patch.values);
-    std::vector<float> l(256), r(256);
-    const int blocks = 44100 * 10 / 256, step = 44100 * 60 / 1000 / 256;
+    std::vector<float> l(kScrubBlock), r(kScrubBlock);
+    const int blocks = 44100 * 10 / kScrubBlock, step = kScrubStep;
     int keys[2] = {-1, -1}, voices = 0;
     const auto t0 = std::chrono::steady_clock::now();
     for (int b = 0; b < blocks; ++b) {
@@ -49,8 +89,8 @@ static void Scrub(const char *path) {
             keys[0] = 48 + (b / step) % 24;
             s.NoteOn(keys[0], 100);
         }
-        s.BeginBlock(256);
-        s.Render(l.data(), r.data(), 256);
+        s.BeginBlock(kScrubBlock);
+        s.Render(l.data(), r.data(), kScrubBlock);
         const uint64_t st = s.VoiceStates();
         voices += std::popcount((st | st >> 1) & 0x5555555555555555ull);
     }
@@ -59,7 +99,12 @@ static void Scrub(const char *path) {
 }
 
 int main(int argc, char **argv) {
-    for (int i = 1; i < argc; ++i) Scrub(argv[i]);
+    if (argc == 4 && std::string(argv[1]) == "--job") return PrintScrubJob(argv[2], argv[3]), 0;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a.size() > 4 && a.substr(a.size() - 4) == ".sy1") Scrub(argv[i]);
+        else TimeJobs(argv[i]);
+    }
     if (argc > 1) return 0;
     PatchValues base = DefaultValues();
     base[kFilterAttack] = 40, base[kFilterDecay] = 80, base[kFilterSustain] = 30, base[kFilterAmount] = 100;

@@ -15,7 +15,8 @@ Python helpers need the repo venv: `python3 -m venv .venv && .venv/bin/pip insta
 - `s1ref fromnative [ver=N] id=v ...` — write native values through the chunk,
   print what the AU reports.
 - `s1ref classinfo`, `s1ref get` — raw state dumps.
-- `s1ref batch jobs.txt|-` — render jobs:
+- `s1ref batch jobs.txt|-` — render jobs (`S1REF_TIME=1`: each job's
+  render speed on stderr, see AGENTS.md "VS THE ORIGINAL"):
   ```
   job /abs/out.wav
   sr 44100 | len 3.0 | tempo 120 | preroll 0.25
