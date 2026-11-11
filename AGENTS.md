@@ -716,6 +716,17 @@ original AU; keeps both renders for listening).
   voice locks on a constant (silence after a click; key 60: FM ≥ 54,
   −12.7 FM steps per octave down; nulls −87 dB vs the original).
   Pitched modulators match by level / spectrum, not sample-exact (chaotic).
+  `check_fm.py [--sync]`: osc1 x osc2 shape x FM grid vs the original.
+  No sync: every pair within 0.6 dB at every FM (2026-11-11). Sync + FM:
+  off by 1..30 dB from FM ~60 (key 48) with saw / pulse / tri osc2. The
+  original's osc2 reads +0.02..0.06 HIGHER than ours on the sample right
+  after a reset (saw: ours 0 = the band-limited jump's midpoint; triangle
+  none), deconvolved from the no-FM sync residual through the chain IR
+  (identical-noise fit). Under FM that sample decides whether osc1 steps
+  forward or backward (e.g. pulse 64, FM 60, key 48: original runs at
+  the plateau rate, ours locks near phase 0). Not resolved: resetting to
+  c·incB overshoots even at c = 0.1, a sub-sample reset (overshoot / step
+  × incB) is 10x too much, "previous o2 drives FM" is worse.
 - The "fixed output lowpass" (bilinear one-pole, analog 22 kHz, NO
   prewarp) is NOT per voice: it is the EQ TONE stage at 64 (see EQ).
 - Amp env: linear attack 0.5 ms·2^(v/8.05); decay/release exponential
