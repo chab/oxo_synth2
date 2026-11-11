@@ -940,7 +940,15 @@ original AU; keeps both renders for listening).
   `reference/meta/effect.json`; laws in the EffectUnit comment):
   distortions = drive table → curve → RBJ HP → RBJ LP 400 Hz·40^(ctl2/127)
   Q3 → gain (level+2)/129, no dry (a.d.1 = fitted asymmetric tanh in a 69
-  Hz negative-feedback loop); deci = hold ctl1+1 samples, floor quantiser,
+  Hz negative-feedback loop); d.d. = F(x) = P·tri(S·x/P), slope S and
+  peak P PER CTL1 (`measure_dd.py` → kDdSlope / kDdPeak: P 1.64 at ctl1 0
+  falling to 0.5778 from ~64 up, S 0.895 .. 1000; nulls -50..-78 dB on the
+  effect's exact input = the effect-off render with the EQ tone stage
+  undone at the probe sine's frequency: the 22 kHz one-pole after the
+  effect shifts the input enough to wreck a 1000-fold fit). With a
+  thousand folds the output amplifies any input difference ~40 dB, so a
+  patch's d.d. output only nulls as deep as its voice does (-63 dB voice
+  -> ~-15 dB folded); deci = hold ctl1+1 samples, floor quantiser,
   14 kHz one-pole; r.m. = sine 8000^(ctl1/127) Hz; comp = one-pole |x|
   detector + soft-knee leveller; phasers = 2/4/8/12 allpasses, LEVEL =
   FEEDBACK (0.99·(lv−64)/64), ctl1 = sweep depth, ctl2 = rate, a bouncing

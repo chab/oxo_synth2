@@ -429,7 +429,10 @@ private:
 // 40^(ctl2 / 127), Q 3 -> output gain (level + 2) / 129 (NO dry mix).
 //   1 a.d.2: smooth odd curve (kAd2Curve, limit 0.825), HP 100 Hz Q 2.29
 //            (exact to 0.01 dB / 0.1 % residual).
-//   2 d.d.:  triangle fold, threshold 0.5835, same filters (exact).
+//   2 d.d.:  triangle fold, F(x) = P tri(S x / P): slope S and peak P per
+//            ctl1 (measure_dd.py, kDdSlope / kDdPeak; the peak falls from
+//            1.64 at ctl1 0 to 0.5778 from ~64 up), same filters (nulls
+//            -50..-75 dB, every ctl1).
 //   0 a.d.1: asymmetric tanh (limits 0.414 / 1.017) inside negative
 //            feedback through a 69 Hz one-pole (gain 9.9): the low cut and
 //            the even harmonics; HP 131 Hz Q 2.38, LP Q 1.61 (FITTED model,
@@ -495,17 +498,21 @@ private:
         const int i = int(a);
         return std::copysign(tables::kAd2Curve[i] + (tables::kAd2Curve[i + 1] - tables::kAd2Curve[i]) * (a - i), u);
     }
-    static double Fold(double u) {
-        constexpr double T = 0.5835;
-        const double ph = std::fmod(std::fabs(u) + T, 4 * T); // triangle, period 4T
-        return (u < 0 ? -1.0 : 1.0) * (ph < 2 * T ? ph - T : 3 * T - ph);
+    // triangle fold: slope 1 through 0, peaks +-1 at +-1, period 4
+    static double Fold(double v) {
+        const double a = std::fabs(v) + 1.0;
+        const double ph = a < 4.0 ? a : std::fmod(a, 4.0);
+        return (v < 0 ? -1.0 : 1.0) * (ph < 2.0 ? ph - 1.0 : 3.0 - ph);
     }
 
     void Distort(float *l, float *r, int n, const PatchValues &p) {
         const int type = p[kEffectType];
         const bool ad1 = type == 0;
-        const double drive = ad1 ? 2.65 * Drive(tables::kAd1Drive, p[kEffectCtrl1])
-                                 : Drive(type == 1 ? tables::kAd2Drive : tables::kDdDrive, p[kEffectCtrl1]);
+        const int c1 = std::clamp(p[kEffectCtrl1], 0, 127);
+        const double drive = ad1 ? 2.65 * Drive(tables::kAd1Drive, c1)
+                           : type == 1 ? Drive(tables::kAd2Drive, c1)
+                                       : tables::kDdSlope[c1] / tables::kDdPeak[c1]; // d.d.: fold rate
+        const double ddPeak = tables::kDdPeak[c1];
         hp2_.Set(ad1 ? 131.0 : 100.0, ad1 ? 2.379 : 2.29, true, sr_);
         lp2_.Set(400.0 * std::pow(40.0, p[kEffectCtrl2] / 127.0), ad1 ? 1.607 : 3.0, false, sr_);
         const double out = (p[kEffectLevel] + 2) / 129.0 * (ad1 ? 0.4613 : 1.0);
@@ -520,7 +527,7 @@ private:
                     fb_[ch] += fbA * (z - fb_[ch]);
                 } else {
                     const double u = drive * *s[ch];
-                    z = type == 1 ? Ad2(u) : Fold(u);
+                    z = type == 1 ? Ad2(u) : ddPeak * Fold(u);
                 }
                 *s[ch] = float(out * lp2_.Process(ch, hp2_.Process(ch, z)));
             }
