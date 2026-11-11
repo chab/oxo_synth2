@@ -46,8 +46,14 @@ def main():
     for v, (x, _) in zip(vals, outs):
         ref = lines(np.asarray(x[0][int(0.3 * SR) : int(0.3 * SR) + N], float))
         f = lambda b: float(np.sum((lines(model(b)) - ref) ** 2))
-        lo, hi = max(0.0, prev * 0.9 - 0.01), prev * 1.25 + 0.05
-        r = minimize_scalar(f, bounds=(lo, hi), method="bounded", options={"xatol": 1e-5})
+        # the error oscillates in beta at large indices: a plain bounded
+        # search fell into a wrong minimum from 124 up (83.6 instead of
+        # 71.6), so take the best of a grid, then refine around it
+        lo, hi = max(0.0, prev * 0.98 - 0.01), prev * 1.1 + 0.05
+        grid = np.linspace(lo, hi, 201)
+        g = grid[int(np.argmin([f(b) for b in grid]))]
+        step = (hi - lo) / 200
+        r = minimize_scalar(f, bounds=(max(lo, g - step), min(hi, g + step)), method="bounded", options={"xatol": 1e-5})
         betas.append(float(r.x))
         errs.append(r.fun)
         prev = r.x

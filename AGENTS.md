@@ -697,7 +697,11 @@ original AU; keeps both renders for listening).
   FM: inst f1 = f1 + beta[v]·261.63 Hz·(sr/44100)·osc2_norm (table measured
   at key 60, to ~102): the deviation is a FIXED phase step per sample
   (`measure_fm_key.py`): index halves per octave up (keys and key shift),
-  grows with the sample rate. FM 0 = NO FM (sidebands at the -178 dB
+  grows with the sample rate. Whole table = deviation step (cycles /
+  sample) (1001^(v/127) − 1) / 2000 to ~6e-4 relative: 0.5 = NYQUIST at
+  127, the carrier then simply folds (no clamp). Entries 124..127 were
+  wrong fits until 2026-11-11 (83.6..102 instead of 71.6..84.3: the
+  sideband error oscillates in beta, the fit now grids first). FM 0 = NO FM (sidebands at the -178 dB
   floor; the table's fitted entry 0, 6.6e-6, is noise: `Voice::FmBeta`;
   `measure_zero_knobs.py`, with the LFO depth 0 probe).
   Ring: osc2 ×
