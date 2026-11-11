@@ -170,9 +170,9 @@ private:
     void VoiceNoteOn(int key, int velocity) {
         bool anyGate = false;
         for (const Voice &v : voices_) anyGate |= v.Active() && v.Gate();
-        if (!anyGate) { // (manual) key sync resets the phase when no key was held
-            if (values_[kLfo1KeySync]) lfo_[0].ResetPhase();
-            if (values_[kLfo2KeySync]) lfo_[1].ResetPhase();
+        if (!anyGate) { // (measured) key sync restarts the LFO when no key was held
+            if (values_[kLfo1KeySync]) lfo_[0].Restart();
+            if (values_[kLfo2KeySync]) lfo_[1].Restart();
         }
         const int mode = values_[kPlayMode]; // 0 poly, 1 mono, 2 legato
         const bool porta = values_[kPortaTime] > 0;
