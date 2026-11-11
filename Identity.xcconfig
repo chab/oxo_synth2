@@ -44,8 +44,8 @@ OXO_LIBRARY_FOLDER = Oxo Music/Oxo Synth2
 
 // Version (VST3, AUv2, iPad app + extension). The AU plists' integer
 // `version` (AudioComponents) is set by hand next to it.
-MARKETING_VERSION = 1.1.2
-CURRENT_PROJECT_VERSION = 6
+MARKETING_VERSION = 1.1.3
+CURRENT_PROJECT_VERSION = 7
 
 // Apple signing team (iPad). Override without touching this file in a
 // gitignored Identity.local.xcconfig (any key above too).

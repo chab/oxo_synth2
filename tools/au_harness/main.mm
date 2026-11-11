@@ -85,6 +85,44 @@ int main() {
     int32_t pb = -1, ps = -1;
     h2.loadedProgram(h2.ctx, &pb, &ps);
     expect(pb == 0 && ps == 0, "loaded program = bank 0 slot 0");
+    {   // MIDI program change: slot of the current bank (inst wrote into User 001)
+        Synth2SetParam(inst, 0, 1);
+        h.setPatchName(h.ctx, "Tweaked");
+        AURenderEvent pc{};
+        pc.MIDI = {nullptr, 10, AURenderEventMIDI, 0, 2, 0, {0xC3, 0, 0}};
+        // menu > Program change: off by default = ignored
+        expect(h.programChange(h.ctx) == 0, "program change off by default");
+        Synth2Render(inst, 512, abl, &pc, 0, 120, 0, 0);
+        expect(Synth2GetParam(inst, 0) == 1, "program change off: ignored");
+        h.setProgramChange(h.ctx, 1);
+        void *later = Synth2Create("/tmp/oxo_s2_ios_harness_lib", nullptr, nullptr);
+        OxoSynth2Hooks hl = Synth2MakeHooks(later);
+        expect(hl.programChange(hl.ctx) == 1, "program change preference saved");
+        Synth2Destroy(later);
+        pc.MIDI.data[1] = 5; // empty slot 006: ignored
+        Synth2Render(inst, 512, abl, &pc, 0, 120, 0, 0);
+        expect(Synth2GetParam(inst, 0) == 1 && std::strcmp(h.patchName(h.ctx), "Tweaked") == 0, "program change to an empty slot");
+        pc.MIDI.data[1] = 0;
+        Synth2Render(inst, 512, abl, &pc, 0, 120, 0, 0);
+        expect(Synth2GetParam(inst, 0) == 3 && Synth2GetParam(inst, 19) == 127, "program change loads slot 001");
+        h.loadedProgram(h.ctx, &pb, &ps);
+        expect(std::strcmp(h.patchName(h.ctx), "Written") == 0 && pb == 0 && ps == 0, "UI follows the program change");
+        Synth2SetParam(inst, 0, 1);
+        MIDIEventList pcList{};
+        MIDIEventPacket *p2 = MIDIEventListInit(&pcList, kMIDIProtocol_2_0);
+        UInt32 pcWords[2] = {0x40C00000, 0x00000000}; // MIDI 2.0 program change, program 0
+        MIDIEventListAdd(&pcList, sizeof pcList, p2, 0, 2, pcWords);
+        AURenderEvent ump2{};
+        ump2.MIDIEventsList.eventType = AURenderEventMIDIEventList;
+        ump2.MIDIEventsList.eventList = pcList;
+        Synth2Render(inst, 512, abl, &ump2, 0, 120, 0, 0);
+        expect(Synth2GetParam(inst, 0) == 3, "MIDI 2.0 program change");
+        h.setProgramChange(h.ctx, 0);
+        Synth2SetParam(inst, 0, 1);
+        Synth2Render(inst, 512, abl, &pc, 0, 120, 0, 0);
+        expect(Synth2GetParam(inst, 0) == 1, "program change switched off: ignored");
+        Synth2SetParam(inst, 0, 3); // the state checks below expect it
+    }
     {   // the session keeps the program; a fresh instance starts on the library's first patch
         const int32_t sz = Synth2EncodeState(other, nullptr, 0);
         std::vector<uint8_t> st(sz);

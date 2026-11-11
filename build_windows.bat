@@ -1,17 +1,41 @@
 @echo off
-rem Builds the Windows x64 VST3 (MSVC) into Windows_Build\build and runs the
-rem Windows storage tests. Installs nothing, touches nothing outside the repo.
-rem   build_windows.bat [--no-pause]
+rem Builds the Windows x64 VST3 with clang-cl into Windows_Build\build and runs
+rem the Windows storage tests. Installs nothing, touches nothing outside the
+rem repo.
+rem   build_windows.bat [--msvc] [--bench] [--no-pause]
+rem clang-cl (Visual Studio's ClangCL toolset) is the compiler of the released
+rem plugin (tools\prepare_win_installer.bat): its engine code is ~1.7x faster
+rem than MSVC's.
+rem --msvc: MSVC instead, into Windows_Build\build-msvc (a Visual Studio
+rem without the clang components; compares the two compilers' code).
+rem --bench: also builds and runs the engine CPU bench (tools\bench, the
+rem plugin's compiler and options): realtime factors for a few scenarios, a
+rem keyboard scrub of the bundled Madame Eljay 010 patch and the "chords"
+rem load (32 voices rotating), one core. Run it with and without --msvc, on
+rem a quiet machine. The exe (bin\Release\synth2_bench.exe, static CRT) also
+rem runs alone on another PC: synth2_bench.exe --chords [runs].
 rem Needs Visual Studio 2022 or later (workload "Desktop development with
-rem C++") and the submodules: git submodule update --init --recursive
+rem C++", individual components "C++ Clang Compiler for Windows" + "MSBuild
+rem support for LLVM (clang-cl) toolset") and the submodules:
+rem git submodule update --init --recursive
+rem A build dir configured with the other compiler (Windows_Build\build was
+rem MSVC's before clang-cl became the default) is reconfigured with --fresh.
 rem CMake: %CMAKE% if set, else cmake on PATH, else the one bundled with Visual
 rem Studio. Generator: CMake's default (the newest Visual Studio), or the
 rem CMAKE_GENERATOR environment variable (CMake reads it).
 setlocal EnableExtensions DisableDelayedExpansion
 pushd "%~dp0" || exit /b 1
 set "NOPAUSE="
-if /i "%~1"=="--no-pause" set "NOPAUSE=1"
+set "MSVC="
+set "BENCH="
+:args
+if "%~1"=="" goto args_done
+if /i "%~1"=="--no-pause" (set "NOPAUSE=1") else if /i "%~1"=="--msvc" (set "MSVC=1") else if /i "%~1"=="--bench" (set "BENCH=1") else (set "REASON=Unknown option %~1" & goto fail)
+shift
+goto args
+:args_done
 set "BUILD=%~dp0Windows_Build\build"
+if defined MSVC set "BUILD=%~dp0Windows_Build\build-msvc"
 set "LOG=%BUILD%\build.log"
 set "EXIT_CODE=1"
 
@@ -28,10 +52,24 @@ if not exist "%BUILD%" mkdir "%BUILD%"
 >"%LOG%" echo Synth2 Windows VST3 build log
 set "ARCH=-A x64"
 if defined CMAKE_GENERATOR set "ARCH="
+set "TOOLSET=-T ClangCL"
+set "COMPILER=clang-cl"
+if defined MSVC (set "TOOLSET=" & set "COMPILER=MSVC")
+set "FRESH="
+if not exist "%BUILD%\CMakeCache.txt" goto fresh_done
+set "CACHED_CLANG="
+findstr /c:"CMAKE_GENERATOR_TOOLSET:INTERNAL=ClangCL" "%BUILD%\CMakeCache.txt" >nul && set "CACHED_CLANG=1"
+if defined MSVC if defined CACHED_CLANG set "FRESH=--fresh"
+if not defined MSVC if not defined CACHED_CLANG set "FRESH=--fresh"
+:fresh_done
 
-echo [1/3] Configuring (%CMAKE%)...
-"%CMAKE%" -S "%~dp0Windows_Build" -B "%BUILD%" %ARCH% -DCMAKE_POLICY_VERSION_MINIMUM=3.5 >>"%LOG%" 2>&1
-if errorlevel 1 (set "REASON=CMake configuration failed" & goto fail)
+echo [1/3] Configuring (%COMPILER%, %CMAKE%)...
+"%CMAKE%" %FRESH% -S "%~dp0Windows_Build" -B "%BUILD%" %ARCH% %TOOLSET% -DCMAKE_POLICY_VERSION_MINIMUM=3.5 >>"%LOG%" 2>&1
+if not errorlevel 1 goto configured
+set "REASON=CMake configuration failed"
+if defined TOOLSET set "REASON=CMake configuration failed (clang-cl needs Visual Studio's components C++ Clang Compiler for Windows + MSBuild support for LLVM; --msvc builds without them)"
+goto fail
+:configured
 
 echo [2/3] Building OxoSynth2.vst3...
 "%CMAKE%" --build "%BUILD%" --config Release --target OxoSynth2VST3 synth2_storage_tests --parallel >>"%LOG%" 2>&1
@@ -43,8 +81,19 @@ if not exist "%TESTS%" (set "REASON=Storage tests not built" & goto fail)
 "%TESTS%" >>"%LOG%" 2>&1
 if errorlevel 1 (set "REASON=Storage tests failed" & goto fail)
 
+if not defined BENCH goto built
+echo [bench] Building and running the engine CPU bench...
+"%CMAKE%" --build "%BUILD%" --config Release --target synth2_bench --parallel >>"%LOG%" 2>&1
+if errorlevel 1 (set "REASON=Bench build failed" & goto fail)
+set "BENCHEXE=%BUILD%\bin\Release\synth2_bench.exe"
+if not exist "%BENCHEXE%" (set "REASON=Bench not built" & goto fail)
+"%BENCHEXE%"
+"%BENCHEXE%" "%~dp0Shared\Resources\Synth2 Starter Banks\Madame Eljay\010.sy1"
+"%BENCHEXE%" --chords 3
+
+:built
 echo.
-echo [PASS] Built Windows_Build\build\VST3\Release\OxoSynth2.vst3 (not installed).
+echo [PASS] Built %BUILD%\VST3\Release\OxoSynth2.vst3 (not installed).
 set "EXIT_CODE=0"
 goto done
 

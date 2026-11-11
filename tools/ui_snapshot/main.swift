@@ -74,6 +74,7 @@ final class MockHost: SynthHost {
     func allNotesOff() {}
     var themeText = ""
     func setThemeText(_ text: String) { themeText = text }
+    var programChange = false
 }
 
 let args = CommandLine.arguments

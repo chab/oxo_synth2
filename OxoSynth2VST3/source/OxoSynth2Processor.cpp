@@ -21,6 +21,7 @@ namespace oxo {
 OxoSynth2Processor::OxoSynth2Processor() {
     setControllerClass(kOxoSynth2ControllerUID);
     const s2::MidiLearnTable learned = storage::LoadMidiLearn();
+    programChangeOn_ = storage::LoadProgramChange();
     // A fresh instance plays the library's first patch (Synth1: program 001
     // of the first bank); a session's setState replaces it.
     s2::Sy1Patch patch;
@@ -86,6 +87,22 @@ tresult PLUGIN_API OxoSynth2Processor::notify(Vst::IMessage *message) {
         if (!message->getAttributes() || message->getAttributes()->getBinary("theme", data, size) != kResultOk) size = 0;
         std::lock_guard<std::mutex> lock(nameMutex_);
         theme_ = size ? std::string(static_cast<const char *>(data), size) : std::string();
+        return kResultOk;
+    }
+    if (message && strcmp(message->getMessageID(), "OxoProgramBank") == 0) {
+        const void *data = nullptr;
+        uint32 size = 0;
+        if (message->getAttributes() && message->getAttributes()->getBinary("values", data, size) == kResultOk &&
+            size == sizeof(s2::ProgramBankValues)) {
+            auto bank = std::make_unique<s2::ProgramBankValues>();
+            std::memcpy(bank.get(), data, size);
+            programs_.Publish(std::move(bank));
+        }
+        return kResultOk;
+    }
+    if (message && strcmp(message->getMessageID(), "OxoProgramChangeOn") == 0) {
+        int64 on = 0;
+        if (message->getAttributes() && message->getAttributes()->getInt("on", on) == kResultOk) programChangeOn_ = on != 0;
         return kResultOk;
     }
     if (message && strcmp(message->getMessageID(), "OxoMidiLearn") == 0) {
@@ -168,6 +185,9 @@ void OxoSynth2Processor::applyParameter(Vst::ParamID id, double normalized, int3
         synth_.SetVolume(volume_.load());
     } else if (id == kPitchBendParamId) {
         synth_.PitchBend(std::clamp(int(std::lround(normalized * 16383.0)), 0, 16383));
+    } else if (id == kProgramParamId) {
+        if (programChangeOn_.load(std::memory_order_relaxed))
+            applyProgram(std::clamp(int(std::lround(normalized * 127.0)), 0, 127), offset, out);
     } else if (id == kAfterTouchParamId) {
         synth_.ChannelPressure(std::clamp(int(std::lround(normalized * 127.0)), 0, 127));
     } else if (id >= kCcParamIdBase && id < kCcParamIdBase + 128) {
@@ -186,6 +206,21 @@ void OxoSynth2Processor::applyParameter(Vst::ParamID id, double normalized, int3
         ccCounter_ = (ccCounter_ + 1) & 0x1FFF;
         AddOutputPoint(out, kLastCcParamId, offset, double((ccCounter_ << 7) | uint32_t(cc)) / kLastCcTokenScale);
     }
+}
+
+// A MIDI program change: the patch of that slot of the current bank (an
+// empty slot = nothing); the host / controller hear of every changed value
+// and of the slot (token).
+void OxoSynth2Processor::applyProgram(int program, int32 offset, Vst::IParameterChanges *out) {
+    const s2::PatchValues *v = s2::SwitchProgram(synth_, programs_.Current(), program);
+    if (!v) return;
+    for (int p = 0; p < s2::kParamCount; ++p) {
+        const int32_t native = (*v)[size_t(p)];
+        if (native == values_[size_t(p)].exchange(native, std::memory_order_relaxed)) continue;
+        AddOutputPoint(out, Vst::ParamID(p), offset, s2::ToNormalized(p, native));
+    }
+    programCounter_ = (programCounter_ + 1) & 0x1FFF;
+    AddOutputPoint(out, kProgramTokenParamId, offset, double((programCounter_ << 7) | uint32_t(program)) / kProgramTokenScale);
 }
 
 tresult PLUGIN_API OxoSynth2Processor::process(Vst::ProcessData &data) {

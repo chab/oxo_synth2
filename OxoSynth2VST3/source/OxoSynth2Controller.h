@@ -26,6 +26,12 @@ public:
     Steinberg::tresult PLUGIN_API getMidiControllerAssignment(Steinberg::int32 busIndex, Steinberg::int16 channel,
                                                               Steinberg::Vst::CtrlNumber midiControllerNumber,
                                                               Steinberg::Vst::ParamID &id) SMTG_OVERRIDE;
+    Steinberg::tresult PLUGIN_API connect(Steinberg::Vst::IConnectionPoint *other) SMTG_OVERRIDE;
+    Steinberg::tresult PLUGIN_API setParamNormalized(Steinberg::Vst::ParamID tag,
+                                                     Steinberg::Vst::ParamValue value) SMTG_OVERRIDE;
+    Steinberg::tresult PLUGIN_API getUnitByBus(Steinberg::Vst::MediaType type, Steinberg::Vst::BusDirection dir,
+                                               Steinberg::int32 busIndex, Steinberg::int32 channel,
+                                               Steinberg::Vst::UnitID &unitId) SMTG_OVERRIDE;
 
     // ---- SynthEditorCore ----
     int32_t NativeValue(int id) override;
@@ -42,6 +48,9 @@ public:
     int32_t LastCC() override;
     uint64_t VoiceStates() override;
     void AllNotesOff() override;
+    bool ProgramBankChanged(const s2::ProgramBankValues &values) override;
+    bool ProgramChangeOn() override { return programChangeOn_; }
+    void SetProgramChangeOn(bool on) override;
 
     OBJ_METHODS(OxoSynth2Controller, EditControllerEx1)
     DEFINE_INTERFACES
@@ -51,6 +60,7 @@ public:
 
 private:
     s2::MidiLearnTable learnCc_{};
+    bool programChangeOn_ = false; // menu > Program change (per-user preference)
 };
 
 } // namespace oxo

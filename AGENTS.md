@@ -83,20 +83,23 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   `ParamFormat.hpp` (value labels; `DisplayName` = LCD name, effect knobs
   per effect type), `MidiLearn.hpp` (learn table, CC scaling, JSON),
   `PatchLibrary.hpp` (banks, zip reader, import, `PatchManager`),
-  `TextEncoding.hpp` (legacy names: Shift-JIS / Windows-1252 → UTF-8),
+  `ProgramChange.hpp` (MIDI program change: current bank snapshot,
+  `RtMailbox`, `SwitchProgram`), `TextEncoding.hpp` (legacy names: Shift-JIS / Windows-1252 → UTF-8),
   `Jobs.hpp` (s1ref job format → our engine, WAV writer).
 - `EditorCore/` portable editor services: `OxoSynth2Bridge.h` (C hooks
   between C++ and the Swift editor), `SynthEditorCore.hpp` (base of the
   VST3 controller and the AUv3 instance), `State.hpp` (state chunk),
   `Storage.hpp` (per-user files, mac library / factory paths), `Trash.hpp`,
-  `Json.hpp` (small strict JSON reader), `Themes.hpp` (the C++ mirror of
+  `Json.hpp` (small strict JSON reader), `Settings.hpp` (settings.json:
+  independent top-level keys, a save edits only its value in place; Windows
+  zoom, program change; `EngineCoreTests/SettingsTests.cpp`), `Themes.hpp` (the C++ mirror of
   `Shared/SynthTheme.swift` for C++ editors: 13 keys, factory themes,
   lenient hex map, `stateText`, the `themes.json` store;
   `EngineCoreTests/ThemesTests.cpp` PARSES the Swift file, so a key or a
   factory theme changed on one side only fails the tests).
 - `EngineCoreTests/` — `make -C EngineCoreTests test`.
 - `OxoSynth2VST3/` — processor / controller / entry / editor view, CMake
-  (SDK + AUv2 wrapper with the hidden-param auwrapper.mm patch, Swift
+  (SDK + AUv2 wrapper with the auwrapper.mm patches, Swift
   static lib `OxoSynth2Editor`, links zlib).
 - `Shared/` — SwiftUI editor used by both formats: `SynthModel.swift`
   (`SynthHost` protocol + model polling the host at 30 Hz; MIDI learn
@@ -163,8 +166,9 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   `SMTG_OS_WINDOWS`.
 - `docs/images/` — README pictures (`synth2_preview.jpg`).
 - `third_party/` — submodules `vst3sdk` v3.8.1_build_84 (MIT) +
-  `AudioUnitSDK` 1.4.0 (Apache 2.0); remaining patches: hidden-param
-  auwrapper + AudioUnitSDK deployment target.
+  `AudioUnitSDK` 1.4.0 (Apache 2.0); remaining patches: auwrapper hidden
+  params + program count (SDK bug: read from parameter 0) + AudioUnitSDK
+  deployment target.
 
 ## Builds and tests
 
@@ -180,32 +184,119 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   compact comma style). Then `tools/au_harness`.
 - `make -C EngineCoreTests test`, `make -C tools/s2render`, CPU bench
   `clang++ -std=c++20 -O2 tools/bench/main.cpp -o build/bench && ./build/bench`
-  (16 voices, one core, Apple M: LP12 x80, LP24 x70, LPDL x34, detune+sub
-  x40, all fx x60 realtime; `./build/bench <x.sy1>...` = a keyboard scrub,
-  ~31 voices: Madame Eljay 010 x20, the heaviest case reported, Synth1
-  ~4x lighter), `make -C tools/s1ref` (x86_64, needs the original AU).
+  (16 voices, one core, Apple M4: LP12 x135, LP24 x109, LPDL x35,
+  detune+sub x88, all fx x90 realtime; `./build/bench <x.sy1>...` = a
+  keyboard scrub, ~31 voices: Madame Eljay 010 x46, the heaviest case
+  reported),
+  `make -C tools/s1ref` (x86_64, needs the original AU).
+  VS THE ORIGINAL: time both as x86_64 under Rosetta (the only Synth1 we
+  can run; its ratio, 3.4x before, was close to a real Windows PC's DAW
+  meter, 4.4x; same session only, the machine's speed drifts ~10 %):
+  `./build/bench --job x.sy1 /tmp/s.wav > /tmp/s.txt` (the scrub as a
+  job), `S1REF_TIME=1 build/s1ref/s1ref batch /tmp/s.txt` (original), a
+  `-arch x86_64` bench `./build/bench_x64 /tmp/s.txt` (ours; any job
+  file). 2026-11-10, Madame Eljay 010 (osc1 pulse + detune, sine sub an
+  octave down, osc2 pulse, BP12, 4-voice unison): Synth1 x33, ours x23
+  (x17 before the copies' table lookups, x13 before the per-case voice
+  loop, x9 before the SIMD work); without its detune x40 / x31, without
+  detune, sub, LFO and fx x46 / x37. The detune copies: ours 12 ms of
+  CPU per second of audio (31 voices; 27 as interpolated reads), the
+  original 5. Rosetta can't show denormal costs (ARM hardware), MSVC's
+  code or a PC's caches / ports: time a PC with `build_windows.bat
+  --bench`. Instruction counts per run: macOS `/usr/bin/time -l`
+  ("instructions retired"; the voice runs at IPC ~6 on M4, so cost ~
+  instruction count: per voice-sample 245 for two oscillators + SVF, 310
+  for that patch without detune, 490 with; arm64 counts every double
+  literal the loop rematerializes as 5). Line-level profile: `xcrun
+  xctrace record --template 'Time Profiler' --launch -- <bin>`, export
+  the time-profile table, leaf addresses through `atos -i` (no perf on
+  mac; samples skid onto long dependency chains: trust instruction-count
+  A/B over the line profile). Timing the ORIGINAL per feature tells how
+  it works (its pulse copies cost 2x its saw copies = two reads; its sub
+  copies cost the same for the four sub shapes = one read each).
+  TRIED, NO GAIN (2026-11-10): linear interpolation for the copies (-2.5
+  ..5 % instructions: an interpolated read costs its gather, not its
+  order); skipping the filter's coefficient lookup when the cutoff did
+  not move; `[[unlikely]]` on the SVF limiter's pow.
   ENGINE CPU CONTRACTS: wave tables store each point's Hermite cubic (one
-  load per read, 11 MB at 44.1 kHz shared per process); osc1's detune
-  copies use 64-bit fixed-point phases (`Phase64`, free wrap), their sines
-  in float into a member scratch array (vectorizes); `Voice::Wrap` calls
-  floor only out of range (a library call on x64 SSE2). Keep the voice in
-  ONE per-sample loop: splitting the filter into its own pass made it
-  latency-bound (slower everywhere). Engine changes: render every factory /
-  starter patch before / after and compare (expected <= -120 dB).
+  load per read, 11 MB at 44.1 kHz shared per process) for osc1, osc2
+  and the sub; osc1's and the sub's DETUNE COPIES are plain lookups, as
+  in the original (Osc below): `WaveTableSet::CopyTable`, 2048 points
+  per note and shape (+ 3 MB), the phase's top 11 bits, no
+  interpolation, summed by `Voice::CopiesSum` (a third of an
+  interpolated read's cost). Their 64-bit fixed-point phases
+  (`Phase64`, free wrap) are ONE array shared by osc1's and the sub's
+  copies (`copyPhase_`, sub octave = half rate, osc1's = `<< 1`),
+  stepped through `EngineCore/Simd.hpp` `P4` (SSE2 / NEON / plain C++,
+  `-DOXO_SIMD_SCALAR` forces the latter: clang builds that from scalar
+  source, MSVC does not). THE VOICE LOOP IS COMPILED PER CASE: `Voice::RenderChunk` picks
+  one of 18 `RenderChunkAs<kOsc, kDetune, kFilter>` (osc static / moving
+  / cross = FM, ring, sync; detune; SVF / ladder / diode), same
+  statements in each (`if constexpr`), so they render bit-identically.
+  With every feature as a run-time test the loop carried ~1.6x the
+  instructions. The oscillators' modulation (steps, pulse width, FM
+  index: mod env, LFOs on pitch / pw / FM) is computed AHEAD per chunk
+  into arrays, each part in its own loop and only when routed (the mod
+  env runs ahead there: restored when the voice ends mid-chunk);
+  envelopes, filter and the LFOs on cutoff / amp / pan stay in the loop.
+  NO LIBRARY CALL SITE in the voice loop unless its case needs it: a
+  never-taken `pow` (the pan LFO's cube) cost every voice ~40
+  instructions per sample (live values spilled around it); floor / trunc
+  are calls on x64 SSE2 (MSVC), so `Wrap` calls floor only out of range,
+  a pulse's second read wraps by compare (`WrapNext`), pitch steps
+  truncate by cast. Delay / chorus indices wrap by compare (`% size` = a
+  64-bit division). Everything the loop calls is `OXO_INLINE` (forced).
+  Per-chunk exps are cached (`Adsr::Configure`, detune ratios).
+  `Synth::Render` flushes denormals (FTZ / DAZ, x86). Keep the voice in
+  ONE per-sample loop (splitting the filter into its own pass made it
+  latency-bound). A value the original plays as exactly 0 must be 0, not
+  a fit's residue (FM 0, LFO depth 0): the residue is inaudible but
+  keeps the slow path on. Engine changes: render every factory /
+  starter / library patch before / after and compare (the per-case loop
+  was bit-identical on all 747, arm64 and x86_64, two phrases incl.
+  staccato notes reusing voice slots; the x86_64 and arm64 renders
+  differ slightly from each other: FMA). Give such a tool ABSOLUTE
+  patch paths and make it fail on an unreadable file: a first run
+  compared the init patch 346 times (the counts in the commits of
+  e237a62 / 62ef63c are from it; right ones: LFO depth 0 changes 102
+  patches, FM 0 319).
 - Python: `.venv` (numpy, scipy) for `tools/s1ref` scripts.
-- WINDOWS: `build_windows.bat [--no-pause]` on Windows (Visual Studio 2022+
-  C++ workload; CMake from `%CMAKE%`, PATH or VS's own; generator = CMake's
-  default or `CMAKE_GENERATOR`) → `Windows_Build\build\VST3\Release\
-  OxoSynth2.vst3` + storage tests, installs nothing. On the mac,
+- WINDOWS: `build_windows.bat [--msvc] [--bench] [--no-pause]` on Windows (Visual Studio 2022+
+  C++ workload + components "C++ Clang Compiler for Windows" and "MSBuild
+  support for LLVM (clang-cl) toolset"; CMake from `%CMAKE%`, PATH or VS's
+  own; generator = CMake's default or `CMAKE_GENERATOR`) →
+  `Windows_Build\build\VST3\Release\OxoSynth2.vst3` + storage tests,
+  installs nothing. Compiler = CLANG-CL (VS's ClangCL toolset), THE
+  RELEASE'S, so dev and release builds match (2026-11-11; it was MSVC by
+  default, clang-cl opt-in). `--msvc` = MSVC into
+  `Windows_Build\build-msvc` (no clang components; compare the code). A
+  build dir whose cache holds the other toolset is reconfigured with
+  CMake `--fresh` (an old MSVC `build`); `--bench`
+  = also build and run `tools/bench` (CMake target `synth2_bench`, the
+  plugin's compiler and options: the scenarios + the bundled Madame Eljay
+  010 scrub + `--chords 3`), THE way to time the engine on a PC: Rosetta on
+  an M4 shows neither MSVC's code nor a PC's caches / ports, and runs AVX2
+  2x slower than SSE2). `bin\Release\synth2_bench.exe` has a static CRT:
+  copy it alone to any PC; `synth2_bench.exe --chords [runs]` = 32 voices
+  rotating (unison 4, detune + sub, long release), best / median % of one
+  core. MSVC vs CLANG-CL (2026-11-10, `--chords`; measured on ARM64
+  Windows, where the x64 build runs EMULATED: confirm on a real x86 PC):
+  before d89340c MSVC 10.6 %, clang-cl 7.7 %; at 2c1356d (the per-case
+  voice loop) 9.1 % / 5.5 %, scrub x12 / x19. MSVC gains far less from
+  that loop; clang-cl is ~1.7x faster on everything but LPDL (x28 both).
+  On the mac,
   `tools/win_check/check.sh` compile-checks the Windows sources with
   mingw-w64 (`brew install mingw-w64`; warnings = errors; the worktree's
   SDK or `VST3SDK=<path>`). `.bat` files are CRLF (`.gitattributes`).
 - WINDOWS INSTALLER: `tools\prepare_win_installer.bat [--skip-build]
-  [--skip-validator] [--dynamic-crt] [--no-pause]` IN THE VM (+ Inno Setup
-  6.3+, `winget install JRSoftware.InnoSetup`) →
+  [--skip-validator] [--msvc] [--dynamic-crt] [--no-pause]` on Windows (+
+  Inno Setup 6.3+, `winget install JRSoftware.InnoSetup`) →
   `dist\win\<Product>-<ver>-<build>-Windows-x64.{exe,zip}` (zip = exe +
   `tools/win_installer/README.pdf` (SmartScreen walkthrough) + the raw
-  bundle). Own build dir `Windows_Build\build-dist`, STATIC CRT (/MT, no
+  bundle). Built with CLANG-CL (`-T ClangCL`, the engine's CPU above;
+  `--msvc` = MSVC, not for a release). Own build dir
+  `Windows_Build\build-dist-clang` (`--msvc`: `build-dist`; every
+  `Windows_Build/build-*` is gitignored), STATIC CRT (/MT, no
   VC++ redist; checked with dumpbin). Validator runs on the staged bundle
   in PORTABLE mode (temporary `stage\Synth2_Data`), so the dev's library
   stays out. Installer `tools/win_installer/synth2.iss`: elevated, fixed
@@ -268,6 +359,31 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   CC" token; 1301..1304 = voice activity for the panel's 2x16 grid (8
   voices x 2 bits each, `Synth::VoiceStates`: 0 idle, 1 releasing, 2 held;
   sent on change; AUv3: atomic after each render, hook `voiceStates`).
+- MIDI PROGRAM CHANGE (any channel; no bank select): program 0..127 =
+  slot 001..128 of the CURRENT bank = the last library program's bank
+  (Init / a patch file keep it; fresh instance: the startup bank); an
+  empty slot is ignored. `SynthEditorCore::SyncProgramBank` reads that
+  bank folder (`ReadProgramBank`, same slots as the browser) when the bank
+  or the library revision changes and hands the values to the DSP (VST3
+  message "OxoProgramBank", resent on `connect`; AUv3 in-process), which
+  switches by itself (`SwitchProgram` = a browser load: delay cleared, fade,
+  notes keep playing; editor closed too) and reports the slot (VST3: hidden
+  read-only token 1401 + output changes of the changed params; AUv3: atomic
+  polled by the hooks / EncodeState) → `AdoptProgramChange` (name, LCD,
+  session program). VST3 plumbing (hosts' standard): root unit with program
+  list 1400 ("NNN:name", "----" = empty, renamed on bank change +
+  notifyProgramListChange), its kIsProgramChange parameter 1400 (not
+  automatable, like the SDK sample), `getUnitByBus` = root for every
+  channel. The AUv2 wrapper turns that list into AU factory presets (names
+  as read at instantiation). AUv3: MIDI 1 0xC0 + UMP MIDI 2.0 program change.
+  MENU > PROGRAM CHANGE (checkmark, every platform): off = program
+  changes ignored by the DSP. Per-user preference `"programChange"`
+  (default FALSE: ignored until checked) in settings.json
+  (`storage::LoadProgramChange`), read by each instance when it starts (VST3 processor + controller, AUv3); the
+  toggle saves it and tells this instance's DSP (VST3 message
+  "OxoProgramChangeOn"), other open instances keep theirs until reloaded.
+  Hooks `programChange` / `setProgramChange`, LCD "program change: on/off".
+  Checks: `EngineCoreTests/ProgramChangeTests.cpp`, au_harness.
 - STATE CHUNK (`EditorCore/State.hpp` `PluginState`; AUv3 fullState key
   "OXS2" = same bytes): `'OXS2'` + u32 version 4 + u32 master volume + i32
   program slot + u32 len + bank folder (relative to the library root) +
@@ -457,7 +573,8 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   delete, export, import, all notes off, the library notice 10 s, worded
   "Recycle Bin"). write = write
   dialog; menu = Initialize patch | Load / Save patch file… | MIDI Learn |
-  Themes… | Check for updates… (mac). The version box in the title band
+  Program change (checkmark) | All notes off | Themes… | Check for
+  updates… (mac). The version box in the title band
   opens the GitHub project (`SynthPanelView.projectURL`).
 - BROWSER KEYS (mac, `SynthModel.browserKey`): arrows load at once (up /
   down = ◀ ▶, left / right = next column, nearest non-empty slot), Return /
@@ -539,7 +656,36 @@ original AU; keeps both renders for listening).
   the oscillators; a synced osc1 wrap restarts it (the timbre of synced
   noise = that bit pattern).
 - Osc: per-note band-limited tables (EVERY harmonic below Nyquist, alias
-  free); osc silent when its note index > 127. Fundamentals of all shapes in
+  free); osc silent when its note index > 127 (OPEN: osc2 at key 72 with
+  pitch +60 = note 132, 16.7 kHz, DOES play in the original, notes 144 /
+  156 do not: the limit looks like Nyquist rather than 127 there).
+  PURITY (`measure_purity.py`: what a held note carries besides its
+  expected lines; LP24, resonance 0): the original's saw aliases a
+  little, lines at the harmonics next to k x fs (n ~ fs / f0, folded
+  beside DC and the fundamental) at -75..-80 dB re the fundamental,
+  falling ~1/f away from k x fs; its pulse 15..30 dB lower; ours -100 dB
+  or less. With osc1 DETUNE the original carries INTERMODULATION ours
+  has not on LP24: a detuned sine shows a 3rd harmonic (-48 dB at key
+  36, detune 26) and lines at odd multiples (9, 11, 17, 21 x) of the
+  copy spacing at -30..-47 dB, power outside the 9 expected lines -31..
+  -57 dB (ours -140 dB; saw / pulse -45..-53 dB, ours -80..-130). With
+  osc1 at 4 % of the mix it falls to -55..-65 dB: level dependent, so
+  mostly after the mix, a nonlinearity on the loud detune sum that our
+  ladder (linear at resonance 0) does not model. TODO(measure).
+  DETUNE COPIES (`measure_copies.py`, osc1 played quietly so the lines
+  stand clear of that intermodulation): the original reads osc1's and
+  the sub's 8 copies from a 2048-POINT TABLE of the note's band-limited
+  wave with the phase TRUNCATED, no interpolation (osc1 itself and the
+  sub are interpolated: a sine's image at 2047 x f is at -133 dB =
+  linear on 2048 points). Every harmonic h of a copy at f leaves lines
+  at (k x 2048 +- h) x f, 1 / (k x 2048) of the copy's fundamental
+  whatever h (-66.2, -72.2 dB...: a sawtooth series), none beyond the
+  wave's top harmonic; seen to 0.1 Hz / 0.5 dB for sine, saw, triangle,
+  pulse (two points of the saw a WHOLE number of points apart) and the
+  sub's shapes. Ours reads them the same way (`WaveTableSet::CopyTable`)
+  and shows the same series. At 96 kHz the original's saw still stops
+  at 22 kHz (key 96: 10 harmonics at both rates; ours fills to Nyquist).
+  Fundamentals of all shapes in
   phase (saw falling +1 at phase 0, tri peak at 0.25). osc1 shapes 0 sine 1
   saw 2 pulse 3 tri; osc2 1 saw 2 pulse 3 tri 4 noise; sub 0 sine 1 tri 2 saw
   3 square, sub phase-locked to osc1, auto level w = g/(g+32). Mix
@@ -551,7 +697,10 @@ original AU; keeps both renders for listening).
   FM: inst f1 = f1 + beta[v]·261.63 Hz·(sr/44100)·osc2_norm (table measured
   at key 60, to ~102): the deviation is a FIXED phase step per sample
   (`measure_fm_key.py`): index halves per octave up (keys and key shift),
-  grows with the sample rate. Ring: osc2 ×
+  grows with the sample rate. FM 0 = NO FM (sidebands at the -178 dB
+  floor; the table's fitted entry 0, 6.6e-6, is noise: `Voice::FmBeta`;
+  `measure_zero_knobs.py`, with the LFO depth 0 probe).
+  Ring: osc2 ×
   osc1_norm. Ring BUG kept on purpose (`measure_ring_detune.py`): ring +
   osc1 detune + sub on = the sub copies skip the 0.297 gain, then the osc1
   section is bounded (modelled 1.7·tanh(x/1.7), approximate; the original
@@ -594,10 +743,28 @@ original AU; keeps both renders for listening).
   bend range, unison pitch) are NOT routed.
 - PITCH MOD RESOLUTION (`measure_pitch_mod.py`): the pitch bend uses its
   7-bit MSB only (trunc((v−8192)/128), ±63 = ±range); bend + LFO pitch
-  cents are summed and TRUNCATED toward 0 to 1/128-octave steps (9.375
-  cents: slow vibratos and bends are staircases; `Voice::PitchMod`). Fine
-  tune and the mod env's pitch are not quantized; the portamento has its
-  own steps (ceil, relative to the target).
+  cents are TRUNCATED toward 0 to 1/128-octave steps (9.375 cents: slow
+  bends are staircases). An LFO ON PITCH (`measure_lfo_pitch.py`, LFO1
+  on pitch + the same LFO2 on amp = the LFO value at every sample) plays
+  whole steps of ITS OWN, added to the bend's truncated steps (a bend
+  between two steps leaves the LFO's thresholds where they were) and to
+  the other LFO's: N = the square's steps at that depth
+  (`Lfo::PitchSteps` = kLfoPitchCents / 9.375, whole numbers), the law
+  PER WAVEFORM (v = -1..1), same at every speed, depth, destination:
+  saw = 2N + 1 equal bands of v; triangle = rising floor(N v), falling
+  ceil(N v) (a step is taken when the wave reaches it: depth 1 sits on -1
+  until the wave crosses 0); square ±N; sine = sign(v) floor(N |v| +
+  1/4); S&H / smooth random floor(N v) (-N .. N - 1). Computed once per
+  LFO in `Lfo::Render` (steps buffer, only when routed to pitch), summed
+  in the voice's pitch pre-pass (`PitchRatio` takes steps). Until
+  2026-11-11 ours truncated bend + LFO cents together: a triangle / sine
+  at depth 1 hardly moved (fixed; every patch without an LFO that can
+  reach pitch renders bit-identically). Fine tune and the mod env's pitch
+  are not quantized; the portamento has its own steps (ceil, relative to
+  the target). An LFO at DEPTH 0 is no route at all (kLfoPitchCents[0]
+  is fit noise). OPEN: the original's first smooth-random cycle after the
+  instance starts ramps down from ~+13 steps whatever the depth (a start
+  value outside -1..1?), not modelled.
 - Mono / legato: a new note retriggers in mono (new velocity), glides in
   legato; releasing it falls back to the previous held key, mono
   RETRIGGERS there (last velocity), legato does not. A mono retrigger also
@@ -759,7 +926,7 @@ original AU; keeps both renders for listening).
   arp random sequence (+ S&H / smooth LFO: not the original's PRNG), LPDL
   resonance frequency near the top cutoffs.
 - Random sequences (arp random, S&H / smooth LFO): not identified. Leads:
-  S&H read through LFO -> pitch is quantized by PitchMod (useless), through
+  S&H read through LFO -> pitch is quantized to whole steps (useless), through
   LFO -> amp it sits on a 1/1024 grid; the two destinations gave
   DIFFERENT sequences from fresh processes (unexplained); not mac rand(),
   not common 32-bit LCGs, not windows of the noise LFSR. Presets using

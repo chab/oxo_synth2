@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define MAX_FRAMES 512
 #define NUM_PARAMS 99
@@ -463,6 +464,8 @@ static void runJob(Job *job) {
     qsort(job->events, (size_t)job->nEvents, sizeof(Event), eventCmp);
     int ev = 0;
     size_t pos = 0;
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     while (pos < total) {
         UInt32 n = total - pos > MAX_FRAMES ? MAX_FRAMES : (UInt32)(total - pos);
         while (ev < job->nEvents) {
@@ -485,6 +488,11 @@ static void runJob(Job *job) {
         pos += n;
     }
     (void)origin;
+    if (getenv("S1REF_TIME")) { // render speed (the pre-roll excluded)
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        const double cpu = (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) * 1e-9;
+        fprintf(stderr, "  %-40s x%.1f realtime\n", job->out, job->length / cpu);
+    }
     writeWav(job->out, out, total, job->sampleRate);
     free(out[0]);
     free(out[1]);

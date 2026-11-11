@@ -5,17 +5,25 @@ rem  installer .exe, plus the .zip that actually gets hosted (that exe +
 rem  README.pdf + the raw bundle). On the Windows machine, from anywhere:
 rem
 rem    tools\prepare_win_installer.bat [--skip-build] [--skip-validator]
-rem                                    [--dynamic-crt] [--no-pause] [--help]
+rem                                    [--msvc] [--dynamic-crt] [--no-pause]
+rem                                    [--help]
 rem
 rem  Output: dist\win\<Product>-<version>-<build>-Windows-x64.{exe,zip}
 rem  (gitignored). VST3 only, x64.
 rem
-rem  Steps: 1. build Release x64 (CMake + Visual Studio, like
-rem  build_windows.bat) into Windows_Build\build-dist + run the storage tests,
+rem  Steps: 1. build Release x64 (CMake + Visual Studio's clang-cl, like
+rem  build_windows.bat) into Windows_Build\build-dist-clang + run the
+rem  storage tests,
 rem  2. stage the bundle and check it is COMPLETE (dll, factory bank, starter
 rem  banks, no VC++ runtime import), 3. Steinberg's validator on the staged
 rem  bundle, 4. sign the dll, 5. ISCC tools\win_installer\synth2.iss, 6. sign
 rem  the exe, 7. zip.
+rem
+rem  BUILT WITH CLANG-CL (Visual Studio's ClangCL toolset): the engine runs
+rem  ~1.7x faster than MSVC's code (build_windows.bat --bench: a 32-voice
+rem  load takes 5.5 %% of one core against 9.1 %%). --msvc builds with MSVC
+rem  instead, into Windows_Build\build-dist (a PC without the clang
+rem  components; not for a release).
 rem
 rem  OWN BUILD DIR because the release build uses the STATIC CRT (/MT): the
 rem  dll then needs no VC++ 2015-2022 redistributable on the user's PC (a
@@ -51,7 +59,9 @@ rem    set OXO_WIN_SIGN_TIMESTAMP_URL=http://timestamp.digicert.com  (default)
 rem
 rem  The dll is signed before it is packed into the exe, then the exe.
 rem
-rem  Needs: Visual Studio 2022+ (C++ workload, includes CMake), the
+rem  Needs: Visual Studio 2022+ (C++ workload, includes CMake; individual
+rem  components "C++ Clang Compiler for Windows" and "MSBuild support for
+rem  LLVM (clang-cl) toolset"), the
 rem  submodules (git submodule update --init --recursive), Inno Setup 6.3+
 rem  (winget install JRSoftware.InnoSetup). CMake: %%CMAKE%% if set, else
 rem  cmake on PATH, else Visual Studio's; generator: CMake's default or
@@ -63,8 +73,9 @@ set "SCRIPT_DIR=%~dp0"
 for %%I in ("%SCRIPT_DIR%..") do set "REPO_DIR=%%~fI"
 set "RES_DIR=%SCRIPT_DIR%win_installer"
 set "SRC_DIR=%REPO_DIR%\Windows_Build"
-set "BUILD_DIR=%SRC_DIR%\build-dist"
-set "LOG=%BUILD_DIR%\build.log"
+set "BUILD_DIR=%SRC_DIR%\build-dist-clang"
+set "TOOLSET=-T ClangCL"
+set "COMPILER=clang-cl"
 set "DIST_DIR=%REPO_DIR%\dist\win"
 set "STAGE_DIR=%DIST_DIR%\stage"
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -78,12 +89,14 @@ set "NOPAUSE="
 if "%~1"=="" goto args_done
 if /i "%~1"=="--skip-build" (set "SKIP_BUILD=1" & shift & goto parse_args)
 if /i "%~1"=="--skip-validator" (set "SKIP_VALIDATOR=1" & shift & goto parse_args)
+if /i "%~1"=="--msvc" (set "BUILD_DIR=%SRC_DIR%\build-dist" & set "TOOLSET=" & set "COMPILER=MSVC" & shift & goto parse_args)
 if /i "%~1"=="--dynamic-crt" (set "STATIC_CRT=OFF" & shift & goto parse_args)
 if /i "%~1"=="--no-pause" (set "NOPAUSE=1" & shift & goto parse_args)
 if /i "%~1"=="--help" goto usage
 echo ERROR: unknown option: %~1 1>&2
 goto usage
 :args_done
+set "LOG=%BUILD_DIR%\build.log"
 
 rem ---------------------------------------------------------- 0. identity
 call :read_identity "%REPO_DIR%\Identity.xcconfig"
@@ -108,7 +121,8 @@ set "VST3_SRC=%BUILD_DIR%\VST3\Release\%BUNDLE%"
 set "STAGED=%STAGE_DIR%\%BUNDLE%"
 set "DLL=%STAGED%\Contents\x86_64-win\%BUNDLE%"
 
-echo ==^> %PRODUCT% %VERSION% (%BUILD_NUM%) Windows installer (VST3, x64)
+echo ==^> %PRODUCT% %VERSION% (%BUILD_NUM%) Windows installer (VST3, x64, %COMPILER%)
+if "%COMPILER%"=="MSVC" echo     !!! --msvc: the engine takes ~1.7x the CPU of the clang-cl build
 if "%STATIC_CRT%"=="ON" echo     static CRT: no VC++ redistributable needed on the user's PC
 if "%STATIC_CRT%"=="OFF" echo     !!! --dynamic-crt: the user's PC NEEDS the VC++ 2015-2022 x64 redistributable
 
@@ -137,8 +151,12 @@ set "CRT_ARGS=-DSMTG_USE_STATIC_CRT=ON -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreade
 if "%STATIC_CRT%"=="OFF" set "CRT_ARGS=-DSMTG_USE_STATIC_CRT=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL"
 
 echo ==^> Configuring (%CMAKE%)
-"%CMAKE%" -S "%SRC_DIR%" -B "%BUILD_DIR%" %ARCH% -DCMAKE_POLICY_VERSION_MINIMUM=3.5 %CRT_ARGS% >>"%LOG%" 2>&1
-if errorlevel 1 (set "REASON=CMake configuration failed" & goto fail_log)
+"%CMAKE%" -S "%SRC_DIR%" -B "%BUILD_DIR%" %ARCH% %TOOLSET% -DCMAKE_POLICY_VERSION_MINIMUM=3.5 %CRT_ARGS% >>"%LOG%" 2>&1
+if not errorlevel 1 goto configured
+set "REASON=CMake configuration failed"
+if defined TOOLSET set "REASON=CMake configuration failed (clang-cl needs Visual Studio's components C++ Clang Compiler for Windows + MSBuild support for LLVM; --msvc builds without them)"
+goto fail_log
+:configured
 echo ==^> Building %BUNDLE%, validator, storage tests
 "%CMAKE%" --build "%BUILD_DIR%" --config Release --target OxoSynth2VST3 validator synth2_storage_tests --parallel >>"%LOG%" 2>&1
 if errorlevel 1 (set "REASON=Build failed" & goto fail_log)
@@ -168,7 +186,7 @@ rem not load on a PC without the redistributable.
 set "DUMPBIN="
 if exist "%VSWHERE%" for /f "delims=" %%i in ('"%VSWHERE%" -latest -products * -find VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe') do if not defined DUMPBIN set "DUMPBIN=%%i"
 if not defined DUMPBIN (echo     !!! dumpbin.exe not found: static CRT NOT verified & goto crt_done)
-"%DUMPBIN%" /nologo /dependents "%DLL%" | findstr /i "vcruntime msvcp api-ms-win-crt" && (set "REASON=the dll imports the shared VC++ runtime although the build is static (stale Windows_Build\build-dist cache? delete that folder)" & goto fail)
+"%DUMPBIN%" /nologo /dependents "%DLL%" | findstr /i "vcruntime msvcp api-ms-win-crt" && (set "REASON=the dll imports the shared VC++ runtime although the build is static (stale cache? delete %BUILD_DIR%)" & goto fail)
 echo     static CRT verified (no VC++ runtime import)
 :crt_done
 
@@ -282,8 +300,11 @@ goto fail
 echo.
 echo Usage: tools\prepare_win_installer.bat [options]
 echo.
-echo   --skip-build       package what is already in Windows_Build\build-dist
+echo   --skip-build       package what is already built (Windows_Build\build-dist-clang,
+echo                      with --msvc Windows_Build\build-dist)
 echo   --skip-validator   do not run Steinberg's validator
+echo   --msvc             build with MSVC instead of clang-cl: no clang components
+echo                      needed, but the engine takes ~1.7x the CPU (not for a release)
 echo   --dynamic-crt      shared MSVC runtime: the user's PC then NEEDS the
 echo                      VC++ 2015-2022 x64 redistributable
 echo   --no-pause         no final pause

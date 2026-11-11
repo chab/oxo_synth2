@@ -65,6 +65,10 @@ typedef struct OxoSynth2Hooks {
     // the editor), "" = never set. Re-read when patchSerial bumps.
     const char *(*themeText)(void *ctx);
     void (*setThemeText)(void *ctx, const char *text);
+    // Menu > Program change: MIDI program changes played (1) or ignored (0);
+    // a per-user preference, saved by the wrapper.
+    int32_t (*programChange)(void *ctx);
+    void (*setProgramChange)(void *ctx, int32_t on);
 } OxoSynth2Hooks;
 
 // Asks the host for a new editor width (the height follows the aspect):

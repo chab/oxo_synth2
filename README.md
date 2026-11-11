@@ -17,14 +17,16 @@ Synth2 aims to keep those sounds playable on modern computers. Open source, so t
 
 Note: the original Synth1 was studied only through its audio output. The binary was never disassembled or decompiled (see the clean-room rule in [AGENTS.md](AGENTS.md#rules)).
 
-Formats: macOS VST3 + AUv2, iPad AUv3, Windows VST3 (x64, in development). Linux ports are welcome: if you're a developer on Linux, fork the repository and open a pull request.
+Formats: macOS VST3 + AUv2, iPad AUv3, Windows VST3 (x64).
 
 ## Download
 
 Official builds are published on the Oxo Music website:
 
 - macOS 14+ (VST3 + AU, signed and notarized): <https://oxo-music.com/products/oxo_synth2>
+- Windows 10+ x64 (VST3): <https://oxo-music.com/products/oxo_synth2>
 - iPad (AUv3): <https://apps.apple.com/us/app/oxo-synth2/id6829692180>
+- Linux: not available yet. Ports are welcome: if you're interested, open an issue to signal you're working on it, fork the repository and open a pull request. Please keep it a 1:1 port of the macOS / Windows versions (no new features).
 
 ## Relationship to Synth1
 
@@ -84,43 +86,25 @@ The file is gitignored, so it stays on your machine.
 
 Needs Windows 10 / 11 x64, Git, and Visual Studio 2022 or later (Community or
 Build Tools) with the "Desktop development with C++" workload, which includes
-CMake.
+CMake, plus two individual components from the Visual Studio Installer: "C++
+Clang Compiler for Windows" and "MSBuild support for LLVM (clang-cl) toolset".
+
+Note: the build uses clang-cl, which produces faster code than MSVC for this project.
 
 ```bat
-build_windows.bat
+build_windows.bat   # builds Windows_Build\build\VST3\Release\OxoSynth2.vst3 (does not install it)
 ```
 
-It builds `Windows_Build\build\VST3\Release\OxoSynth2.vst3` and runs the
-storage tests; nothing is installed (no administrator rights needed).
-
-To try the plugin, copy the bundle into the system VST3 folder. That folder is
-under `Program Files`, so this step needs a Command Prompt **started as
-administrator** (Start menu, type `cmd`, right-click "Command Prompt", "Run as
-administrator"). Close the DAW first, then:
+To test the plugin, close the DAW and copy the bundle into the system VST3
+folder from a Command Prompt **run as administrator** (it starts in
+`System32`, hence the `cd`; the `rmdir` removes the previous copy so no stale
+file stays in the bundle):
 
 ```bat
 cd /d C:\path\to\oxo_synth2
 if exist "%CommonProgramFiles%\VST3\OxoSynth2.vst3" rmdir /S /Q "%CommonProgramFiles%\VST3\OxoSynth2.vst3"
 xcopy Windows_Build\build\VST3\Release\OxoSynth2.vst3 "%CommonProgramFiles%\VST3\OxoSynth2.vst3\" /E /I /Y
 ```
-
-The second line removes the previous copy (so no stale file stays in the
-bundle), the third copies the new one. An administrator prompt starts in
-`C:\Windows\System32`, hence the `cd` to your clone first.
-
-Options: `--no-pause` skips the final pause (scripted runs); the `CMAKE` and
-`CMAKE_GENERATOR` environment variables override the CMake found and its
-generator. The build log is `Windows_Build\build\build.log`.
-
-The installer: `tools\prepare_win_installer.bat` builds the release (static
-runtime, no VC++ redistributable needed), validates it and packs it with
-[Inno Setup](https://jrsoftware.org/isinfo.php) 6.3+ into
-`dist\win\OxoSynth2-<version>-<build>-Windows-x64.exe` + a `.zip` (installer,
-`README.pdf`, raw bundle). The installer puts the plugin in `C:\Program
-Files\Common Files\VST3`; `--help` lists the options.
-
-On a Mac, `tools/win_check/check.sh` compile-checks the Windows sources with
-mingw-w64 (`brew install mingw-w64`), before they reach a Windows machine.
 
 #### Where the Windows version keeps your files
 
@@ -141,6 +125,41 @@ mingw-w64 (`brew install mingw-w64`), before they reach a Windows machine.
 ```sh
 make -C EngineCoreTests test
 ```
+
+## Preparing installers
+
+Both scripts read the product name, IDs and version from `Identity.xcconfig`
+and write into `dist/` (gitignored).
+
+### macOS (.pkg in a .dmg)
+
+```sh
+tools/prepare_mac_installer   # dist/mac/OxoSynth2-<version>-<build>-macOS.dmg
+```
+
+One package with Audio Unit / VST3 checkboxes, installing into
+`/Library/Audio/Plug-Ins`. Signing and notarization need a Developer ID:
+set `OXO_SIGN_ID_APP`, `OXO_SIGN_ID_INSTALLER` and `OXO_NOTARY_PROFILE`
+(`xcrun notarytool store-credentials`). `--skip-notarize` makes a local test
+build (Gatekeeper refuses it once downloaded), `--skip-build` reuses the last
+build. Details at the top of the script.
+
+### Windows (Inno Setup .exe in a .zip)
+
+Needs, on top of the build requirements,
+[Inno Setup](https://jrsoftware.org/isinfo.php) 6.3+
+(`winget install JRSoftware.InnoSetup`).
+
+```bat
+tools\prepare_win_installer.bat   # dist\win\OxoSynth2-<version>-<build>-Windows-x64.exe + .zip
+```
+
+Builds the release with clang-cl (static runtime: no VC++ redistributable
+needed), validates it, and packs the installer (puts the plugin in
+`C:\Program Files\Common Files\VST3`) and the `.zip` (installer, `README.pdf`,
+raw bundle). Authenticode signing is optional (`OXO_WIN_SIGN_SHA1` or
+`OXO_WIN_SIGN_PFX`, see the top of the script); unsigned, SmartScreen warns
+on first run. `--help` lists the options.
 
 ## Repository layout
 
@@ -172,7 +191,7 @@ generated from them.
 The renders of the original Synth1 (4,270 files, 3.4 GB unpacked) are not in
 the repository:
 
-1. Download [synth2-reference.zip](https://oxo-music.com/downloads/synth2-reference.zip) (1.4 GB).
+1. Download [synth2-reference.zip](https://oxo-music.com/downloads/synth2-reference.zip) (1.5 GB).
 2. Unzip it at the repository root:
 
    ```sh
@@ -222,7 +241,7 @@ agents read it automatically. Keep it up to date as you go.
 If you ship your own builds, give them **their own identity** so they can be
 installed next to the official ones without host conflicts. Every identity lives in
 `Identity.xcconfig` (or override it in `Identity.local.xcconfig`); the Xcode
-project, CMake, `build_vst3.sh` and the mac installer all read it:
+project, CMake, `build_vst3.sh` and both installers read it:
 
 | Key | Used for |
 |---|---|

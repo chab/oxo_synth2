@@ -75,6 +75,9 @@ public protocol SynthHost: AnyObject {
     /// "" = never set. Re-read when `patchSerial` bumps (session restore).
     var themeText: String { get }
     func setThemeText(_ text: String)
+    /// Menu > Program change: MIDI program changes played (true) or
+    /// ignored; a per-user preference, saved by the wrapper.
+    var programChange: Bool { get set }
 }
 
 /// The voice grid's feed, apart from SynthModel so a 30 Hz change only
@@ -165,6 +168,14 @@ final class SynthModel: ObservableObject {
     @Published var showLogoMenu = false
     /// Effect type pick list (a click on its display; Synth1's 2 x 5 menu).
     @Published var showEffectMenu = false
+    /// Menu > Program change (checkmark): MIDI program changes played.
+    @Published var programChange = false {
+        didSet {
+            guard programChange != oldValue else { return }
+            host.programChange = programChange
+            flash(programChange ? "program change: on" : "program change: off")
+        }
+    }
     /// Menu > Check for updates: the dialog's state, nil = closed.
     @Published var update: UpdateCheck.State?
     private var updateRequest = 0
@@ -199,6 +210,7 @@ final class SynthModel: ObservableObject {
         values = (0..<Self.hostParamCount).map { host.value($0) }
         learnTable = (0..<Self.paramCount).map { host.midiCC($0) }
         patchName = host.patchName
+        programChange = host.programChange
         serial = host.patchSerial
         palette = ThemePalette(stateText: host.themeText) ?? ThemeStore.shared.startPalette()
         host.setThemeText(palette.stateText)

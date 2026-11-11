@@ -26,6 +26,10 @@ inline constexpr double kDelayBeats[20] = {0.0013, 1.0 / 24, 1.0 / 12, 1.0 / 8, 
                                            0.375,  0.5,      2.0 / 3,  0.75,    0.875,   1.0,  4.0 / 3,
                                            1.5,    1.75,     2.0,      3.0,     3.5,     4.0};
 
+// A delay line index i < 2 * size back into [0, size) (a compare: `% size`
+// is a 64-bit division, tens of cycles each on older x86).
+inline size_t WrapIndex(size_t i, size_t size) { return i >= size ? i - size : i; }
+
 // Bilinear one-pole (analog cutoff, NO prewarp): the EQ / delay tone
 // (measured, measure_eq_tone.py, kEqToneHz).
 class BilinearOnePole {
@@ -124,7 +128,7 @@ public:
             }
             buf_[0][pos_] = float(wl);
             buf_[1][pos_] = float(wr);
-            pos_ = (pos_ + 1) % size;
+            if (++pos_ == size) pos_ = 0;
             if (written_ < size) ++written_;
             l[i] = float(dry * dryL + wet * out * el);
             r[i] = float(dry * dryR + wet * out * er);
@@ -144,14 +148,14 @@ private:
     }
     float At(int ch, size_t i) const {
         const size_t size = buf_[ch].size();
-        return written_ >= size || (pos_ + size - 1 - i) % size < written_ ? buf_[ch][i] : 0.0f;
+        return written_ >= size || WrapIndex(pos_ + size - 1 - i, size) < written_ ? buf_[ch][i] : 0.0f;
     }
     double Read(int ch, double delay) const {
         const size_t size = buf_[ch].size();
         double rp = double(pos_) - delay;
         while (rp < 0) rp += double(size);
-        const size_t i0 = size_t(rp) % size, i1 = (i0 + 1) % size;
-        const double f = rp - std::floor(rp);
+        const size_t whole = size_t(rp), i0 = WrapIndex(whole, size), i1 = WrapIndex(i0 + 1, size);
+        const double f = rp - double(whole);
         return At(ch, i0) * (1 - f) + At(ch, i1) * f;
     }
 
@@ -237,9 +241,9 @@ public:
                 wetL = fbL_ = tap(0, 0.0);
                 wetR = fbR_ = tap(1, thetaR);
             }
-            pos_ = (pos_ + 1) % size;
+            if (++pos_ == size) pos_ = 0;
             lfoPhase_ += inc;
-            lfoPhase_ -= std::floor(lfoPhase_);
+            if (lfoPhase_ >= 1.0) lfoPhase_ -= std::floor(lfoPhase_);
             l[i] = float(l[i] + level * wetL);
             r[i] = float(r[i] + level * wetR);
         }
@@ -258,8 +262,8 @@ private:
         const size_t size = b.size();
         double rp = double(pos_) - delay;
         while (rp < 0) rp += double(size);
-        const size_t i0 = size_t(rp) % size, i1 = (i0 + 1) % size;
-        const double f = rp - std::floor(rp);
+        const size_t whole = size_t(rp), i0 = WrapIndex(whole, size), i1 = WrapIndex(i0 + 1, size);
+        const double f = rp - double(whole);
         return b[i0] * (1 - f) + b[i1] * f;
     }
 

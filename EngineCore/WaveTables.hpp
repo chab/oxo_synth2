@@ -10,6 +10,8 @@
 //   triangle peak +1 at phase 0.25
 // Pulse = (saw(p) - saw(p + d)) / 2, sine is computed.
 
+#include "Simd.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -51,11 +53,10 @@ inline Phase64 ToPhase64(double cycles) {
     const double f = cycles >= 0.0 && cycles < 1.0 ? cycles : cycles - std::floor(cycles);
     return Phase64(int64_t(std::min(f, 0x1.fffffffffffffp-1) * 0x1p63)) << 1;
 }
-inline double FromPhase64(Phase64 ph) { return double(int64_t(ph >> 11)) * 0x1p-53; }
 
 struct WaveTable {
     // 4-point Hermite interpolation of the samples, its cubic stored per point
-    // (one load per read: the detune copies' reads cost half as much)
+    // (one load per read)
     struct Cubic {
         float c0, c1, c2, c3;
     };
@@ -64,15 +65,11 @@ struct WaveTable {
     std::vector<Cubic> cubic; // size + 1 (a phase of exactly 1 reads point 0 again)
 
     // phase in [0, 1]
-    float Read(double phase) const {
+    OXO_INLINE float Read(double phase) const {
         const double pos = phase * size;
         const uint32_t i = uint32_t(pos);
         return Eval(i, float(pos - i));
     }
-    float Read(Phase64 phase) const {
-        return Eval(uint32_t(phase >> (64 - bits)), float(uint32_t((phase << bits) >> 40)) * 0x1p-24f);
-    }
-
     void SetSamples(const std::vector<float> &x) {
         size = uint32_t(x.size());
         for (bits = 0; (1u << bits) < size; ++bits) {}
@@ -84,7 +81,7 @@ struct WaveTable {
     }
 
 private:
-    float Eval(uint32_t i, float f) const {
+    OXO_INLINE float Eval(uint32_t i, float f) const {
         const Cubic &c = cubic[i];
         return ((c.c3 * f + c.c2) * f + c.c1) * f + c.c0;
     }
@@ -108,23 +105,51 @@ public:
     const WaveTable &Saw(int note) const { return saw_[note]; }
     const WaveTable &Triangle(int note) const { return tri_[note]; }
 
+    // The detune copies' tables. (measured, measure_copies.py) the original
+    // reads osc1's and the sub's 8 copies from 2048-point tables of the
+    // note's band-limited wave with the phase TRUNCATED, no interpolation:
+    // every harmonic h leaves lines at (k * 2048 +- h) x the copy's
+    // frequency, 1 / (k * 2048) of the fundamental (-66 dB, a sawtooth
+    // series in k), for the sine, saw, triangle, pulse and the sub's shapes
+    // alike. Ours the same: that is what its detune sounds like, and such a
+    // read costs a third of an interpolated one. A copy's value = the table
+    // point at its phase's top kCopyBits (Phase64 >> (64 - kCopyBits)); a
+    // pulse = two points of the saw, the sub's square = the saw's
+    // difference half a cycle apart, stored.
+    static constexpr int kCopyBits = 11, kCopyPoints = 1 << kCopyBits;
+    enum CopyShape { kCopySaw, kCopyTriangle, kCopySquare, kCopyShapes };
+    const float *CopyTable(CopyShape shape, int note) const { return &copies_[(size_t(shape) * kNotes + size_t(note)) * kCopyPoints]; }
+    const float *CopySine() const { return copySine_.data(); }
+
 private:
-    explicit WaveTableSet(double sr) : sampleRate_(sr) {
+    explicit WaveTableSet(double sr) : sampleRate_(sr), copies_(size_t(kCopyShapes) * kNotes * kCopyPoints), copySine_(kCopyPoints) {
+        const auto sawAmp = [](int h) { return 2.0 / (M_PI * h); };
+        const auto triAmp = [](int h) {
+            if (!(h & 1)) return 0.0;
+            return ((h >> 1) & 1 ? -8.0 : 8.0) / (M_PI * M_PI * h * h);
+        };
         for (int n = 0; n < kNotes; ++n) {
             const double f = 440.0 * std::pow(2.0, (n - 69) / 12.0);
             const int harmonics = std::max(1, int(std::ceil(sr / 2 / f)) - 1);
             uint32_t size = 1024;
             while (size < uint32_t(4 * harmonics)) size <<= 1;
-            saw_[n] = Build(size, harmonics, [](int h) { return 2.0 / (M_PI * h); });
-            tri_[n] = Build(size, harmonics, [](int h) {
-                if (!(h & 1)) return 0.0;
-                return ((h >> 1) & 1 ? -8.0 : 8.0) / (M_PI * M_PI * h * h);
-            });
+            saw_[n].SetSamples(Samples(size, harmonics, sawAmp));
+            tri_[n].SetSamples(Samples(size, harmonics, triAmp));
+            const std::vector<float> saw = Samples(kCopyPoints, harmonics, sawAmp), tri = Samples(kCopyPoints, harmonics, triAmp);
+            float *copy[kCopyShapes];
+            for (int shape = 0; shape < kCopyShapes; ++shape) copy[shape] = &copies_[(size_t(shape) * kNotes + size_t(n)) * kCopyPoints];
+            for (int i = 0; i < kCopyPoints; ++i) {
+                copy[kCopySaw][i] = saw[size_t(i)];
+                copy[kCopyTriangle][i] = tri[size_t(i)];
+                copy[kCopySquare][i] = 0.5f * (saw[size_t(i)] - saw[size_t((i + kCopyPoints / 2) % kCopyPoints)]);
+            }
         }
+        for (int i = 0; i < kCopyPoints; ++i) copySine_[size_t(i)] = float(std::sin(2 * M_PI * i / kCopyPoints));
     }
 
-    // Sine series: x(p) = sum amp(h) * sin(2*pi*h*p).
-    template <typename Amp> static WaveTable Build(uint32_t size, int harmonics, Amp amp) {
+    // One cycle of the sine series x(p) = sum amp(h) * sin(2*pi*h*p), the
+    // harmonics the size can hold.
+    template <typename Amp> static std::vector<float> Samples(uint32_t size, int harmonics, Amp amp) {
         std::vector<std::complex<double>> spec(size);
         for (int h = 1; h <= harmonics && h < int(size / 2); ++h) {
             const double a = amp(h);
@@ -134,14 +159,14 @@ private:
         InverseRealFft(spec);
         std::vector<float> x(size);
         for (uint32_t i = 0; i < size; ++i) x[i] = float(spec[i].real());
-        WaveTable t;
-        t.SetSamples(x);
-        return t;
+        return x;
     }
 
     double sampleRate_;
     WaveTable saw_[kNotes];
     WaveTable tri_[kNotes];
+    std::vector<float> copies_; // [shape][note][kCopyPoints]
+    std::vector<float> copySine_;
 };
 
 } // namespace oxo::s2

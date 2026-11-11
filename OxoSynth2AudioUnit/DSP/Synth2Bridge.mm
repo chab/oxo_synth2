@@ -32,6 +32,7 @@ void HandleUmp(Synth2Instance *inst, const MIDIEventList &list) {
                 case 0x80: inst->Midi(status, index, (status & 0xF0) == 0x90 ? uint8_t(std::max<uint32_t>(1, data >> 25)) : 0); break;
                 case 0xB0: inst->Midi(status, index, uint8_t(data >> 25)); break;
                 case 0xD0: inst->Midi(status, uint8_t(data >> 25), 0); break;
+                case 0xC0: inst->Midi(status, uint8_t((data >> 24) & 0x7F), 0); break; // bank (if flagged) ignored
                 case 0xE0: {
                     const uint32_t v14 = data >> 18;
                     inst->Midi(status, uint8_t(v14 & 0x7F), uint8_t(v14 >> 7));

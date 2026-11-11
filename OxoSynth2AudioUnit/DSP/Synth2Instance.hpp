@@ -26,6 +26,7 @@ public:
 
     Synth2Instance(const std::string &libraryRoot, const std::string &factoryRoot, const std::string &build) {
         const s2::MidiLearnTable learned = storage::LoadMidiLearn();
+        programChangeOn_ = storage::LoadProgramChange();
         for (int i = 0; i < s2::kParamCount; ++i) {
             values_[size_t(i)] = s2::kParams[size_t(i)].def;
             learnCc_[size_t(i)] = learned[size_t(i)];
@@ -74,6 +75,23 @@ public:
     uint64_t VoiceStates() override { return voices_.load(std::memory_order_relaxed); }
     void AllNotesOff() override { panic_.store(true, std::memory_order_release); }
     void PatchLoading() override { clearDelay_.store(true, std::memory_order_release); }
+    bool ProgramBankChanged(const s2::ProgramBankValues &values) override {
+        programs_.Publish(std::make_unique<s2::ProgramBankValues>(values));
+        return true;
+    }
+    bool ProgramChangeOn() override { return programChangeOn_.load(std::memory_order_relaxed); }
+    void SetProgramChangeOn(bool on) override {
+        if (on == ProgramChangeOn()) return;
+        programChangeOn_.store(on, std::memory_order_relaxed);
+        storage::SaveProgramChange(on);
+    }
+    // The render switched program (MIDI program change): follow it.
+    void PollProgramChange() override {
+        const int32_t token = programToken_.load(std::memory_order_acquire);
+        if (token == seenProgramToken_) return;
+        seenProgramToken_ = token;
+        AdoptProgramChange(token & 127);
+    }
 
     // Parameter tree observer / UI edit / state restore (any non-audio thread).
     void SetFromHost(int id, int32_t value) {
@@ -87,7 +105,10 @@ public:
         dirty_[size_t(id) / 64].fetch_or(uint64_t(1) << (id % 64), std::memory_order_release);
     }
 
-    std::vector<uint8_t> EncodeState() { return vst3::EncodeState({CurrentPatch(), volume_.load(), Program(), Theme()}); }
+    std::vector<uint8_t> EncodeState() {
+        PollProgramChange(); // the session keeps a program the render switched to
+        return vst3::EncodeState({CurrentPatch(), volume_.load(), Program(), Theme()});
+    }
     bool RestoreState(const uint8_t *data, size_t size) {
         vst3::PluginState st;
         if (!vst3::DecodeState(data, size, st)) return false;
@@ -151,6 +172,7 @@ public:
             break;
         case 0x80: synth_.NoteOff(d1 & 127); break;
         case 0xB0: ControlChange(d1 & 127, d2 & 127); break;
+        case 0xC0: ProgramChange(d1 & 127); break;
         case 0xE0: synth_.PitchBend((d1 & 127) | ((d2 & 127) << 7)); break;
         case 0xD0: synth_.ChannelPressure(d1 & 127); break;
         default: break;
@@ -182,6 +204,17 @@ private:
         lastCc_.store(int32_t((ccCounter_ << 7) | uint32_t(cc)), std::memory_order_relaxed);
     }
 
+    // MIDI program change: that slot of the current bank (EngineCore/
+    // ProgramChange.hpp), the UI side follows on its next poll.
+    void ProgramChange(int program) {
+        if (!programChangeOn_.load(std::memory_order_relaxed)) return;
+        const s2::PatchValues *v = s2::SwitchProgram(synth_, programs_.Current(), program);
+        if (!v) return;
+        for (int p = 0; p < s2::kParamCount; ++p) values_[size_t(p)].store((*v)[size_t(p)], std::memory_order_relaxed);
+        programCounter_ = (programCounter_ + 1) & 0x1FFF;
+        programToken_.store(int32_t((programCounter_ << 7) | uint32_t(program)), std::memory_order_release);
+    }
+
     s2::Synth synth_;
     std::array<std::atomic<int32_t>, s2::kParamCount> values_;
     std::array<std::atomic<uint64_t>, 2> dirty_;
@@ -193,6 +226,11 @@ private:
     std::atomic<bool> panic_{false}; // menu > All notes off, done by the next render
     std::atomic<bool> clearDelay_{false}; // a patch load (editor, fullState), ditto
     uint32_t ccCounter_ = 0;
+    s2::ProgramMailbox programs_;          // the current bank's values (UI -> render)
+    std::atomic<int32_t> programToken_{0}; // render -> UI: (counter << 7) | slot
+    std::atomic<bool> programChangeOn_{false}; // menu > Program change (settings.json)
+    uint32_t programCounter_ = 0;          // audio thread
+    int32_t seenProgramToken_ = 0;         // UI thread
     std::vector<float> scratchL_, scratchR_;
     void *editCtx_ = nullptr;
     EditCallback edit_ = nullptr;

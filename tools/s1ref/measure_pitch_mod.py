@@ -6,10 +6,10 @@
 Held pitch bends (sine, pitch tracked): only the 7-bit MSB counts, s =
 trunc((v - 8192) / 128) clamped to +-63, cents = s / 63 * range, then
 1/128-octave steps (9.375 cents) TRUNCATED toward 0 (0 mismatches over 178
-held bends at ranges 2 and 12). An LFO adds its cents before the truncation (square LFO
-+ bend: trunc(sum)), so a slow LFO vibrato is a staircase; fine tune and
-the mod env's pitch are not quantized (fractional histograms below).
-Voice.hpp PitchMod.
+held bends at ranges 2 and 12). An LFO on pitch plays whole steps of its
+own, added to the bend's (laws per waveform: measure_lfo_pitch.py), so a
+slow LFO vibrato is a staircase; fine tune and the mod env's pitch are not
+quantized (fractional histograms below). Voice.hpp PitchRatio, Lfo.hpp.
 """
 import numpy as np
 

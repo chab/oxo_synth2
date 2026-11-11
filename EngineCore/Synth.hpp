@@ -409,6 +409,7 @@ public:
     bool PatchChanging() const { return switch_ != Switch::None; }
 
     void Render(float *left, float *right, int frames) {
+        const simd::ScopedNoDenormals noDenormals;
         std::fill(left, left + frames, 0.0f);
         std::fill(right, right + frames, 0.0f);
         // (measured, measure_pitch_mod.py) only the bend's 7-bit MSB counts:
@@ -418,19 +419,26 @@ public:
         for (int pos = 0, n = 0; pos < frames; pos += n) {
             n = std::min({kLfoBlock, frames - pos, toArp});
             const double *lfo[2] = {nullptr, nullptr};
+            const int32_t *lfoSteps[2] = {nullptr, nullptr};
             for (int k = 0; k < 2; ++k) {
                 // LFOs run even when off so their phase stays free-running;
                 // (measured) tempo-synced LFOs are NOT locked to the host beat.
                 const int speed = values_[k ? kLfo2Speed : kLfo1Speed];
                 const double hz = values_[k ? kLfo2TempoSync : kLfo1TempoSync] ? tempo_ / 60.0 / Lfo::SyncBeats(speed)
                                                                                  : Lfo::SpeedHz(speed);
-                lfo_[k].Render(lfoBuf_[k], n, values_[k ? kLfo2Type : kLfo1Type], hz, sampleRate_);
+                // (an LFO on pitch: its own whole steps, see Lfo.hpp)
+                const int dest = values_[k ? kLfo2Dest : kLfo1Dest];
+                const bool pitch = values_[k ? kLfo2On : kLfo1On] && (dest <= 2);
+                lfo_[k].Render(lfoBuf_[k], n, values_[k ? kLfo2Type : kLfo1Type], hz, sampleRate_,
+                               pitch ? lfoSteps_[k] : nullptr, Lfo::PitchSteps(values_[k ? kLfo2Depth : kLfo1Depth]));
                 if (values_[k ? kLfo2On : kLfo1On]) lfo[k] = lfoBuf_[k];
+                lfoSteps[k] = pitch ? lfoSteps_[k] : nullptr;
             }
             double cutoffStart = 0;
             const double cutoffStep = CutoffRamp(n, cutoffStart);
             for (Voice &v : voices_)
-                v.Render(left + pos, right + pos, n, blockPos_ + pos, blockEnd_, values_, bendSemis, lfo, cutoffStart, cutoffStep);
+                v.Render(left + pos, right + pos, n, blockPos_ + pos, blockEnd_, values_, bendSemis, lfo, lfoSteps, cutoffStart,
+                         cutoffStep);
             if (switch_ != Switch::None) SwitchFade(left + pos, right + pos, n);
             toArp = ArpAdvance(n);
         }
@@ -576,7 +584,7 @@ private:
         return pick;
     }
 
-    static constexpr int kLfoBlock = 64;
+    static constexpr int kLfoBlock = Voice::kMaxChunk;
     PatchValues base_{};
     PatchValues values_{};
     int routed_[2] = {-1, -1};
@@ -595,6 +603,7 @@ private:
     Equalizer eq_;
     EffectUnit effect_;
     double lfoBuf_[2][kLfoBlock] = {};
+    int32_t lfoSteps_[2][kLfoBlock] = {};
     Rng rng_;
     double sampleRate_ = 44100.0;
     double tempo_ = 120.0;
