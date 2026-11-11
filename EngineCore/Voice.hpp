@@ -375,9 +375,9 @@ private:
                                                          : tables_->CopyTable(kSubCopy[subShape & 3], std::clamp(tSub, 0, 127));
         // the stored copy phases' step ratios (in Phase64 units / 2, see the phase update)
         const double copyRatio = copyHalf_ ? 0.5 : 1.0;
-        double copyScale[kDetuneOscs];
-        for (int d = 0; d < kDetuneOscs; ++d) copyScale[d] = copyRatio * detuneRatio[d] * 0x1p63;
-        // copyScale <= 2^63 * 2^(140 / 1200): |step| below this stays under one cycle
+        const double copyScale = copyRatio * 0x1p63;
+        // a copy's step <= |step| + incA * (2^(140 / 1200) - 1), incA < 0.5:
+        // |step| below this stays under one cycle
         static constexpr double kFastStepLimit = 0.9;
 
         // (measured, key-synced square LFO: measure_lfo_keysync.py /
@@ -467,7 +467,7 @@ private:
 
         double fmIncA = NAN, fmRef = 0; // kFmRefInc / incA, recomputed when incA changes
         const double fmScale = shape2 == 4 ? kNoiseFm / kNoiseLevel : 1.0;
-        double copyStep = NAN; // the osc1 step copyInc holds (the copies' steps, recomputed when it changes)
+        double copyStep = NAN, copyIncA = NAN; // the osc1 steps copyInc holds (the copies' steps, recomputed when they change)
         simd::P4 copyInc[2] = {};
         for (int i = 0; i < frames; ++i) {
             double incA = staticIncA, incB = staticIncB, w = staticWidth;
@@ -507,15 +507,22 @@ private:
                 const double acc = o1 + (shape1 == 2 ? 0.5f * (CopiesSum(copy1, ph, copyShift, 0) - CopiesSum(copy1, ph, copyShift, curWidthPoints))
                                                      : CopiesSum(copy1, ph, copyShift, 0));
                 const double subAcc = subOn ? sub + CopiesSum(copySub, ph, 0, 0) : sub;
-                // a step under one cycle either way converts directly (two's
+                // (measured, sync + FM: the copies' spread in Hz stays the
+                // unmodulated one while sync's FM offset moves the pitch) every
+                // copy takes osc1's FM deviation as it is, added to its own
+                // detuned step, not scaled by its detune ratio.
+                // A step under one cycle either way converts directly (two's
                 // complement = mod 1)
-                if (const double step = incA * fm; step != copyStep) {
-                    copyStep = step;
+                if (const double step = incA * fm; step != copyStep || incA != copyIncA) {
+                    copyStep = step, copyIncA = incA;
+                    const double deviation = step - incA;
                     Phase64 inc[kDetuneOscs];
                     if (std::fabs(step) < kFastStepLimit) {
-                        for (int d = 0; d < kDetuneOscs; ++d) inc[d] = Phase64(int64_t(step * copyScale[d])) << 1;
+                        for (int d = 0; d < kDetuneOscs; ++d)
+                            inc[d] = Phase64(int64_t((incA * detuneRatio[d] + deviation) * copyScale)) << 1;
                     } else {
-                        for (int d = 0; d < kDetuneOscs; ++d) inc[d] = ToPhase64(step * copyRatio * detuneRatio[d]);
+                        for (int d = 0; d < kDetuneOscs; ++d)
+                            inc[d] = ToPhase64((incA * detuneRatio[d] + deviation) * copyRatio);
                     }
                     copyInc[0] = simd::Phases(inc[0], inc[1], inc[2], inc[3]);
                     copyInc[1] = simd::Phases(inc[4], inc[5], inc[6], inc[7]);

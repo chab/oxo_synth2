@@ -693,7 +693,12 @@ original AU; keeps both renders for listening).
   (1-w)m, all / (1-wm) (sub off = linear crossfade).
   osc2 pitch = integer-semitone table (±60), fine/tune 1 cent/step dead zone
   62..66. kbd track off = fixed 220 Hz. Osc1 detune: main + 8 copies at
-  ±1,3,5,7 × d cents, d = 20 v/127, each ×0.297 (sine 0.288).
+  ±1,3,5,7 × d cents, d = 20 v/127, each ×0.297 (sine 0.288). Under FM
+  every copy steps ratio·inc + osc1's FM DEVIATION (added as is, NOT
+  ratio·(inc + dev)): seen with sync + FM, where the synced osc2's mean
+  shifts the pitch (key 36, FM 30: the main at ~90 Hz, the copies spread
+  over the UNMODULATED 65 Hz spread, 10.6 Hz, not 14.7; peaks match to
+  the bin since 2026-11-11). Without sync it is inaudible (index ±1 %).
   FM: inst f1 = f1 + beta[v]·261.63 Hz·(sr/44100)·osc2_norm (table measured
   at key 60, to ~102): the deviation is a FIXED phase step per sample
   (`measure_fm_key.py`): index halves per octave up (keys and key shift),
