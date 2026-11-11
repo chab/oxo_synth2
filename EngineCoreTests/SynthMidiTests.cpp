@@ -595,6 +595,44 @@ OXO_TEST(ArpChangesWithHeldKeysLeaveNoStuckNote) {
     }
 }
 
+// (measured) key sync: the key starting an arp phrase restarts the LFO, the
+// arp's own steps do not. S&H on amp (depth 127, slowest speed): every step of
+// a phrase plays at one level, the next phrase at another.
+OXO_TEST(ArpStepsDoNotRestartKeySyncedLfo) {
+    Synth s;
+    s.SetSampleRate(48000);
+    for (const auto [id, v] : {std::pair{kLfo1On, 1}, {kLfo1Dest, 4}, {kLfo1Type, 3}, {kLfo1Speed, 0}, {kLfo1Depth, 127},
+                               {kLfo1KeySync, 1}, {kLfo1TempoSync, 0}, {kLfo2On, 0}, {kArpOn, 1}, {kArpGate, 80},
+                               {kAmpAttack, 0}, {kAmpDecay, 0}, {kAmpSustain, 127}, {kAmpRelease, 0}, {kOsc1Shape, 0},
+                               {kOscMix, 0}, {kSubGain, 0}, {kFilterFreq, 127}, {kFilterAmount, 64}, {kUnisonOn, 0},
+                               {kDelayOn, 0}, {kChorusOn, 0}, {kEffectOn, 0}})
+        s.SetParam(id, v);
+    const auto stepLevels = [&s] { // rms in the middle of each sounding run
+        std::vector<float> l(48000), r(48000);
+        s.NoteOn(60, 100);
+        s.Render(l.data(), r.data(), 48000);
+        s.NoteOff(60);
+        Run(s, 9600);
+        std::vector<double> levels;
+        for (size_t i = 0; i < l.size();) {
+            size_t j = i;
+            while (j < l.size() && l[j] != 0) ++j;
+            if (j - i > 6000) {
+                double sum = 0;
+                for (size_t k = i + 2000; k < i + 6000; ++k) sum += double(l[k]) * l[k];
+                levels.push_back(std::sqrt(sum / 4000));
+            }
+            i = j + 1;
+        }
+        return levels;
+    };
+    const std::vector<double> a = stepLevels(), b = stepLevels();
+    OXO_EXPECT(a.size() >= 3 && !b.empty());
+    if (a.size() < 3 || b.empty()) return;
+    for (const double v : a) OXO_EXPECT(std::fabs(v - a[0]) < 0.01 * a[0]);
+    OXO_EXPECT(std::fabs(b[0] - a[0]) > 0.05 * a[0]);
+}
+
 // Fuzz: notes, pedal and patch switches (play mode, polyphony, unison, arp)
 // in random order; once every key and the pedal are up, no voice is held.
 OXO_TEST(RandomPatchSwitchesUnderHeldKeysLeaveNoStuckNote) {

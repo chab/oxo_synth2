@@ -898,8 +898,11 @@ original AU; keeps both renders for listening).
   AMP ONLY it ramps from -r to minus the previous r and jumps at every
   cycle start (`Lfo::Render(..., amp)`). A KEY-SYNC restart (no key held:
   overlapping notes keep the value, poly and mono) draws a new r like a
-  cycle start, so every restarted / arp note gets a new value (smooth:
-  from the last r toward it; ours kept the old one until 2026-11-11).
+  cycle start, so every restarted note gets a new value (smooth: from the
+  last r toward it; ours kept the old one until 2026-11-11). ARP STEPS
+  NEVER RESTART the LFO: only the key starting the arp phrase does (no
+  arp key held), tempo sync on or off (measured in poly; legato by ear,
+  032a.sy1).
   Patches without a random LFO on render bit-identically across that
   change. FM not checked (assumed like pitch).
   Tempo sync: 30 steps, step = floor(s·30/128), cycle = `Lfo::kSyncBeats`

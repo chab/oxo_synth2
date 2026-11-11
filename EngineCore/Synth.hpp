@@ -167,13 +167,17 @@ private:
         if (!values_[kArpOn] || key != arpPlaying_) VoiceNoteOff(key);
     }
 
-    void VoiceNoteOn(int key, int velocity) {
+    void KeySyncRestart() {
+        if (values_[kLfo1KeySync]) lfo_[0].Restart();
+        if (values_[kLfo2KeySync]) lfo_[1].Restart();
+    }
+
+    // (measured) key sync restarts the LFOs when no key was held; arp steps
+    // (`keySync` false) never do, the key starting the arp phrase does.
+    void VoiceNoteOn(int key, int velocity, bool keySync = true) {
         bool anyGate = false;
         for (const Voice &v : voices_) anyGate |= v.Active() && v.Gate();
-        if (!anyGate) { // (measured) key sync restarts the LFO when no key was held
-            if (values_[kLfo1KeySync]) lfo_[0].Restart();
-            if (values_[kLfo2KeySync]) lfo_[1].Restart();
-        }
+        if (keySync && !anyGate) KeySyncRestart();
         const int mode = values_[kPlayMode]; // 0 poly, 1 mono, 2 legato
         const bool porta = values_[kPortaTime] > 0;
         // The held-key stack follows every key in EVERY mode: a patch change
@@ -288,6 +292,7 @@ private:
             arpStep_ = -1;
             arpCountdown_ = 0;
             arpDir_ = 1;
+            KeySyncRestart();
         }
         if (std::find(arpKeys_, arpKeys_ + arpCount_, key) != arpKeys_ + arpCount_) return;
         if (arpCount_ < 32) arpKeys_[arpCount_++] = key;
@@ -339,7 +344,7 @@ private:
             arpAccum_ -= stepSamples;
             if (arpPlaying_ >= 0) VoiceNoteOff(arpPlaying_);
             arpPlaying_ = ArpNextKey();
-            if (values_[kArpGate] > 0) VoiceNoteOn(arpPlaying_, arpVelocity_); // (measured) gate 0 = silent
+            if (values_[kArpGate] > 0) VoiceNoteOn(arpPlaying_, arpVelocity_, false); // (measured) gate 0 = silent
             else arpPlaying_ = -1;
             arpCountdown_ += stepSamples;
             arpGateCountdown_ = std::max(1, int(stepSamples * values_[kArpGate] / 127.0));
