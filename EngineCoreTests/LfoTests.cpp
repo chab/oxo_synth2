@@ -61,18 +61,21 @@ OXO_TEST(LfoPitchStepsFollowTheMeasuredLaws) {
 }
 
 // (measure_lfo_random_keysync.py) a key-sync restart draws a new random value
-// (S&H), smooth random ramps from minus it to minus the previous one
+// (S&H); smooth random ramps from the previous one to it (continuous), on amp
+// from minus it to minus the previous one
 OXO_TEST(LfoRandomRestartDrawsANewValue) {
-    Lfo sh, smooth;
-    double a = 0, b = 0, r[4];
+    Lfo sh, smooth, amp;
+    double a = 0, b = 0, r[2], q[2];
     sh.Render(&a, 1, 3, 0.01, 44100.0);
-    smooth.Render(r, 1, 4, 0.01, 44100.0);
-    OXO_EXPECT_EQ(r[0], -a);
-    sh.Restart(), smooth.Restart();
+    sh.Restart(), smooth.Restart(), amp.Restart();
     sh.Render(&b, 1, 3, 0.01, 44100.0);
     OXO_EXPECT(b != a);
-    smooth.Render(r, 1, 4, 1.0, 2.0); // phase 0
-    smooth.Render(r + 1, 1, 4, 1.0, 2.0); // phase 1/2
-    OXO_EXPECT_EQ(r[0], -b);
-    OXO_EXPECT(std::fabs(r[1] - -(a + b) / 2) < 1e-12);
+    for (int i = 0; i < 2; ++i) { // phases 0 and 1/2
+        smooth.Render(r + i, 1, 4, 1.0, 2.0);
+        amp.Render(q + i, 1, 4, 1.0, 2.0, nullptr, 0, true);
+    }
+    OXO_EXPECT_EQ(r[0], a);
+    OXO_EXPECT(std::fabs(r[1] - (a + b) / 2) < 1e-12);
+    OXO_EXPECT_EQ(q[0], -b);
+    OXO_EXPECT(std::fabs(q[1] - -(a + b) / 2) < 1e-12);
 }

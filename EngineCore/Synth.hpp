@@ -461,7 +461,8 @@ public:
                 const int dest = values_[k ? kLfo2Dest : kLfo1Dest];
                 const bool pitch = values_[k ? kLfo2On : kLfo1On] && (dest <= 2);
                 lfo_[k].Render(lfoBuf_[k], n, values_[k ? kLfo2Type : kLfo1Type], hz, sampleRate_,
-                               pitch ? lfoSteps_[k] : nullptr, Lfo::PitchSteps(values_[k ? kLfo2Depth : kLfo1Depth]));
+                               pitch ? lfoSteps_[k] : nullptr, Lfo::PitchSteps(values_[k ? kLfo2Depth : kLfo1Depth]),
+                               dest == 4);
                 if (values_[k ? kLfo2On : kLfo1On]) lfo[k] = lfoBuf_[k];
                 lfoSteps[k] = pitch ? lfoSteps_[k] : nullptr;
             }

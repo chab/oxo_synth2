@@ -891,13 +891,17 @@ original AU; keeps both renders for listening).
   (-1 at 0) 2 square (+ first) 3 S&H 4 smooth 5 sine; Hz = 2^(s/12.0367)/12 (`measure_lfo_speed.py`, 0.02 %);
   dests 1 osc2 pitch 2 osc1+2 pitch 3 cutoff 4 amp 5 pw 6 FM 7 pan.
   RANDOM TYPES (`measure_lfo_random_keysync.py`, LFO on amp at depth 127
-  = the envelope is the LFO): one random r per cycle; S&H plays r, smooth
-  random ramps LINEARLY from -r to minus the PREVIOUS cycle's r and jumps
-  at every cycle start (not continuous). A KEY-SYNC restart (no key held:
+  = the envelope is the LFO; cutoff = a saw's spectral centroid; pitch;
+  pan; pw): one random r per cycle; S&H plays r, smooth random ramps
+  LINEARLY from the PREVIOUS cycle's r to r (reached at the cycle's end:
+  continuous, kinks at the cycle starts) on pitch, cutoff, pw, pan. On
+  AMP ONLY it ramps from -r to minus the previous r and jumps at every
+  cycle start (`Lfo::Render(..., amp)`). A KEY-SYNC restart (no key held:
   overlapping notes keep the value, poly and mono) draws a new r like a
-  cycle start, so every restarted / arp note gets a new value (ours kept
-  the old one until 2026-11-11). Patches without a random LFO on render
-  bit-identically across that change.
+  cycle start, so every restarted / arp note gets a new value (smooth:
+  from the last r toward it; ours kept the old one until 2026-11-11).
+  Patches without a random LFO on render bit-identically across that
+  change. FM not checked (assumed like pitch).
   Tempo sync: 30 steps, step = floor(s·30/128), cycle = `Lfo::kSyncBeats`
   16 bars (s 0) .. 1/64T (127) = Synth1's display list; NO host-beat phase
   lock (synced LFOs free-run, the arp starts at the key press).

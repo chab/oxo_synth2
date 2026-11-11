@@ -26,9 +26,11 @@
 namespace oxo::s2 {
 
 // (measured, measure_lfo_random_keysync.py) the random types share ONE value
-// per cycle, r: S&H plays r, smooth random ramps LINEARLY from -r to minus the
-// previous cycle's r (it jumps at every cycle start). A key-sync restart draws
-// a new r as a cycle start does: every restarted note gets a new value.
+// per cycle, r: S&H plays r, smooth random ramps LINEARLY from the previous
+// cycle's r to r (continuous: it reaches r at the cycle's end). On AMP only it
+// ramps from -r to minus the previous r instead (it jumps at every cycle
+// start). A key-sync restart draws a new r as a cycle start does: every
+// restarted note gets a new value (smooth: ramps from the last r toward it).
 class Lfo {
 public:
     Lfo() { Reset(); }
@@ -62,8 +64,10 @@ public:
     static int PitchSteps(int depth) { return int(tables::kLfoPitchCents[std::clamp(depth, 0, 127)] / 9.375 + 0.5); }
 
     // Fills out[0..n) with the waveform at `hz`; steps (when not null) with
-    // its pitch steps for `pitchSteps` = PitchSteps(depth) (see above).
-    void Render(double *out, int n, int type, double hz, double sampleRate, int32_t *steps = nullptr, int pitchSteps = 0) {
+    // its pitch steps for `pitchSteps` = PitchSteps(depth) (see above); `amp`
+    // = routed to amp (smooth random's own form there).
+    void Render(double *out, int n, int type, double hz, double sampleRate, int32_t *steps = nullptr, int pitchSteps = 0,
+                bool amp = false) {
         const double inc = hz / sampleRate, sn = pitchSteps;
         for (int i = 0; i < n; ++i) {
             switch (type) {
@@ -71,7 +75,7 @@ public:
             case 1: out[i] = phase_ < 0.5 ? -1.0 + 4.0 * phase_ : 3.0 - 4.0 * phase_; break;
             case 2: out[i] = phase_ < 0.5 ? 1.0 : -1.0; break;
             case 3: out[i] = cur_; break;
-            case 4: out[i] = -(cur_ + (prev_ - cur_) * phase_); break;
+            case 4: out[i] = amp ? -(cur_ + (prev_ - cur_) * phase_) : prev_ + (cur_ - prev_) * phase_; break;
             default: out[i] = std::sin(2.0 * M_PI * phase_); break;
             }
             if (steps) {
