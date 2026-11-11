@@ -98,10 +98,12 @@ public:
     }
 
     // glide: portamento from this voice's own last pitch (measured).
-    // detuneCents / pan (-1..1) / pitchSemis / phase (cycles): this voice's
-    // place in a unison stack.
+    // detuneCents / pan (-1..1) / pitchSemis / unisonIndex (k-th voice
+    // started) + unisonShift (phase knob / 127): this voice's place in a
+    // unison stack.
     void Start(int note, int velocity, bool glide, const PatchValues &p, uint64_t age,
-               double detuneCents = 0, double pan = 0, double pitchSemis = 0, double unisonPhase = 0) {
+               double detuneCents = 0, double pan = 0, double pitchSemis = 0, int unisonIndex = 0,
+               double unisonShift = 0) {
         unisonSemis_ = detuneCents / 100.0 + pitchSemis;
         unisonPan_ = pan;
         SetNote(note, glide);
@@ -120,7 +122,7 @@ public:
         // (measured) mod env = AD with the amp env's attack / decay laws
         modEnv_.Configure(sampleRate_, p[kModEnvAttack], p[kModEnvDecay], 0, 0, Adsr::SustainLaw::Linear);
         modEnv_.Trigger();
-        unisonPhase_ = unisonPhase;
+        unisonIndex_ = unisonIndex % 32, unisonShift_ = unisonShift;
         StartPhases(p, !stolen);
         tail_ = false;
         // A stolen voice still sounding keeps its filter / output state:
@@ -134,22 +136,39 @@ public:
     void StartPhases(const PatchValues &p, bool relockSub = true) {
         // (measured) osc phase 0 = free: the slot's phases carry on (InitSlot);
         // > 0 = osc1 starts at phase 0, osc2 at (v - 1) / 126 of half a cycle
-        // (127 = 180 degrees), both shifted by the unison phase.
+        // (127 = 180 degrees), each shifted by the unison phase.
         Phase64 copies[kDetuneOscs];
+        bool past[kDetuneOscs] = {}; // a copy's start is past one cycle
         for (int i = 0; i < kDetuneOscs; ++i) copies[i] = CopyPhase(i);
         if (p[kOscPhase] > 0) {
-            osc1Phase_ = Wrap(unisonPhase_);
-            osc2Phase_ = Wrap(0.5 * (p[kOscPhase] - 1) / 126.0 + unisonPhase_);
-            // (measured) copy i starts kCopyPhaseDeg[i] * (v - 1) / 126 after osc1
+            // (measured, measure_unison_shift.py) the unison phase moves EVERY
+            // oscillator of the k-th stack voice by its own slot table's phase
+            // at slot k (0..1 cycle, not wrapped: it scales with the knob),
+            // times v / 127; voice 0 too (osc1's slot 0 phase is ~0)
+            const int k = unisonIndex_;
+            const auto shift = [&](const float *table, int stride, int i) {
+                return double(table[k * stride + i]) * unisonShift_;
+            };
+            osc1Phase_ = Wrap(shift(tables::kSlotOsc1Phase, 1, 0));
+            osc2Phase_ = Wrap(0.5 * (p[kOscPhase] - 1) / 126.0 + shift(tables::kSlotOsc2Phase, 1, 0));
+            // (measured) copy i starts kCopyPhaseDeg[i] * (v - 1) / 126 after osc1's start
             static constexpr double kCopyPhaseDeg[kDetuneOscs] = {321, 172, 291, 202, 0, 69, 210, 126};
-            for (int i = 0; i < kDetuneOscs; ++i)
-                copies[i] = ToPhase64(osc1Phase_ + kCopyPhaseDeg[i] / 360.0 * (p[kOscPhase] - 1) / 126.0);
+            for (int i = 0; i < kDetuneOscs; ++i) {
+                const double c = kCopyPhaseDeg[i] / 360.0 * (p[kOscPhase] - 1) / 126.0 +
+                                 shift(tables::kSlotCopyPhase, kDetuneOscs, i);
+                copies[i] = ToPhase64(c), past[i] = c >= 1.0;
+            }
         }
         // (measured) the sub runs phase-locked to osc1: its harmonic at osc1's
         // pitch is in phase with osc1's fundamental.
         if (relockSub || p[kOscPhase] > 0) {
             subPhase_ = osc1Phase_ * (p[kSubOctave] ? 0.5 : 1.0);
             SetCopyPhases(copies, p[kSubOctave] != 0);
+            // (measured) an octave-down sub's copy starts at HALF its osc1 copy's
+            // unwrapped start: one past a cycle (unison phase) = half a sub cycle on
+            if (copyHalf_)
+                for (int i = 0; i < kDetuneOscs; ++i)
+                    if (past[i]) copyPhase_[i] += Phase64(1) << 63;
         }
     }
 
@@ -732,7 +751,8 @@ private:
     Adsr modEnv_;
     VoiceFilter filter_;
     int note_ = 0, velocity_ = 0;
-    double unisonSemis_ = 0, unisonPan_ = 0, unisonPhase_ = 0;
+    double unisonSemis_ = 0, unisonPan_ = 0, unisonShift_ = 0;
+    int unisonIndex_ = 0;
     double glide_ = 0; // gliding pitch (semis); (measured) a never-used voice starts from note 0
     double glideAim_ = 0;
     int glideTick_ = 16;

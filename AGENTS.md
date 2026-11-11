@@ -915,8 +915,19 @@ original AU; keeps both renders for listening).
   oscillators start at its 16-sample sub-block's start. > 0 = osc1
   starts at 0, osc2 at (v-1)/126·180°, detune copy i at
   kCopyPhaseDeg[i]·(v-1)/126 (Voice.hpp); a MONO RETRIGGER restarts them
-  too. Unison phase (92, osc phase > 0 only): the k-th voice started starts
-  kPhaseDeg[k]·v/127 later.
+  too. Unison phase (92, osc phase > 0 only, `measure_unison_shift.py`):
+  EVERY oscillator of the k-th stack voice started (k, not its slot: a 2nd
+  note on slots 4..7 nulls only so) is shifted by ITS OWN slot table at
+  slot k × v/127, the table value 0..1 cycle UNWRAPPED (it scales with the
+  knob): osc1 kSlotOsc1Phase (= the old kPhaseDeg, ~0 for k = 0), osc2
+  kSlotOsc2Phase (k = 0 too: 203° at 127), each detune copy
+  kSlotCopyPhase. An octave-down sub's copy starts at HALF its osc1 copy's
+  unwrapped start (past one cycle = +half a sub cycle). Until 2026-11-11
+  ours shifted osc2 and the copies by osc1's angle: unison phase > 0 with
+  osc2 or detune nulled at +2..+13 dB ("Synth1's attack is softer"), now
+  -15..-40 dB (osc2 -37..-40, detune back to its phase-0 residual); 78
+  library patches: 2.76 → 2.21 dB, 37 better, 3 worse by ≤ 0.7 (noise +
+  sync patches).
 - Mod env amount m = (amt-64)/63 above 64, /64 below. Pitch = ±60
   semis·m·env. PW = the LFO's room-left law with m·env. FM = room-left in
   FM-knob units with m·g: g = env during the attack, during the DECAY g = 1

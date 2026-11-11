@@ -218,10 +218,9 @@ private:
         const double spread = (values_[kUnisonPan] - 64) / 64.0;
         const uint64_t age = now_;
         // (measured) unison phase shift (osc phase > 0; with 0 the slots'
-        // phases carry on): the k-th voice started starts kPhaseDeg[k] * v /
-        // 127 degrees later (any voice count; = the slots' initial phases).
-        static constexpr double kPhaseDeg[8] = {0, 62.2, 356.4, 60.5, 317.0, 281.5, 136.3, 303.1};
-        const double shift = values_[kUnisonPhase] / 127.0 / 360.0;
+        // phases carry on): the k-th voice started shifts each oscillator by
+        // v / 127 of its slot k phase minus slot 0's (Voice::StartPhases).
+        const double shift = values_[kUnisonPhase] / 127.0;
         // (measured, check_unison.py + chord slot orders) a note takes
         // min(voices, polyphony) voices (round robin as usual); a stack DOES
         // steal from a note started in the same sub-block (oldest first): a
@@ -237,7 +236,7 @@ private:
             const int i = lastVoice_ % n;
             const double t = n > 1 ? 2.0 * i / (n - 1) - 1.0 : 0.0;
             v.Start(key, velocity, glide, values_, age, t * d, t * spread,
-                    (i & 1) ? values_[kUnisonPitch] - 24 : 0, kPhaseDeg[k] * shift);
+                    (i & 1) ? values_[kUnisonPitch] - 24 : 0, k, shift);
         }
     }
 
