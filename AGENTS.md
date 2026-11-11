@@ -872,7 +872,10 @@ original AU; keeps both renders for listening).
   never reset, they carry on from the slot's last note (frozen while idle)
   from per-slot values set at instance creation (`measure_slot_phase.py` →
   `kSlotOsc1Phase` / `kSlotOsc2Phase`, 32 slots; slots 0..7 osc1 =
-  kPhaseDeg; detune copies `kSlotCopyPhase`). > 0 = osc1
+  kPhaseDeg; detune copies `kSlotCopyPhase`; osc1 REFINED to ~2e-5 cycle
+  by `measure_slot_osc1.py` from synced-noise reset samples: the fits were
+  off by up to 2e-4, enough to shift a synced-noise restart). A note's
+  oscillators start at its 16-sample sub-block's start. > 0 = osc1
   starts at 0, osc2 at (v-1)/126·180°, detune copy i at
   kCopyPhaseDeg[i]·(v-1)/126 (Voice.hpp); a MONO RETRIGGER restarts them
   too. Unison phase (92, osc phase > 0 only): the k-th voice started starts
@@ -883,9 +886,14 @@ original AU; keeps both renders for listening).
   + ln(env)/ln(1e4) (FM offset falls LINEARLY to 0 at 9.2 taus).
 - Unison (`check_unison.py`: every knob + interactions vs the original,
   nulls ≤ -20 dB where phases are deterministic): a note takes min(voices,
-  polyphony) voices (round robin) but never steals from a note started in
-  the same 16-sample sub-block (a chord over the polyphony keeps its FIRST
-  notes, the rest of a stack is dropped); a voice's PLACE p is FIXED by its slot,
+  polyphony) voices (round robin). POLY NOTES OF ONE 16-SAMPLE SUB-BLOCK
+  TAKE THEIR VOICES IN REVERSE ORDER (free-phase chords null at -50 dB
+  only so; `Synth::NoteOn` queues them, flushed reversed at the next
+  render / event); mono / legato keep the arrival order (last note wins).
+  Over the polyphony: a poly note never steals a voice started in the same
+  sub-block (dropped = the chord's FIRST notes, processed last), a unison
+  stack DOES (oldest first), so a unison chord keeps its first notes too,
+  in the slots its last ones took first; a voice's PLACE p is FIXED by its slot,
   p = slot % voices (a stack may hold a place twice): detune t·D (t =
   2p/(N-1) - 1, D table), pan spread t·(v-64)/64 (below 64 the LOWEST
   voice goes RIGHT), odd p + (pitch-24) semis; no level compensation. The

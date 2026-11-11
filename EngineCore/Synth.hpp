@@ -50,6 +50,7 @@ public:
     // routing offsets, see ApplyRouting).
     void SetParam(int id, int32_t value) {
         if (id < 0 || id >= kParamCount) return;
+        FlushNoteOns();
         if (switch_ == Switch::Out) { // patch switch: lands at silence
             pending_[id] = value;
             pendingMask_[size_t(id)] = true;
@@ -93,12 +94,20 @@ public:
         keyVelocity_[key] = uint8_t(std::clamp(velocity, 1, 127));
         sustained_[key] = false;
         if (values_[kArpOn]) return ArpNoteOn(key, velocity);
-        VoiceNoteOn(key, velocity);
+        // (measured: free-phase chords nulled at +2 dB, -50 dB reversed)
+        // poly notes in one 16-sample sub-block (the original's event grid)
+        // take their voices in REVERSE order: the last one gets the next
+        // round-robin slot. Mono / legato keep the arrival order (last note
+        // wins, measured). Queued until the next render or other event.
+        if (values_[kPlayMode] != 0 || noteOnCount_ == int(noteOns_.size())) FlushNoteOns();
+        if (values_[kPlayMode] != 0) return VoiceNoteOn(key, velocity);
+        noteOns_[size_t(noteOnCount_++)] = {uint8_t(key), uint8_t(keyVelocity_[key])};
     }
 
     // Sustain pedal (CC 64): a key released while the pedal is down is held
     // (arpeggiator included) until the pedal comes up.
     void NoteOff(int key) {
+        FlushNoteOns();
         key &= 127;
         keyDown_[key] = false;
         if (sustain_) {
@@ -124,6 +133,13 @@ private:
     // notes playing): on = the held keys become the arp's (it arpeggiates
     // them), off = the arp's keys play their own voices again. Without this
     // a key would be released by the wrong path and stick.
+    void FlushNoteOns() {
+        while (noteOnCount_ > 0) {
+            const auto [key, velocity] = noteOns_[size_t(--noteOnCount_)];
+            VoiceNoteOn(key, velocity);
+        }
+    }
+
     void ArpSwitched() {
         if (values_[kArpOn]) {
             for (Voice &v : voices_)
@@ -187,8 +203,11 @@ private:
         // slot 0 (unison: 0..N-1), poly the round robin.
         const bool glide = porta && !values_[kPortaAuto];
         if (!values_[kUnisonOn]) {
-            Voice &v = mode != 0 ? MonoVoice(0) : *AllocateVoice();
-            v.Start(key, velocity, glide, values_, now_);
+            // (measured) a poly chord over the polyphony: the notes processed
+            // last (= its first ones, see NoteOn) find no voice and are dropped,
+            // voices started in the same sub-block are never stolen
+            Voice *v = mode != 0 ? &MonoVoice(0) : AllocateVoice(true);
+            if (v) v->Start(key, velocity, glide, values_, now_);
             return;
         }
         // (measured) unison: N voices evenly over +-D cents, pan spread
@@ -203,15 +222,16 @@ private:
         // 127 degrees later (any voice count; = the slots' initial phases).
         static constexpr double kPhaseDeg[8] = {0, 62.2, 356.4, 60.5, 317.0, 281.5, 136.3, 303.1};
         const double shift = values_[kUnisonPhase] / 127.0 / 360.0;
-        // (measured, check_unison.py) a note takes min(voices, polyphony)
-        // voices (round robin as usual) but never steals from a note started
-        // at the same time (a chord keeps its FIRST notes; the rest of the
-        // stack is dropped); a voice's place in the stack (detune, pan, odd =
-        // pitch) is FIXED by its slot: slot % voices (a stack may hold a
-        // place twice); the phase shift follows k.
+        // (measured, check_unison.py + chord slot orders) a note takes
+        // min(voices, polyphony) voices (round robin as usual); a stack DOES
+        // steal from a note started in the same sub-block (oldest first): a
+        // chord over the polyphony keeps its first notes because they are
+        // processed last (see NoteOn); a voice's place in the stack (detune,
+        // pan, odd = pitch) is FIXED by its slot: slot % voices (a stack may
+        // hold a place twice); the phase shift follows k.
         const int sounding = std::min(n, std::clamp<int>(values_[kPolyphony], 1, kMaxVoices));
         for (int k = 0; k < sounding; ++k) {
-            Voice *slot = mode != 0 ? &MonoVoice(k) : AllocateVoice(true);
+            Voice *slot = mode != 0 ? &MonoVoice(k) : AllocateVoice();
             if (!slot) break;
             Voice &v = *slot;
             const int i = lastVoice_ % n;
@@ -332,6 +352,7 @@ private:
 
 public:
     void ControlChange(int cc, int value) {
+        FlushNoteOns();
         cc &= 127;
         cc_[cc] = std::clamp(value, 0, 127);
         if (cc == 64) SetSustain(value >= 64);
@@ -339,10 +360,12 @@ public:
         ApplyRouting();
     }
     void PitchBend(int value14) {
+        FlushNoteOns();
         bend_ = value14 - 8192;
         ApplyRouting();
     }
     void ChannelPressure(int value) {
+        FlushNoteOns();
         pressure_ = std::clamp(value, 0, 127);
         ApplyRouting();
     }
@@ -356,6 +379,7 @@ public:
     }
 
     void AllNotesOff(bool immediate) {
+        noteOnCount_ = 0;
         for (Voice &v : voices_) immediate ? v.Kill() : v.Release();
         sustained_.fill(false);
         heldCount_ = 0;
@@ -377,6 +401,7 @@ public:
     }
 
     void Reset() {
+        noteOnCount_ = 0;
         for (Voice &v : voices_) v.Kill();
         heldCount_ = 0;
         arpCount_ = 0;
@@ -409,6 +434,7 @@ public:
     bool PatchChanging() const { return switch_ != Switch::None; }
 
     void Render(float *left, float *right, int frames) {
+        FlushNoteOns();
         const simd::ScopedNoDenormals noDenormals;
         std::fill(left, left + frames, 0.0f);
         std::fill(right, right + frames, 0.0f);
@@ -572,9 +598,9 @@ private:
         return voices_[size_t(slot)];
     }
 
-    // keepSameTime (unison): voices started at the same time (same 16-sample
-    // sub-block, the original's event grid) can't be stolen; nullptr when
-    // nothing else is left.
+    // keepSameTime (poly notes): voices started at the same time (same
+    // 16-sample sub-block, the original's event grid) can't be stolen;
+    // nullptr when nothing else is left.
     Voice *AllocateVoice(bool keepSameTime = false) {
         // Round robin like Synth1 (its voice squares): the next idle voice
         // after the last one started. (measured, measure_steal.py) at the
@@ -604,6 +630,8 @@ private:
     std::array<uint8_t, 128> keyVelocity_{};
     std::array<Voice, kMaxVoices> voices_{};
     int lastVoice_ = -1; // round robin
+    std::array<std::pair<uint8_t, uint8_t>, 32> noteOns_{}; // poly note ons of this sub-block (key, velocity)
+    int noteOnCount_ = 0;
     double cutoff_ = kParams[kFilterFreq].def, cutoffTarget_ = kParams[kFilterFreq].def, cutoffRate_ = 0; // knob glide
     double volume_ = 1.0, volumeTarget_ = 1.0; // VolumeGain, ramped per Render
     Lfo lfo_[2];
