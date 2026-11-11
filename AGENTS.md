@@ -185,7 +185,7 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
 - `make -C EngineCoreTests test`, `make -C tools/s2render`, CPU bench
   `clang++ -std=c++20 -O2 tools/bench/main.cpp -o build/bench && ./build/bench`
   (16 voices, one core, Apple M4: LP12 x135, LP24 x109, LPDL x35,
-  detune+sub x88, all fx x90 realtime; `./build/bench <x.sy1>...` = a
+  detune+sub x88, all fx x90 realtime (it runs the a.d.1: x83 with its tabulated curves, x74 with the exact ones' pows, same session); `./build/bench <x.sy1>...` = a
   keyboard scrub, ~31 voices: Madame Eljay 010 x46, the heaviest case
   reported),
   `make -C tools/s1ref` (x86_64, needs the original AU).
@@ -693,11 +693,20 @@ original AU; keeps both renders for listening).
   (1-w)m, all / (1-wm) (sub off = linear crossfade).
   osc2 pitch = integer-semitone table (±60), fine/tune 1 cent/step dead zone
   62..66. kbd track off = fixed 220 Hz. Osc1 detune: main + 8 copies at
-  ±1,3,5,7 × d cents, d = 20 v/127, each ×0.297 (sine 0.288).
+  ±1,3,5,7 × d cents, d = 20 v/127, each ×0.297 (sine 0.288). Under FM
+  every copy steps ratio·inc + osc1's FM DEVIATION (added as is, NOT
+  ratio·(inc + dev)): seen with sync + FM, where the synced osc2's mean
+  shifts the pitch (key 36, FM 30: the main at ~90 Hz, the copies spread
+  over the UNMODULATED 65 Hz spread, 10.6 Hz, not 14.7; peaks match to
+  the bin since 2026-11-11). Without sync it is inaudible (index ±1 %).
   FM: inst f1 = f1 + beta[v]·261.63 Hz·(sr/44100)·osc2_norm (table measured
   at key 60, to ~102): the deviation is a FIXED phase step per sample
   (`measure_fm_key.py`): index halves per octave up (keys and key shift),
-  grows with the sample rate. FM 0 = NO FM (sidebands at the -178 dB
+  grows with the sample rate. Whole table = deviation step (cycles /
+  sample) (1001^(v/127) − 1) / 2000 to ~6e-4 relative: 0.5 = NYQUIST at
+  127, the carrier then simply folds (no clamp). Entries 124..127 were
+  wrong fits until 2026-11-11 (83.6..102 instead of 71.6..84.3: the
+  sideband error oscillates in beta, the fit now grids first). FM 0 = NO FM (sidebands at the -178 dB
   floor; the table's fitted entry 0, 6.6e-6, is noise: `Voice::FmBeta`;
   `measure_zero_knobs.py`, with the LFO depth 0 probe).
   Ring: osc2 ×
@@ -705,9 +714,78 @@ original AU; keeps both renders for listening).
   osc1 detune + sub on = the sub copies skip the 0.297 gain, then the osc1
   section is bounded (modelled 1.7·tanh(x/1.7), approximate; the original
   also has osc1 × sub products); no effect without detune. Sync hard: NAIVE reset of osc2 to phase 0 (same alias energy
-  as the original to 0.1 dB; do not band-limit).
+  as the original to 0.1 dB; do not band-limit). SYNC + FM: a sync fires
+  whenever osc1's phase DROPS = a forward wrap OR any sample FM drives it
+  backward without wrapping (a backward wrap 0 → 1 does not). Synced
+  NOISE restarts on −0.65, so once FM step × 0.65 > the pitch step the
+  voice locks on a constant (silence after a click; key 60: FM ≥ 54,
+  −12.7 FM steps per octave down; nulls −87 dB vs the original).
+  Pitched modulators match by level / spectrum, not sample-exact (chaotic).
+  OSC1 PHASE = whole 2^-27 cycles (2048-point index + 16-bit fraction),
+  each step TRUNCATED (`PhaseStep`; FM steps per sample): measured from
+  synced-noise reset times over 3-4 s at keys 30..72 (period fits match
+  to 7e-5 samples; exact doubles drift a sample every few dozen cycles,
+  and a synced noise cycle shifted by one sample nulls at 0 dB). Osc2
+  stays exact (truncated, the FM nulls get 9 dB worse).
+  `check_fm.py [--sync]`: osc1 x osc2 shape x FM grid vs the original.
+  No sync: every pair within 0.6 dB at every FM (2026-11-11). Sync + FM:
+  off by 1..30 dB from FM ~60 (key 48) with saw / pulse / tri osc2. The
+  original's osc2 reads +0.02..0.06 HIGHER than ours on the sample right
+  after a reset (saw: ours 0 = the band-limited jump's midpoint; triangle
+  none), deconvolved from the no-FM sync residual through the chain IR
+  (identical-noise fit). Under FM that sample decides whether osc1 steps
+  forward or backward (e.g. pulse 64, FM 60, key 48: original runs at
+  the plateau rate, ours locks near phase 0). Not resolved: resetting to
+  c·incB overshoots even at c = 0.1, a sub-sample reset (overshoot / step
+  × incB) is 10x too much, "previous o2 drives FM" is worse. 2026-11-11
+  (2): per reset (deconvolved, `h` = the chain IR from the identical-noise
+  fit) the extra value varies 0.026..0.069 from one reset to the next
+  with no link to osc1's overshoot; it depends on osc1's key (0.053 key
+  36, ~0.045 key 48, ~0.02 key 60), not on osc1's shape; a triangle shows
+  none (= a tiny positive reset phase, ~1e-5..1e-4 cycle). c = 0.02 (the
+  mean) fixes every deterministic plateau case and the triangle column
+  but is NEUTRAL on the library (one patch +3 dB better, User/006 3.5 dB
+  worse): not shipped. 2048-point linear tables (what the purity /
+  copies measurements suggest the original has): no change here.
+  2026-11-11 (3), SHIPPED: a forward-wrap sync restarts osc2 at PHASE
+  `kSyncResetPhase` = 7e-5 cycle (a phase, not a value: key-dependent
+  through the saw jump's slope, ~0 on a triangle). Fitted open loop (FM 0,
+  osc2 alone, residual energy): -6 dB at keys 36..72, osc2 saw / pulse /
+  tri, pitch ±12 (best 4.5e-5..8e-5 per case; an overshoot term adds
+  nothing). A backward-step sync keeps phase 0: the offset there is worse
+  above FM ~110. Closed loop (check_fm --sync key 48): FM 40..80 cells
+  much better (sine/pulse 60: 29 → 11 dB, tri/pulse 60: 34 → 7), saw
+  osc2 at FM ~120 worse (7 → 20 saw/saw, chaotic islands); held-out
+  keys 42/54/66: mid FM 2.28 → 1.96 dB, all 3.78 → 3.63. Library (180
+  sync patches): mean -0.05 dB, 5 better > 0.5 (Kujashi Deep Other Worlds
+  12.4 → 6.5, User/006 8.5 → 7.5), 1 worse (Long Horn Atmo +1.2).
+  TRIED, NO GAIN: sync on the 2048-point INDEX dropping (fixes one
+  plateau cell, worse on the grid), offset × or ÷ |fm| (the ÷ √|fm| fit
+  did not hold on held-out keys), the offset on backward syncs too. The
+  scores move ±0.5 dB from tiny changes above FM ~90: judge on held-out
+  grids + the library, not one grid. Sample-lock harness: a note's first
+  samples are deterministic, so "first sample where |ref − ours| > 2 %"
+  shows where a rule diverges (e.g. the backward lock right after a
+  reset, sample 64 at key 48 sine/pulse FM 60). Locked
+  noise sync (osc1 running backward): the original's backward pitch is
+  0.055 % lower = noise as an FM SOURCE is ±0.6500 (audio ±0.65039, the
+  locked DC nulls at -87 dB only with that): `kNoiseFm`. With it the
+  backward pitch matches to 2e-5 and check_fm's noise columns are within
+  0.4 dB (sync, bar 3 cells at 1.7..2.8) / 0.06 dB (no sync).
 - The "fixed output lowpass" (bilinear one-pole, analog 22 kHz, NO
   prewarp) is NOT per voice: it is the EQ TONE stage at 64 (see EQ).
+- AMP ENV IS A CONTROL-RATE, 11-BIT GAIN outside the attack (measured on
+  a locked synced-noise DC, the cleanest envelope probe there is): at every
+  256-sample boundary of the HOST block grid it takes floor(2048·env)/2048
+  and ramps linearly to the next one (`Voice::AmpGain`); the decay /
+  release are then PLAIN exponentials stopping within 1/2048 of their
+  target (`Adsr::SetQuantized`; the last step holds 1/2048 for ln 2 tau).
+  The first block after a note on is finer (kinks at +64, +107, +193,
+  +255 samples from the note's sub-block, ~1 ms steps: modelled per
+  sample). OPEN: s1's knot sequence is up to 2 % above a pure exponential
+  mid-decay and below it later (decay 62: +2.2 % at -20 dB, -7 % at
+  -43 dB): not a fixed tau; the exact law is unknown. A d.d. with high
+  drive amplifies these -60..-90 dB steps by ~40 dB (Kaiyoti 027's tail).
 - Amp env: linear attack 0.5 ms·2^(v/8.05); decay/release exponential
   tau table (same law); sustain = curved table. Filter env = same times,
   LINEAR sustain. Velocity: dB = -15 (sens/64)(127-vel)/126.
@@ -831,20 +909,39 @@ original AU; keeps both renders for listening).
   never reset, they carry on from the slot's last note (frozen while idle)
   from per-slot values set at instance creation (`measure_slot_phase.py` →
   `kSlotOsc1Phase` / `kSlotOsc2Phase`, 32 slots; slots 0..7 osc1 =
-  kPhaseDeg; detune copies `kSlotCopyPhase`). > 0 = osc1
+  kPhaseDeg; detune copies `kSlotCopyPhase`; osc1 REFINED to ~2e-5 cycle
+  by `measure_slot_osc1.py` from synced-noise reset samples: the fits were
+  off by up to 2e-4, enough to shift a synced-noise restart). A note's
+  oscillators start at its 16-sample sub-block's start. > 0 = osc1
   starts at 0, osc2 at (v-1)/126·180°, detune copy i at
   kCopyPhaseDeg[i]·(v-1)/126 (Voice.hpp); a MONO RETRIGGER restarts them
-  too. Unison phase (92, osc phase > 0 only): the k-th voice started starts
-  kPhaseDeg[k]·v/127 later.
+  too. Unison phase (92, osc phase > 0 only, `measure_unison_shift.py`):
+  EVERY oscillator of the k-th stack voice started (k, not its slot: a 2nd
+  note on slots 4..7 nulls only so) is shifted by ITS OWN slot table at
+  slot k × v/127, the table value 0..1 cycle UNWRAPPED (it scales with the
+  knob): osc1 kSlotOsc1Phase (= the old kPhaseDeg, ~0 for k = 0), osc2
+  kSlotOsc2Phase (k = 0 too: 203° at 127), each detune copy
+  kSlotCopyPhase. An octave-down sub's copy starts at HALF its osc1 copy's
+  unwrapped start (past one cycle = +half a sub cycle). Until 2026-11-11
+  ours shifted osc2 and the copies by osc1's angle: unison phase > 0 with
+  osc2 or detune nulled at +2..+13 dB ("Synth1's attack is softer"), now
+  -15..-40 dB (osc2 -37..-40, detune back to its phase-0 residual); 78
+  library patches: 2.76 → 2.21 dB, 37 better, 3 worse by ≤ 0.7 (noise +
+  sync patches).
 - Mod env amount m = (amt-64)/63 above 64, /64 below. Pitch = ±60
   semis·m·env. PW = the LFO's room-left law with m·env. FM = room-left in
   FM-knob units with m·g: g = env during the attack, during the DECAY g = 1
   + ln(env)/ln(1e4) (FM offset falls LINEARLY to 0 at 9.2 taus).
 - Unison (`check_unison.py`: every knob + interactions vs the original,
   nulls ≤ -20 dB where phases are deterministic): a note takes min(voices,
-  polyphony) voices (round robin) but never steals from a note started in
-  the same 16-sample sub-block (a chord over the polyphony keeps its FIRST
-  notes, the rest of a stack is dropped); a voice's PLACE p is FIXED by its slot,
+  polyphony) voices (round robin). POLY NOTES OF ONE 16-SAMPLE SUB-BLOCK
+  TAKE THEIR VOICES IN REVERSE ORDER (free-phase chords null at -50 dB
+  only so; `Synth::NoteOn` queues them, flushed reversed at the next
+  render / event); mono / legato keep the arrival order (last note wins).
+  Over the polyphony: a poly note never steals a voice started in the same
+  sub-block (dropped = the chord's FIRST notes, processed last), a unison
+  stack DOES (oldest first), so a unison chord keeps its first notes too,
+  in the slots its last ones took first; a voice's PLACE p is FIXED by its slot,
   p = slot % voices (a stack may hold a place twice): detune t·D (t =
   2p/(N-1) - 1, D table), pan spread t·(v-64)/64 (below 64 the LOWEST
   voice goes RIGHT), odd p + (pitch-24) semis; no level compensation. The
@@ -853,12 +950,27 @@ original AU; keeps both renders for listening).
   stack voice glides from its own last pitch (PORTAMENTO).
 - Pan: patch pan q = (v-64)/64 below the centre, /63 above; balance gains
   (centre 1/1, hard side 1/0); patch pan × unison spread gains MULTIPLY.
+  The patch pan AND the LFOs on pan act AFTER THE EFFECT (`Synth::Pan`),
+  before the delay / chorus (their crossing types carry a hard-left pan
+  to the right); only the unison spread pans per voice, before it. Every
+  effect type: L and R = the effect's output x the pan gains exactly
+  (2026-11-11; before, a d.d. folded a 3 % pan difference into two
+  uncorrelated channels: Kaiyoti 027 / 069 spec 4..5 dB -> 0.5).
+- Delay TIMES are WHOLE samples (single-tap IRs, identical-noise trick,
+  44.1 / 96 kHz, tempos 60..200): division × beat rounded DOWN to a
+  multiple of 4 samples, + the spread offset floored, at least
+  floor(0.1 ms · sr): time 0 = 4 samples at 44.1 kHz (a comb; it was 29,
+  interpolated). A new time glides exponentially, tau 0.215 s.
 - Delay: spread = one side later by 100 ms·10^((|v-64|-63)/21) (0 at 64);
   delay tone (`measure_delay_tone.py`, `kDelayToneHz`): a bilinear one-pole
   in the echo path, 64 = none, < 64 LP 200 Hz·110^(t/63) (22 kHz at 63),
-  > 64 HP 10 Hz .. 8 kHz.
+  > 64 HP 10 Hz .. 8 kHz. Types (hard-panned noise bursts, echo envelopes
+  per channel): 0 independent; 1 X = each input enters the OTHER side's
+  line and the lines feed each other (a left input echoes right, left,
+  right...; ours echoed left first until 2026-11-11); 2 PP = (L+R)/2 into
+  the left line, left line -> right line, right feeds back left.
 - Arp gate 0 = silent.
-- Chain order (`measure_fx_order.py`): voices → effect → EQ → delay →
+- Chain order (`measure_fx_order.py`): voices → effect → pan → EQ → delay →
   chorus.
 - EQ (`check_eq.py`: every tone / freq / level / Q case within 0.06 dB):
   TONE (`measure_eq_tone.py`, `kEqToneHz`) = one bilinear one-pole, no
@@ -874,16 +986,89 @@ original AU; keeps both renders for listening).
   from creation, 2.94 Hz·2^((rate−64)/8.89), rate 0 = 0.01 Hz; types 1–3
   L→L / R→R (R θ 0° type 1, 90° types 2 = 3), type 4 L→L 0°, R→L 90°, L→R
   180°, R→R 270°; comb feedback 0.99·(fb−64)/64; wet = level/127, dry
-  unity.
+  unity. Base delay = WHOLE samples (`Chorus::TimeSamples`, measured
+  table at 44.1 kHz, 30 ms at 127; 96 kHz = the same delays rounded).
+  The comb adds the CURRENT tap (echoes every base delay exactly).
+  DELAY + CHORUS both on: the delay's echoes never reach the output
+  directly; they run through the chorus voices only, at UNITY whatever
+  the chorus level (level 0 = echoes chorus-delayed, still full):
+  out = dry + level·chorus(dry) + chorus(echoes) (separate lines, same
+  LFO / taps / feedback). Delay dry = (127 − dw)/63 above 64.
 - EFFECT SECTION (`measure_effect.py`, `measure_effect_time.py`,
   `reference/meta/effect.json`; laws in the EffectUnit comment):
   distortions = drive table → curve → RBJ HP → RBJ LP 400 Hz·40^(ctl2/127)
-  Q3 → gain (level+2)/129, no dry (a.d.1 = fitted asymmetric tanh in a 69
-  Hz negative-feedback loop); deci = hold ctl1+1 samples, floor quantiser,
+  Q3 → gain (level+2)/129, no dry (a.d.1: below); d.d. = F(x) = P·tri(S·x/P), slope S and
+  peak P PER CTL1 (`measure_dd.py` → kDdSlope / kDdPeak: P 1.64 at ctl1 0
+  falling to 0.5778 from ~64 up, S 0.895 .. 1000; nulls -50..-78 dB on the
+  effect's exact input = the effect-off render with the EQ tone stage
+  undone at the probe sine's frequency: the 22 kHz one-pole after the
+  effect shifts the input enough to wreck a 1000-fold fit). With a
+  thousand folds the output amplifies any input difference ~40 dB, so a
+  patch's d.d. output only nulls as deep as its voice does (-63 dB voice
+  -> ~-15 dB folded); deci = hold ctl1+1 samples, floor quantiser,
   14 kHz one-pole; r.m. = sine 8000^(ctl1/127) Hz; comp = one-pole |x|
-  detector + soft-knee leveller; phasers = 2/4/8/12 allpasses, LEVEL =
+  detector PER CHANNEL (unison spread input: per-channel gains within
+  0.02 dB; linked until 2026-11-11) + soft-knee leveller; phasers = 2/4/8/12 allpasses, LEVEL =
   FEEDBACK (0.99·(lv−64)/64), ctl1 = sweep depth, ctl2 = rate, a bouncing
   log-frequency ramp around 1271 Hz (starts at 254.6 Hz).
+- A.D.1 (effect type 0) STATUS 2026-11-12: ctl1 is EXACT, the system S is
+  a FITTED model. CTL1 LAW (`measure_ad1_law.py` → effect.json
+  `ad1_law`): the original is out(ctl1)·S(d(ctl1)·x) for ONE fixed S (a
+  784 Hz sine's compression curve, 36 levels, and its H2 / H3 at every
+  ctl1 = the ctl1 64 curves shifted along log input and scaled, within
+  0.01 dB); d = d64·10^(3.5·(ctl1−64)/127) (70 dB), out measured per
+  ctl1 (x8.0 at 0, x1.52 at 16, x1.03 at 32, 1.000 from ~48 up);
+  kAd1Drive / kAd1Out. S (`fit_ad1.py --fit`, all ctl1 0, 8, .., 127
+  at once; `ad1_model.c` = S in C, exact curves): z = f1(d·x − G·lp(z) +
+  b1) − f1(b1), 95.4 Hz one-pole loop on the previous z, one-pole HP
+  263.5 Hz, s = f2(g2·h + b2) − f2(b2), one-pole HP 30.3 Hz, RBJ HP 96.3
+  Hz Q 2.37, the RBJ LP Q 3; f(w) = w/(1+|w/L|^k)^(1/k) per side. The
+  engine reads f1 / f2 from tables (`Ad1Curve`: value + slope, cubic
+  Hermite on u = w/(|w|+1), max error -114 dB; ours vs the C model -99..
+  -141 dB median, worst -76 dB at ctl1 127 where a float input flips a
+  switching sample). Median sample error -22.2 (ctl1 0) .. -24.1 dB (127),
+  worst tests -13..-16 dB (the single-curve model of 2026-11-11: -18.7 /
+  -9..-15). Library a.d.1 patches (5 + Desktop ad1.sy1): level |mean|
+  0.51 -> 0.27 dB, spec 1.13 -> 0.99 dB (Kaiyoti 020's 3.2 dB is its
+  voice: 3.5 with the effect off; Kaiyoti 035 got worse, 0.48 -> 0.74:
+  ctl2 73, level 64, not in the fit set). All fx bench x74 -> x83.
+  MEASURED 2026-11-12 (scratch probes, reuse): at ctl1 127 the curve
+  switches like a per-sample hard clip (folded harmonics at the same
+  level as a naive clip: no oversampling), at the input's own zero
+  crossings (no pre-filter phase), with thresholds in input units
+  −1.45e-3 mean and an up / down spread falling with frequency (4.6e-3 at
+  49 Hz, 0.9e-3 at 554 Hz, amplitude-independent: feedback from the
+  output state, lowpassed); pulse trains (key 12, pw 2..127) at ctl1 127:
+  the output jump at an up edge after a low pulse of g samples over the
+  isolated jump = 1.36 (g 33), 1.58 (58), 1.38 (97), 1.22 (140), 1.09
+  (214), 1.02 (341), 0.96 (680), 0.98 (1349): NOT linear after the
+  switch; a one-pole HP ~71 Hz then an asymmetric curve fits that alone
+  (rms 0.017), the model above gives 1.40 / 1.30 / 1.05 / 0.98 (decays
+  too fast). Small signal (rational fit): a real pole ~600 Hz, an RBJ-
+  like pair ~104 Hz, zeros near DC. Lead: the loop's lowpass may ALSO
+  form the highpass into f2 (v = z − K·lp: HP at the loop's 71 Hz when
+  saturated, at ωc·(1 + G·f1') ~ 600 Hz at small signal); a first fit of
+  that (+ a 140 Hz HP) stuck at -20.2 dB.
+  MEASURED FACTS: the LP is exactly the other distortions' RBJ LP (Q 3,
+  c2 law, 0.01 dB); level = (level+2)/129; at small signal ctl1 only
+  scales the response (same shape, phase within 1°), the gain is NOT
+  monotonic (2.40 at 0, min 1.26 at 16, 17.5 at 64, x2.78 per 16 above:
+  probe: low-level noise, H at 1..4 kHz); the response falls ~24 dB/oct
+  below 100 Hz (4th order, phase ~+360° at 16 Hz), +9 dB from 200 Hz to
+  3 kHz, -2 dB from 3 to 20 kHz; strong EVEN harmonics already at small
+  levels (H2 -10 dB at 392 Hz, input 0.024), a square-ish wave with
+  exponential decays when driven hard; compression starts at input ~0.7 /
+  |small-signal gain| for f >= 200 Hz (the 200 Hz..3 kHz rise acts BEFORE
+  the limiting), later below. NO static curve between linear filters fits
+  (every split of the small-signal response tried: harmonic-domain linear
+  fit of a free curve, -4..-6 dB residual), so the nonlinearity has memory.
+  Tried on the single-curve model, no gain: a free 41-knot curve, a bias
+  per ctl1, a pre highpass / shelf, a one-pole smoother before or after
+  the curve, the loop without the sample delay, feedback taken after the
+  first highpass. At ctl1 127 (hard switch + free curve after a highpass,
+  curve values by linear LS): -25 dB median at best, LF sines / saws /
+  pulses worst (-15..-20): a highpass -> static curve -> filters after
+  the switch is not enough either.
 
 ## Measurement methods (reuse them)
 
@@ -922,7 +1107,7 @@ original AU; keeps both renders for listening).
 
 - Preset-wide diff (`compare.py presets`, 416 renders): level |mean| 1.00
   dB, spec 2.40 dB, env 3.01 dB; `compare.py filter` 0.87 / 2.05 / 2.83.
-- Approximations marked `TODO(measure)` in code: a.d.1 exact structure,
+- Approximations marked `TODO(measure)` in code: a.d.1 exact structure (status above),
   arp random sequence (+ S&H / smooth LFO: not the original's PRNG), LPDL
   resonance frequency near the top cutoffs.
 - Random sequences (arp random, S&H / smooth LFO): not identified. Leads:

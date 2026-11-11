@@ -38,10 +38,27 @@ inline constexpr double kOscAmplitude = 0.2;  // (measured) sine/saw/tri peak at
 // carries on across notes (frozen while idle) like the oscillators; a
 // synced osc1 wrap restarts it.
 inline constexpr double kNoiseLevel = 0.65039;
+// (measured, locked noise sync: osc1's backward pitch at FM 70..127) as an
+// FM source the noise is +-0.6500, 0.06 % under its audio level
+inline constexpr double kNoiseFm = 0.65;
+// (measured: the reset times of synced noise over seconds, keys 30..72) the
+// original steps OSC1 in whole 2^-27 cycles (a 2048-point index + 16-bit
+// fraction), each sample's step (FM included) TRUNCATED: its pitch sits up
+// to 7e-9 cycle / sample under the exact one, which decides on which sample
+// a sync lands. Osc2 does not (FM nulls 9 dB worse with it truncated too).
+inline constexpr double kPhaseUnits = 134217728.0;
+OXO_INLINE double PhaseStep(double inc) { return double(int64_t(inc * kPhaseUnits)) * (1.0 / kPhaseUnits); }
 inline constexpr uint32_t kNoiseSeed = 0x70A6E;
 inline constexpr int kDetuneOscs = 8;
 inline constexpr double kFmRefInc = 261.6255653 / 44100.0; // (measured) FM deviation unit, cycles per sample
 inline constexpr double kRingDetuneLimit = 1.7; // (fitted) ring + osc1 detune + sub: osc1 section limiter
+// (fitted, sync with FM 0, osc2 alone: residual -6 dB at keys 36..72, osc2
+// saw / pulse / tri, pitch -12..+12; best 4.5e-5..8e-5 per case) a sync on
+// osc1's forward wrap restarts osc2 a hair AFTER phase 0: on a saw that sample
+// reads the steep side of the band-limited jump, not its midpoint. Under sync
+// + FM it decides whether osc1 escapes a backward lock. The syncs FM's
+// backward steps fire keep phase 0 (that offset there: worse above FM ~110).
+inline constexpr double kSyncResetPhase = 7e-5;
 inline constexpr double kDetuneOffsets[kDetuneOscs] = {-7, -5, -3, -1, 1, 3, 5, 7}; // x d cents (measured)
 
 inline double NoteHz(double note) { return 440.0 * std::exp2((note - 69.0) / 12.0); }
@@ -81,10 +98,12 @@ public:
     }
 
     // glide: portamento from this voice's own last pitch (measured).
-    // detuneCents / pan (-1..1) / pitchSemis / phase (cycles): this voice's
-    // place in a unison stack.
+    // detuneCents / pan (-1..1) / pitchSemis / unisonIndex (k-th voice
+    // started) + unisonShift (phase knob / 127): this voice's place in a
+    // unison stack.
     void Start(int note, int velocity, bool glide, const PatchValues &p, uint64_t age,
-               double detuneCents = 0, double pan = 0, double pitchSemis = 0, double unisonPhase = 0) {
+               double detuneCents = 0, double pan = 0, double pitchSemis = 0, int unisonIndex = 0,
+               double unisonShift = 0) {
         unisonSemis_ = detuneCents / 100.0 + pitchSemis;
         unisonPan_ = pan;
         SetNote(note, glide);
@@ -93,7 +112,9 @@ public:
         gate_ = true;
         const bool stolen = amp_.Active();
         amp_.Configure(sampleRate_, p[kAmpAttack], p[kAmpDecay], p[kAmpSustain], p[kAmpRelease]);
+        amp_.SetQuantized(true);
         amp_.Trigger();
+        ampSince_ = 0, ampLeft_ = 0;
         // (measured) the filter env shares the amp env's laws
         filterEnv_.Configure(sampleRate_, p[kFilterAttack], p[kFilterDecay], p[kFilterSustain], p[kFilterRelease],
                              Adsr::SustainLaw::Linear);
@@ -101,7 +122,7 @@ public:
         // (measured) mod env = AD with the amp env's attack / decay laws
         modEnv_.Configure(sampleRate_, p[kModEnvAttack], p[kModEnvDecay], 0, 0, Adsr::SustainLaw::Linear);
         modEnv_.Trigger();
-        unisonPhase_ = unisonPhase;
+        unisonIndex_ = unisonIndex % 32, unisonShift_ = unisonShift;
         StartPhases(p, !stolen);
         tail_ = false;
         // A stolen voice still sounding keeps its filter / output state:
@@ -115,22 +136,39 @@ public:
     void StartPhases(const PatchValues &p, bool relockSub = true) {
         // (measured) osc phase 0 = free: the slot's phases carry on (InitSlot);
         // > 0 = osc1 starts at phase 0, osc2 at (v - 1) / 126 of half a cycle
-        // (127 = 180 degrees), both shifted by the unison phase.
+        // (127 = 180 degrees), each shifted by the unison phase.
         Phase64 copies[kDetuneOscs];
+        bool past[kDetuneOscs] = {}; // a copy's start is past one cycle
         for (int i = 0; i < kDetuneOscs; ++i) copies[i] = CopyPhase(i);
         if (p[kOscPhase] > 0) {
-            osc1Phase_ = Wrap(unisonPhase_);
-            osc2Phase_ = Wrap(0.5 * (p[kOscPhase] - 1) / 126.0 + unisonPhase_);
-            // (measured) copy i starts kCopyPhaseDeg[i] * (v - 1) / 126 after osc1
+            // (measured, measure_unison_shift.py) the unison phase moves EVERY
+            // oscillator of the k-th stack voice by its own slot table's phase
+            // at slot k (0..1 cycle, not wrapped: it scales with the knob),
+            // times v / 127; voice 0 too (osc1's slot 0 phase is ~0)
+            const int k = unisonIndex_;
+            const auto shift = [&](const float *table, int stride, int i) {
+                return double(table[k * stride + i]) * unisonShift_;
+            };
+            osc1Phase_ = Wrap(shift(tables::kSlotOsc1Phase, 1, 0));
+            osc2Phase_ = Wrap(0.5 * (p[kOscPhase] - 1) / 126.0 + shift(tables::kSlotOsc2Phase, 1, 0));
+            // (measured) copy i starts kCopyPhaseDeg[i] * (v - 1) / 126 after osc1's start
             static constexpr double kCopyPhaseDeg[kDetuneOscs] = {321, 172, 291, 202, 0, 69, 210, 126};
-            for (int i = 0; i < kDetuneOscs; ++i)
-                copies[i] = ToPhase64(osc1Phase_ + kCopyPhaseDeg[i] / 360.0 * (p[kOscPhase] - 1) / 126.0);
+            for (int i = 0; i < kDetuneOscs; ++i) {
+                const double c = kCopyPhaseDeg[i] / 360.0 * (p[kOscPhase] - 1) / 126.0 +
+                                 shift(tables::kSlotCopyPhase, kDetuneOscs, i);
+                copies[i] = ToPhase64(c), past[i] = c >= 1.0;
+            }
         }
         // (measured) the sub runs phase-locked to osc1: its harmonic at osc1's
         // pitch is in phase with osc1's fundamental.
         if (relockSub || p[kOscPhase] > 0) {
             subPhase_ = osc1Phase_ * (p[kSubOctave] ? 0.5 : 1.0);
             SetCopyPhases(copies, p[kSubOctave] != 0);
+            // (measured) an octave-down sub's copy starts at HALF its osc1 copy's
+            // unwrapped start: one past a cycle (unison phase) = half a sub cycle on
+            if (copyHalf_)
+                for (int i = 0; i < kDetuneOscs; ++i)
+                    if (past[i]) copyPhase_[i] += Phase64(1) << 63;
         }
     }
 
@@ -196,7 +234,6 @@ public:
         }
     }
 
-private:
     // LFO k's destination (1..7), 0 = no route. (measured, bend on a step +
     // a square LFO on pitch) depth 0 = no modulation at all, whatever the
     // destination: no route
@@ -204,6 +241,7 @@ private:
         return lfo[k] && p[k ? kLfo2Depth : kLfo1Depth] > 0 ? std::clamp<int>(p[k ? kLfo2Dest : kLfo1Dest], 1, 7) : 0;
     }
 
+private:
     // The per-sample loop is compiled once per case (RenderChunkAs), so each
     // holds only what its case computes: with every feature as a run-time
     // test it carried twice the instructions (and live values to spill).
@@ -339,7 +377,7 @@ private:
         // pw 0 = pw 1 = 1.25 / 254, modulation tops out at 1 - 1.375 / 254
         static constexpr double kWidthMin = 1.25 / 254.0, kWidthMax = 1.0 - 1.375 / 254.0;
         // a static oscillator section's steps and width (else per sample, below)
-        const double staticIncA = inc1 * bendRatio, staticIncB = inc2 * bendRatio;
+        const double staticIncA = PhaseStep(inc1 * bendRatio), staticIncB = inc2 * bendRatio;
         const double staticWidth = std::clamp(width, kWidthMin, kWidthMax);
         double curWidth = staticWidth;
         uint32_t curWidthPoints = CopyWidth(staticWidth);
@@ -363,30 +401,25 @@ private:
                                                          : tables_->CopyTable(kSubCopy[subShape & 3], std::clamp(tSub, 0, 127));
         // the stored copy phases' step ratios (in Phase64 units / 2, see the phase update)
         const double copyRatio = copyHalf_ ? 0.5 : 1.0;
-        double copyScale[kDetuneOscs];
-        for (int d = 0; d < kDetuneOscs; ++d) copyScale[d] = copyRatio * detuneRatio[d] * 0x1p63;
-        // copyScale <= 2^63 * 2^(140 / 1200): |step| below this stays under one cycle
+        const double copyScale = copyRatio * 0x1p63;
+        // a copy's step <= |step| + incA * (2^(140 / 1200) - 1), incA < 0.5:
+        // |step| below this stays under one cycle
         static constexpr double kFastStepLimit = 0.9;
 
         // (measured, key-synced square LFO: measure_lfo_keysync.py /
-        // measure_lfo_cutoff.py) cutoff, amp and pan are UNIPOLAR, u =
+        // measure_lfo_cutoff.py) cutoff and amp are UNIPOLAR, u =
         // (lfo + 1) / 2 (linear in between assumed):
         // cutoff -> pulled toward knob 125 by (depth / 127) * u;
         // amp    -> gain 1 - (depth / 127) * (1 - u);
-        // pan    -> position q = 1 - (1 - s)^3 for s = depth / 127 * lfo >= 0
-        //           (odd), gains toward side 1 + |q| / 2, away side 1 - |q|.
         // pw     -> (measured, measure_lfo_pw.py) the low-part duty moves toward
         //           1 (lfo > 0) or 0 (lfo < 0) by depth / 127 * |lfo| of the
         //           room left on that side: never wraps, +-0.5 for a square.
+        // (pan: after the effect, Synth::Pan)
 
         // balance law (measured on unison spread): centre 1/1, hard side 1/0.
-        // (measured, check_unison.py) patch pan (q = (pan - 64) / 64 below
-        // the centre, / 63 above) and the unison spread MULTIPLY their gains.
-        double panL = 1, panR = 1;
-        for (const double q : {(p[kPan] - 64) / (p[kPan] < 64 ? 64.0 : 63.0), unisonPan_}) {
-            panL *= std::min(1.0, 1.0 - q);
-            panR *= std::min(1.0, 1.0 + q);
-        }
+        // (measured, check_unison.py) the patch pan (Synth::Pan, after the
+        // effect) MULTIPLIES its gains with the unison spread's.
+        const double panL = std::min(1.0, 1.0 - unisonPan_), panR = std::min(1.0, 1.0 + unisonPan_);
 
         // ---- the oscillators' per-sample modulation, computed ahead for the
         // chunk: osc1 / osc2 steps, pulse width, FM index, each in its own
@@ -406,7 +439,7 @@ private:
                     const double m2 = r[1] ? ratio2(bendSteps + lfoAll + pitchSteps(r[1], i)) : mAll;
                     // (measured) mod env -> osc2 pitch: +-60 semitones at env 1 (not quantized)
                     const double mEnv2 = envPitch ? std::exp2(modEnv_.Next() * modAmt * 60.0 / 12.0) : 1.0;
-                    incAs[i] = inc1 * mAll, incBs[i] = inc2 * m2 * mEnv2;
+                    incAs[i] = PhaseStep(inc1 * mAll), incBs[i] = inc2 * m2 * mEnv2;
                 }
             } else {
                 std::fill_n(incAs, frames, staticIncA);
@@ -459,7 +492,8 @@ private:
         }
 
         double fmIncA = NAN, fmRef = 0; // kFmRefInc / incA, recomputed when incA changes
-        double copyStep = NAN; // the osc1 step copyInc holds (the copies' steps, recomputed when it changes)
+        const double fmScale = shape2 == 4 ? kNoiseFm / kNoiseLevel : 1.0;
+        double copyStep = NAN, copyIncA = NAN; // the osc1 steps copyInc holds (the copies' steps, recomputed when they change)
         simd::P4 copyInc[2] = {};
         for (int i = 0; i < frames; ++i) {
             double incA = staticIncA, incB = staticIncB, w = staticWidth;
@@ -489,7 +523,7 @@ private:
             // up, rises with the sample rate
             double fm = 1.0;
             if constexpr (kOsc == kOscCross) {
-                if (incA != fmIncA) fmIncA = incA, fmRef = kFmRefInc / incA;
+                if (incA != fmIncA) fmIncA = incA, fmRef = kFmRefInc / incA * fmScale;
                 fm = 1.0 + fmBs[i] * o2 * fmRef;
             }
             double o1 = OscRead(shape1, saw1, tri1, osc1Phase_, curWidth);
@@ -499,15 +533,22 @@ private:
                 const double acc = o1 + (shape1 == 2 ? 0.5f * (CopiesSum(copy1, ph, copyShift, 0) - CopiesSum(copy1, ph, copyShift, curWidthPoints))
                                                      : CopiesSum(copy1, ph, copyShift, 0));
                 const double subAcc = subOn ? sub + CopiesSum(copySub, ph, 0, 0) : sub;
-                // a step under one cycle either way converts directly (two's
+                // (measured, sync + FM: the copies' spread in Hz stays the
+                // unmodulated one while sync's FM offset moves the pitch) every
+                // copy takes osc1's FM deviation as it is, added to its own
+                // detuned step, not scaled by its detune ratio.
+                // A step under one cycle either way converts directly (two's
                 // complement = mod 1)
-                if (const double step = incA * fm; step != copyStep) {
-                    copyStep = step;
+                if (const double step = incA * fm; step != copyStep || incA != copyIncA) {
+                    copyStep = step, copyIncA = incA;
+                    const double deviation = step - incA;
                     Phase64 inc[kDetuneOscs];
                     if (std::fabs(step) < kFastStepLimit) {
-                        for (int d = 0; d < kDetuneOscs; ++d) inc[d] = Phase64(int64_t(step * copyScale[d])) << 1;
+                        for (int d = 0; d < kDetuneOscs; ++d)
+                            inc[d] = Phase64(int64_t((incA * detuneRatio[d] + deviation) * copyScale)) << 1;
                     } else {
-                        for (int d = 0; d < kDetuneOscs; ++d) inc[d] = ToPhase64(step * copyRatio * detuneRatio[d]);
+                        for (int d = 0; d < kDetuneOscs; ++d)
+                            inc[d] = ToPhase64((incA * detuneRatio[d] + deviation) * copyRatio);
                     }
                     copyInc[0] = simd::Phases(inc[0], inc[1], inc[2], inc[3]);
                     copyInc[1] = simd::Phases(inc[4], inc[5], inc[6], inc[7]);
@@ -526,14 +567,21 @@ private:
             if (ring && detuneOn && subOn) osc1Out = kRingDetuneLimit * std::tanh(osc1Out / kRingDetuneLimit);
             if (ring) o2 *= o1;
 
-            osc1Phase_ += incA * fm;
-            const bool wrapped = osc1Phase_ >= 1.0 || osc1Phase_ < 0.0;
+            if constexpr (kOsc == kOscCross) osc1Phase_ += PhaseStep(incA * fm);
+            else osc1Phase_ += incA; // whole units already
+            const bool forward = osc1Phase_ >= 1.0, backward = osc1Phase_ < 0.0;
             osc1Phase_ = Wrap(osc1Phase_);
             subPhase_ = Wrap(subPhase_ + incA * subRatio * fm);
-            if (sync && wrapped && fm > 0) {
+            // (measured, sync + FM) the original syncs whenever osc1's phase
+            // DROPS: a forward wrap, and every sample FM drives it backward
+            // without wrapping (a backward wrap does not). Synced noise
+            // restarts on a negative value, so once FM outweighs the pitch
+            // the voice locks on a constant (Synth1's "FM above ~40 = a
+            // click", threshold an octave of FM knob per octave of key)
+            if (sync && (forward || (fm < 0 && !backward))) {
                 // (measured, alias energy matches to 0.1 dB) the original's hard
-                // sync is NAIVE: osc2 restarts at phase 0, no band-limiting
-                osc2Phase_ = 0;
+                // sync is NAIVE: osc2 restarts at a fixed phase, no band-limiting
+                osc2Phase_ = forward ? kSyncResetPhase : 0.0;
                 // (measured, v1.12 manual "synced noise") the noise generator
                 // restarts too, from one fixed state shared by every voice and
                 // note: synced noise repeats per osc1 cycle (pitched)
@@ -559,22 +607,13 @@ private:
                 filterOut = filter_.ProcessDiode(mixed);
             }
             const double filtered = Saturate(filterOut, satA);
-            const double env = amp_.Next();
+            const double env = AmpGain(amp_.Next(), pos + i, blockEnd);
             double gainMod = 1.0;
             for (int k = 0; k < r[4].n; ++k) gainMod *= 1.0 - r[4].scale[k] * 0.5 * (1.0 - r[4].v[k][i]);
             const double x = filtered * env * ampGain * gainMod;
             const double y = x; // (the original's 22 kHz output lowpass = the EQ tone stage)
-            double gl = panL, gr = panR;
-            if (r[7]) {
-                const double s = r[7].Signed(i); // + = left; unclamped (measured: 127 + 127 -> gains 2 / -1)
-                // (the cube by hand: a pow call here, even never taken, cost the loop ~40 instructions)
-                const double u = 1.0 - std::fabs(s), cube = u * u * u;
-                const double q = s >= 0 ? 1.0 - cube : cube - 1.0;
-                gl *= q >= 0 ? 1.0 + 0.5 * q : 1.0 + q;
-                gr *= q >= 0 ? 1.0 - q : 1.0 - 0.5 * q;
-            }
-            left[i] += float(y * gl);
-            right[i] += float(y * gr);
+            left[i] += float(y * panL);
+            right[i] += float(y * panR);
             if (!amp_.Active() && (((pos + i + 1) & 255) == 0 || pos + i + 1 >= blockEnd)) {
                 tail_ = false;
                 // the voice ends here: the mod env stops with it (it ran ahead)
@@ -588,6 +627,40 @@ private:
             }
             tail_ = !amp_.Active();
         }
+    }
+
+    // (measured: a locked synced-noise DC through the amp env, whole
+    // seconds) the original's amp env outside the attack is a CONTROL-RATE
+    // gain: at every 256-sample boundary of the host block (the voice end
+    // grid) it takes the envelope's value floored to 1/2048 (11 bits: the
+    // sustain table's grid; 1/2048 = -66 dB, where decays and releases
+    // land), and ramps linearly to the next boundary's. The attack stays per
+    // sample, and so is the first block after a note on (the original
+    // updates every ~1 ms there: kinks at +64, +107, +193, +255 samples from
+    // the note's sub-block); the ramps start at the first grid boundary
+    // 256 samples or more after it. A stage change mid-ramp restarts the
+    // ramp from the current gain. `at` = the sample's offset in the host block.
+    OXO_INLINE double AmpGain(double env, int64_t at, int64_t blockEnd) {
+        const Adsr::Stage stage = amp_.CurrentStage();
+        const bool boundary = (at & 255) == 0;
+        if (ampSince_ < 256) ++ampSince_;
+        if (stage == Adsr::Stage::Attack || stage == Adsr::Stage::Idle || (ampLeft_ <= 0 && (ampSince_ < 256 || !boundary))) {
+            ampStage_ = stage;
+            ampLeft_ = 0;
+            return ampGain_ = env;
+        }
+        if (boundary || stage != ampStage_ || ampLeft_ <= 0) {
+            if (boundary) ampGain_ = std::floor(env * 2048.0) * (1.0 / 2048);
+            ampStage_ = stage;
+            const int64_t n = std::max<int64_t>(1, std::min<int64_t>(256 - (at & 255), blockEnd - at));
+            Adsr ahead = amp_;
+            for (int64_t k = 0; k < n; ++k) ahead.Next();
+            ampStep_ = (std::floor(ahead.Level() * 2048.0) * (1.0 / 2048) - ampGain_) / double(n);
+            ampLeft_ = int(n);
+            return ampGain_;
+        }
+        --ampLeft_;
+        return ampGain_ += ampStep_;
     }
 
     // osc1's shape (0 sine, 1 saw, 2 pulse of duty `width`, 3 tri) at phase ph
@@ -678,7 +751,8 @@ private:
     Adsr modEnv_;
     VoiceFilter filter_;
     int note_ = 0, velocity_ = 0;
-    double unisonSemis_ = 0, unisonPan_ = 0, unisonPhase_ = 0;
+    double unisonSemis_ = 0, unisonPan_ = 0, unisonShift_ = 0;
+    int unisonIndex_ = 0;
     double glide_ = 0; // gliding pitch (semis); (measured) a never-used voice starts from note 0
     double glideAim_ = 0;
     int glideTick_ = 16;
@@ -694,6 +768,9 @@ private:
     double detuneRatio_[kDetuneOscs] = {};
     uint32_t noise_ = kNoiseSeed;
     bool tail_ = false; // envelope done, running silent to the block boundary
+    double ampGain_ = 0, ampStep_ = 0; // the control-rate amp gain (AmpGain)
+    int ampLeft_ = 0, ampSince_ = 0;
+    Adsr::Stage ampStage_ = Adsr::Stage::Idle;
 };
 
 } // namespace oxo::s2

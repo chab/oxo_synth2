@@ -67,13 +67,13 @@ def main():
     res = {}
     for name, extra in (("osc1", {}), ("osc2", {5: 127, 1: 3})):
         free, zero = slot_phases({**extra, 91: 0}), slot_phases({**extra, 91: 1})
-        res[name] = [round(float(v), 4) for v in ((zero - free) / 360) % 1]  # cycles; phase lags the fit angle
+        res[name] = [round(float(v), 8) for v in ((zero - free) / 360) % 1]  # cycles; phase lags the fit angle
         print(name, " ".join(f"{v:.3f}" for v in res[name]))
     free, zero = copy_phases({91: 0}), copy_phases({91: 1})
     cyc = ((zero - free) / 360) % 1  # [slot][main, copies -7..7]
     print("osc1 (single notes) vs unison walk, max |diff| (cycles):",
           f"{np.abs((cyc[:, 0] - np.array(res['osc1']) + 0.5) % 1 - 0.5).max():.3f}")
-    res["copies"] = [[round(float(v), 4) for v in row[1:]] for row in cyc]
+    res["copies"] = [[round(float(v), 8) for v in row[1:]] for row in cyc]
     for i, row in enumerate(res["copies"]):
         print(f"slot {i:2d} copies", " ".join(f"{v:.3f}" for v in row))
     (s1.ROOT / "reference/meta/slot_phase.json").write_text(json.dumps(res, indent=1) + "\n")

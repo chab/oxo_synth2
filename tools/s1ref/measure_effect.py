@@ -150,12 +150,11 @@ def ad2_curve(drive):
 def main():
     import json
     d = drive_tables()
-    out = {"c1": DRIVE_C1, "drive": {str(t): v for t, v in d.items()}, "ad2_u": AD2_U.tolist(), "ad2_curve": ad2_curve(d[1]),
-           # fitted by hand-run optimisation (asymmetric tanh, LP negative feedback; see AGENTS.md)
-           "ad1": {"drive_scale": 2.65, "pos_limit": 0.4138, "neg_limit": 1.0174, "fb_gain": 9.9142, "fb_hz": 69.2,
-                   "hp_hz": 131.0, "hp_q": 2.379, "lp_q": 1.607, "out": 0.4613},
-           "ad2": {"hp_hz": 100.0, "hp_q": 2.29, "lp_q": 3.0}, "dd_fold": 0.5835}
-    (s1.ROOT / "reference/meta/effect.json").write_text(json.dumps(out, indent=1))
+    path = s1.ROOT / "reference/meta/effect.json"
+    out = json.loads(path.read_text()) if path.exists() else {}  # keeps "ad1" (fit_ad1.py), "dd_*" (measure_dd.py)
+    out.update({"c1": DRIVE_C1, "drive": {str(t): v for t, v in d.items()}, "ad2_u": AD2_U.tolist(),
+                "ad2_curve": ad2_curve(d[1]), "ad2": {"hp_hz": 100.0, "hp_q": 2.29, "lp_q": 3.0}})
+    path.write_text(json.dumps(out, indent=1))
     print("wrote reference/meta/effect.json")
 
 

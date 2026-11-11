@@ -169,6 +169,105 @@ OXO_TEST(UnisonPanSpreadDirectionAndPatchPan) {
     OXO_EXPECT(right < 1e-9);
 }
 
+// (measured) the patch pan and an LFO on pan act AFTER the effect: a d.d.
+// folds the centred signal once, the two channels are that output times the
+// pan gains (panned before the fold, a 3 % level difference decorrelated them).
+OXO_TEST(PanActsAfterTheEffect) {
+    for (const bool lfo : {false, true}) {
+        Synth s;
+        s.SetSampleRate(44100);
+        s.SetParam(kOsc1Shape, 0);
+        s.SetParam(kOscMix, 0);
+        s.SetParam(kEffectOn, 1);
+        s.SetParam(kEffectType, 2);
+        s.SetParam(kEffectCtrl1, 64);
+        s.SetParam(kPan, lfo ? 64 : 62);
+        if (lfo) {
+            s.SetParam(kLfo1On, 1);
+            s.SetParam(kLfo1Dest, 7);
+            s.SetParam(kLfo1Type, 5);
+            s.SetParam(kLfo1Speed, 70);
+            s.SetParam(kLfo1Depth, 100);
+        }
+        std::vector<float> l(22050), r(22050);
+        s.NoteOn(45, 127);
+        s.Render(l.data(), r.data(), 22050);
+        // per 64-sample window: r = g l, the residue against r's power
+        double res = 0, total = 0;
+        for (size_t a = 4096; a + 64 <= l.size(); a += 64) {
+            double lr = 0, ll = 0;
+            for (size_t i = a; i < a + 64; ++i) lr += double(l[i]) * r[i], ll += double(l[i]) * l[i];
+            const double g = ll > 0 ? lr / ll : 0;
+            for (size_t i = a; i < a + 64; ++i) res += (r[i] - g * l[i]) * (r[i] - g * l[i]), total += double(r[i]) * r[i];
+        }
+        OXO_EXPECT(total > 0 && res < 1e-3 * total);
+    }
+}
+
+// (measured) delay type 1 (X): a left input's first echo comes out on the
+// RIGHT, the second on the left.
+OXO_TEST(CrossDelayEchoesLeftInputRightFirst) {
+    Synth s;
+    s.SetSampleRate(44100);
+    s.SetTransport(120, 0, true);
+    s.SetParam(kPan, 0);
+    s.SetParam(kAmpRelease, 0);
+    s.SetParam(kDelayOn, 1);
+    s.SetParam(kDelayType, 1);
+    s.SetParam(kDelayTime, 8); // half a beat: 11025 samples
+    s.SetParam(kDelayFeedback, 80);
+    s.SetParam(kDelayDryWet, 64);
+    std::vector<float> l(30000), r(30000);
+    s.NoteOn(60, 127);
+    s.Render(l.data(), r.data(), 1024);
+    s.NoteOff(60);
+    s.Render(l.data() + 1024, r.data() + 1024, 30000 - 1024);
+    const auto energy = [](const std::vector<float> &x, size_t a, size_t b) {
+        double e = 0;
+        for (size_t i = a; i < b; ++i) e += double(x[i]) * x[i];
+        return e;
+    };
+    OXO_EXPECT(energy(r, 11025, 13000) > 100 * energy(l, 11025, 13000));
+    OXO_EXPECT(energy(l, 22050, 24000) > 100 * energy(r, 22050, 24000));
+}
+
+// (measured, unison spread into the comp.) the compressor's detector is per
+// channel: a loud left channel does not turn the right one down.
+OXO_TEST(CompressorDetectsEachChannel) {
+    const auto rightOut = [](float leftLevel) {
+        PatchValues p = DefaultValues();
+        p[kEffectType] = 5;
+        EffectUnit fx;
+        fx.Prepare(44100);
+        std::vector<float> l(4410), r(4410);
+        for (size_t i = 0; i < l.size(); ++i)
+            l[i] = leftLevel * float(std::sin(0.05 * double(i))), r[i] = 0.1f * float(std::sin(0.07 * double(i)));
+        fx.Process(l.data(), r.data(), int(l.size()), p);
+        return r;
+    };
+    OXO_EXPECT(rightOut(0.0f) == rightOut(1.0f));
+}
+
+// (measured, small noise, 1..4 kHz) the a.d.1 small-signal gain per ctl1 is
+// not monotonic: lowest near 16 (the drive rises 70 dB over ctl1, the output
+// gain falls from x8 to x1 up to ~48: measure_ad1_law.py).
+OXO_TEST(Ad1SmallSignalGainFollowsTheOriginal) {
+    const auto gain = [](int c1) {
+        PatchValues p = DefaultValues();
+        p[kEffectType] = 0, p[kEffectCtrl1] = c1, p[kEffectCtrl2] = 127, p[kEffectLevel] = 127;
+        EffectUnit fx;
+        fx.Prepare(44100);
+        std::vector<float> l(44100), r(44100);
+        for (size_t i = 0; i < l.size(); ++i) l[i] = r[i] = 1e-5f * float(std::sin(2 * M_PI * 2500.0 * double(i) / 44100));
+        fx.Process(l.data(), r.data(), int(l.size()), p);
+        double peak = 0;
+        for (size_t i = 22050; i < l.size(); ++i) peak = std::max(peak, std::fabs(double(l[i])));
+        return peak / 1e-5;
+    };
+    const std::pair<int, double> measured[] = {{0, 2.401}, {16, 1.259}, {32, 2.362}, {64, 17.47}, {96, 132.8}, {127, 947.0}};
+    for (const auto &[c1, g] : measured) OXO_EXPECT(std::fabs(20 * std::log10(gain(c1) / g)) < 1.0);
+}
+
 // (measured) a unison chord over the polyphony keeps its FIRST notes: a stack
 // never steals from a note started at the same time.
 OXO_TEST(UnisonChordKeepsFirstNotes) {
