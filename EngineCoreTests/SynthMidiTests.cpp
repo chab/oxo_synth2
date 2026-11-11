@@ -204,6 +204,33 @@ OXO_TEST(PanActsAfterTheEffect) {
     }
 }
 
+// (measured) delay type 1 (X): a left input's first echo comes out on the
+// RIGHT, the second on the left.
+OXO_TEST(CrossDelayEchoesLeftInputRightFirst) {
+    Synth s;
+    s.SetSampleRate(44100);
+    s.SetTransport(120, 0, true);
+    s.SetParam(kPan, 0);
+    s.SetParam(kAmpRelease, 0);
+    s.SetParam(kDelayOn, 1);
+    s.SetParam(kDelayType, 1);
+    s.SetParam(kDelayTime, 8); // half a beat: 11025 samples
+    s.SetParam(kDelayFeedback, 80);
+    s.SetParam(kDelayDryWet, 64);
+    std::vector<float> l(30000), r(30000);
+    s.NoteOn(60, 127);
+    s.Render(l.data(), r.data(), 1024);
+    s.NoteOff(60);
+    s.Render(l.data() + 1024, r.data() + 1024, 30000 - 1024);
+    const auto energy = [](const std::vector<float> &x, size_t a, size_t b) {
+        double e = 0;
+        for (size_t i = a; i < b; ++i) e += double(x[i]) * x[i];
+        return e;
+    };
+    OXO_EXPECT(energy(r, 11025, 13000) > 100 * energy(l, 11025, 13000));
+    OXO_EXPECT(energy(l, 22050, 24000) > 100 * energy(r, 22050, 24000));
+}
+
 // (measured) a unison chord over the polyphony keeps its FIRST notes: a stack
 // never steals from a note started at the same time.
 OXO_TEST(UnisonChordKeepsFirstNotes) {

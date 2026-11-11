@@ -5,7 +5,9 @@
 // Delay (measured): time = tempo division table (kDelayBeats), feedback =
 // fb / 127 per repeat, dry/wet crossfade (64 = both at unity), spread
 // delays ONE side by up to +100 ms (< 64 right, > 64 left, exponential), types 0 ST
-// (independent), 1 X (cross feedback), 2 PP (ping-pong, input -> left).
+// (independent), 1 X (cross: each input enters the OTHER side's line, the lines
+// feed each other: a left input echoes right, left, right...), 2 PP
+// (ping-pong, input -> left).
 // Whole samples (measured, single-tap impulse responses at 44.1 / 96 kHz,
 // tempos 60..200): the division rounds DOWN to a multiple of 4 samples,
 // the spread's offset down to a sample, at least 0.1 ms (floored): time 0
@@ -132,7 +134,7 @@ public:
             if (inGain_ < 1) inGain_ = std::min(1.0, inGain_ + fadeStep);
             double wl, wr;
             switch (type) {
-            case 1: wl = inL + fb * er, wr = inR + fb * el; break;
+            case 1: wl = inR + fb * er, wr = inL + fb * el; break; // (measured: a left input echoes right first)
             case 2: wl = 0.5 * (inL + inR) + fb * er, wr = el; break;
             default: wl = inL + fb * el, wr = inR + fb * er; break;
             }

@@ -928,7 +928,11 @@ original AU; keeps both renders for listening).
 - Delay: spread = one side later by 100 ms·10^((|v-64|-63)/21) (0 at 64);
   delay tone (`measure_delay_tone.py`, `kDelayToneHz`): a bilinear one-pole
   in the echo path, 64 = none, < 64 LP 200 Hz·110^(t/63) (22 kHz at 63),
-  > 64 HP 10 Hz .. 8 kHz.
+  > 64 HP 10 Hz .. 8 kHz. Types (hard-panned noise bursts, echo envelopes
+  per channel): 0 independent; 1 X = each input enters the OTHER side's
+  line and the lines feed each other (a left input echoes right, left,
+  right...; ours echoed left first until 2026-11-11); 2 PP = (L+R)/2 into
+  the left line, left line -> right line, right feeds back left.
 - Arp gate 0 = silent.
 - Chain order (`measure_fx_order.py`): voices → effect → pan → EQ → delay →
   chorus.
@@ -1012,11 +1016,10 @@ original AU; keeps both renders for listening).
 - Approximations marked `TODO(measure)` in code: a.d.1 exact structure,
   arp random sequence (+ S&H / smooth LFO: not the original's PRNG), LPDL
   resonance frequency near the top cutoffs.
-- Seen 2026-11-11, not investigated (`s1.patch` sine, key 45): delay type
-  1 at pan 0 (hard left), time 8, feedback 80: R -24.5 dB in the
-  original, -28.6 ours (types 0 / 2 match); comp. + 8-voice unison spread
-  127: original L -9.4 / R -9.1 dB, ours -7.8 / -11.1 (its detector or
-  gain is not the linked mean we model, or the spread acts after it).
+- Seen 2026-11-11, not investigated (`s1.patch` sine, key 45): comp. +
+  8-voice unison spread 127: original L -9.4 / R -9.1 dB, ours -7.8 /
+  -11.1 (its detector or gain is not the linked mean we model, or the
+  spread acts after it).
 - Random sequences (arp random, S&H / smooth LFO): not identified. Leads:
   S&H read through LFO -> pitch is quantized to whole steps (useless), through
   LFO -> amp it sits on a 1/1024 grid; the two destinations gave
