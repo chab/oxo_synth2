@@ -249,7 +249,8 @@ OXO_TEST(CompressorDetectsEachChannel) {
 }
 
 // (measured, small noise, 1..4 kHz) the a.d.1 small-signal gain per ctl1 is
-// not monotonic: lowest near 16 (drive and output gain both per ctl1).
+// not monotonic: lowest near 16 (the drive rises 70 dB over ctl1, the output
+// gain falls from x8 to x1 up to ~48: measure_ad1_law.py).
 OXO_TEST(Ad1SmallSignalGainFollowsTheOriginal) {
     const auto gain = [](int c1) {
         PatchValues p = DefaultValues();
@@ -263,7 +264,7 @@ OXO_TEST(Ad1SmallSignalGainFollowsTheOriginal) {
         for (size_t i = 22050; i < l.size(); ++i) peak = std::max(peak, std::fabs(double(l[i])));
         return peak / 1e-5;
     };
-    const std::pair<int, double> measured[] = {{0, 2.401}, {16, 1.259}, {32, 2.362}, {64, 17.47}, {96, 132.8}};
+    const std::pair<int, double> measured[] = {{0, 2.401}, {16, 1.259}, {32, 2.362}, {64, 17.47}, {96, 132.8}, {127, 947.0}};
     for (const auto &[c1, g] : measured) OXO_EXPECT(std::fabs(20 * std::log10(gain(c1) / g)) < 1.0);
 }
 

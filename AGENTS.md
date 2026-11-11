@@ -185,7 +185,7 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
 - `make -C EngineCoreTests test`, `make -C tools/s2render`, CPU bench
   `clang++ -std=c++20 -O2 tools/bench/main.cpp -o build/bench && ./build/bench`
   (16 voices, one core, Apple M4: LP12 x135, LP24 x109, LPDL x35,
-  detune+sub x88, all fx x90 realtime (it runs the a.d.1: x74 with the 2026-11-11 model vs x83 before, same session, its 4 pow per sample); `./build/bench <x.sy1>...` = a
+  detune+sub x88, all fx x90 realtime (it runs the a.d.1: x83 with its tabulated curves, x74 with the exact ones' pows, same session); `./build/bench <x.sy1>...` = a
   keyboard scrub, ~31 voices: Madame Eljay 010 x46, the heaviest case
   reported),
   `make -C tools/s1ref` (x86_64, needs the original AU).
@@ -975,19 +975,44 @@ original AU; keeps both renders for listening).
   0.02 dB; linked until 2026-11-11) + soft-knee leveller; phasers = 2/4/8/12 allpasses, LEVEL =
   FEEDBACK (0.99·(lv−64)/64), ctl1 = sweep depth, ctl2 = rate, a bouncing
   log-frequency ramp around 1271 Hz (starts at 254.6 Hz).
-- A.D.1 (effect type 0) STATUS 2026-11-11: a FITTED model, not the exact
-  structure. `fit_ad1.py` (+ `ad1_model.c`, the same model in C) fits it
-  sample by sample to the original (sines 49..1568 Hz x 5 levels, saw,
-  noise; input = effect-off render with the EQ tone stage undone):
-  z = f(d·x − G·lp(z) + b) − f(b), f(w) = w/(1+|w/L|^k)^(1/k) per side,
-  82.7 Hz one-pole loop on the previous z, then one-pole HPs 227.6 / 22
-  Hz, RBJ HP 97.3 Hz Q 2.56, the RBJ LP Q 3; only d and out per ctl1
-  (13 knots, kAd1Drive / kAd1Out, d·out = the measured small-signal gain
-  within 1 %). Median sample error -17.5 (ctl1 127) .. -24 dB (ctl1 0),
-  worst tests -10..-14 dB (49 Hz sines, loud saws: the LF and the HF of
-  sharp edges). Library a.d.1 patches (5 + Desktop ad1.sy1): spec 3.40 ->
-  1.13 dB, level |mean| 1.82 -> 0.51 dB vs the model before (asymmetric
-  tanh in a 69 Hz loop, LP Q 1.6 instead of 3).
+- A.D.1 (effect type 0) STATUS 2026-11-12: ctl1 is EXACT, the system S is
+  a FITTED model. CTL1 LAW (`measure_ad1_law.py` → effect.json
+  `ad1_law`): the original is out(ctl1)·S(d(ctl1)·x) for ONE fixed S (a
+  784 Hz sine's compression curve, 36 levels, and its H2 / H3 at every
+  ctl1 = the ctl1 64 curves shifted along log input and scaled, within
+  0.01 dB); d = d64·10^(3.5·(ctl1−64)/127) (70 dB), out measured per
+  ctl1 (x8.0 at 0, x1.52 at 16, x1.03 at 32, 1.000 from ~48 up);
+  kAd1Drive / kAd1Out. S (`fit_ad1.py --fit`, all ctl1 0, 8, .., 127
+  at once; `ad1_model.c` = S in C, exact curves): z = f1(d·x − G·lp(z) +
+  b1) − f1(b1), 95.4 Hz one-pole loop on the previous z, one-pole HP
+  263.5 Hz, s = f2(g2·h + b2) − f2(b2), one-pole HP 30.3 Hz, RBJ HP 96.3
+  Hz Q 2.37, the RBJ LP Q 3; f(w) = w/(1+|w/L|^k)^(1/k) per side. The
+  engine reads f1 / f2 from tables (`Ad1Curve`: value + slope, cubic
+  Hermite on u = w/(|w|+1), max error -114 dB; ours vs the C model -99..
+  -141 dB median, worst -76 dB at ctl1 127 where a float input flips a
+  switching sample). Median sample error -22.2 (ctl1 0) .. -24.1 dB (127),
+  worst tests -13..-16 dB (the single-curve model of 2026-11-11: -18.7 /
+  -9..-15). Library a.d.1 patches (5 + Desktop ad1.sy1): level |mean|
+  0.51 -> 0.27 dB, spec 1.13 -> 0.99 dB (Kaiyoti 020's 3.2 dB is its
+  voice: 3.5 with the effect off; Kaiyoti 035 got worse, 0.48 -> 0.74:
+  ctl2 73, level 64, not in the fit set). All fx bench x74 -> x83.
+  MEASURED 2026-11-12 (scratch probes, reuse): at ctl1 127 the curve
+  switches like a per-sample hard clip (folded harmonics at the same
+  level as a naive clip: no oversampling), at the input's own zero
+  crossings (no pre-filter phase), with thresholds in input units
+  −1.45e-3 mean and an up / down spread falling with frequency (4.6e-3 at
+  49 Hz, 0.9e-3 at 554 Hz, amplitude-independent: feedback from the
+  output state, lowpassed); pulse trains (key 12, pw 2..127) at ctl1 127:
+  the output jump at an up edge after a low pulse of g samples over the
+  isolated jump = 1.36 (g 33), 1.58 (58), 1.38 (97), 1.22 (140), 1.09
+  (214), 1.02 (341), 0.96 (680), 0.98 (1349): NOT linear after the
+  switch; a one-pole HP ~71 Hz then an asymmetric curve fits that alone
+  (rms 0.017), the model above gives 1.40 / 1.30 / 1.05 / 0.98 (decays
+  too fast). Small signal (rational fit): a real pole ~600 Hz, an RBJ-
+  like pair ~104 Hz, zeros near DC. Lead: the loop's lowpass may ALSO
+  form the highpass into f2 (v = z − K·lp: HP at the loop's 71 Hz when
+  saturated, at ωc·(1 + G·f1') ~ 600 Hz at small signal); a first fit of
+  that (+ a 140 Hz HP) stuck at -20.2 dB.
   MEASURED FACTS: the LP is exactly the other distortions' RBJ LP (Q 3,
   c2 law, 0.01 dB); level = (level+2)/129; at small signal ctl1 only
   scales the response (same shape, phase within 1°), the gain is NOT
@@ -1001,11 +1026,13 @@ original AU; keeps both renders for listening).
   the limiting), later below. NO static curve between linear filters fits
   (every split of the small-signal response tried: harmonic-domain linear
   fit of a free curve, -4..-6 dB residual), so the nonlinearity has memory.
-  Tried, no gain over the model above: a free 41-knot curve, a bias per
-  ctl1, a pre highpass / shelf, a one-pole smoother before or after the
-  curve, the loop without the sample delay, feedback taken after the first
-  highpass. Leads: the exact loop topology (filter inside the loop), two
-  limiting stages, a signal-dependent bias.
+  Tried on the single-curve model, no gain: a free 41-knot curve, a bias
+  per ctl1, a pre highpass / shelf, a one-pole smoother before or after
+  the curve, the loop without the sample delay, feedback taken after the
+  first highpass. At ctl1 127 (hard switch + free curve after a highpass,
+  curve values by linear LS): -25 dB median at best, LF sines / saws /
+  pulses worst (-15..-20): a highpass -> static curve -> filters after
+  the switch is not enough either.
 
 ## Measurement methods (reuse them)
 

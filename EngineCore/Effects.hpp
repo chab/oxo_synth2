@@ -425,6 +425,35 @@ private:
     double b0_ = 1, b1_ = 0, b2_ = 0, a1_ = 0, a2_ = 0, z_[2][2] = {{0, 0}, {0, 0}};
 };
 
+// a.d.1 curve f(w) = w / (1 + |w / L|^k)^(1/k), L / k per side, tabulated
+// (value + slope, cubic Hermite) on u = w / (|w| + 1) in [-1, 1]: max error
+// -114 dB, slope error 3e-6 (the exact curve's pows were the costliest part
+// of the effect).
+struct Ad1Curve {
+    static constexpr int kSize = 1024;
+    double t[kSize + 2][2]; // value, slope per table step
+    Ad1Curve(double posLimit, double posKnee, double negLimit, double negKnee) {
+        for (int i = 1; i < kSize; ++i) {
+            const double u = 2.0 * i / kSize - 1.0, w = u / (1.0 - std::fabs(u));
+            const double lim = u >= 0 ? posLimit : negLimit, knee = u >= 0 ? posKnee : negKnee;
+            const double a = 1.0 + std::pow(std::fabs(w / lim), knee);
+            t[i][0] = w / std::pow(a, 1.0 / knee);
+            t[i][1] = std::pow(a, -1.0 / knee - 1.0) * (2.0 / kSize) / ((1.0 - std::fabs(u)) * (1.0 - std::fabs(u)));
+        }
+        t[0][0] = -negLimit, t[kSize][0] = t[kSize + 1][0] = posLimit;
+        t[0][1] = t[kSize][1] = t[kSize + 1][1] = 0.0;
+    }
+    double operator()(double w) const {
+        const double x = (w / (std::fabs(w) + 1.0) + 1.0) * (0.5 * kSize);
+        const int i = int(x);
+        const double f = x - i, y0 = t[i][0], m0 = t[i][1], m1 = t[i + 1][1], d = t[i + 1][0] - y0;
+        return y0 + f * (m0 + f * (3.0 * d - 2.0 * m0 - m1 + f * (m0 + m1 - 2.0 * d)));
+    }
+};
+// (fit_ad1.py) the first curve (inside the loop) and the second
+inline const Ad1Curve kAd1Curve1(0.81459387, 1.58674746, 0.581142865, 1.89364943);
+inline const Ad1Curve kAd1Curve2(1.26459138, 2.39715448, 0.856279228, 1.48562438);
+
 // Effect section, 10 types (Synth1 manual: ctl1 / ctl2 meaning per type).
 // Distortions (measured, measure_effect.py, reference/meta/effect.json):
 // u = drive[ctl1] * x -> curve -> RBJ highpass -> RBJ lowpass at 400 Hz *
@@ -435,14 +464,15 @@ private:
 //            ctl1 (measure_dd.py, kDdSlope / kDdPeak; the peak falls from
 //            1.64 at ctl1 0 to 0.5778 from ~64 up), same filters (nulls
 //            -50..-75 dB, every ctl1).
-//   0 a.d.1: (FITTED model, fit_ad1.py, median sample error -17..-24 dB,
-//            TODO(measure) the exact structure) z = f(d x - G lp(z) + b) -
-//            f(b): an asymmetric soft limit f(w) = w / (1 + |w / L|^k)^(1/k)
-//            (L+ 0.606 k+ 1.31, L- 0.934 k- 2.93, bias b 0.333) inside
-//            negative feedback through an 82.7 Hz one-pole on the previous z
-//            (G 8.34); then bilinear one-pole highpasses 227.6 Hz and 22 Hz,
-//            RBJ HP 97.3 Hz Q 2.56, the same RBJ LP (Q 3); drive d and output
-//            gain per ctl1 (kAd1Drive / kAd1Out).
+//   0 a.d.1: out(ctl1) S(d(ctl1) x) (measured exact: measure_ad1_law.py),
+//            d = 70 dB over ctl1, out = measured (kAd1Drive / kAd1Out); S is
+//            a FITTED model (fit_ad1.py, median sample error -22..-24 dB,
+//            TODO(measure) the exact structure): z = f1(d x - G lp(z) + b1)
+//            - f1(b1) inside negative feedback through a 95.4 Hz one-pole on
+//            the previous z (G 7.76), a bilinear one-pole HP 263.5 Hz, s =
+//            f2(g2 h + b2) - f2(b2), one-pole HP 30.3 Hz, RBJ HP 96.3 Hz Q
+//            2.37, the same RBJ LP (Q 3). Both curves are asymmetric soft
+//            limits f(w) = w / (1 + |w / L|^k)^(1/k), read from tables.
 //   3 deci.: sample & hold every ctl1 + 1 samples, floor quantiser q =
 //            0.00643 * 2^(floor(ctl2 / 8) - 8) (integer bits), then (ctl1 > 0
 //            only) a bilinear one-pole lowpass at 14 kHz; dry / wet crossfade
@@ -495,28 +525,26 @@ public:
     }
 
 private:
-    static double Ad1Side(double w, double limit, double knee) {
-        return w / std::pow(1.0 + std::pow(std::fabs(w / limit), knee), 1.0 / knee);
-    }
-    static double Ad1Curve(double w) { return w >= 0 ? Ad1Side(w, 0.606164, 1.312394) : Ad1Side(w, 0.933646, 2.931868); }
     // (fit_ad1.py) per channel
     void Ad1(float *l, float *r, int n, const PatchValues &p) {
-        static constexpr double kBias = 0.333312, kLoopGain = 8.342729;
+        static constexpr double kBias1 = 0.724662338, kLoopGain = 7.76408919, kGain2 = 1.46001006, kBias2 = 0.233492458;
+        const Ad1Curve &f1 = kAd1Curve1, &f2 = kAd1Curve2;
         const int c1 = std::clamp(p[kEffectCtrl1], 0, 127);
         const double drive = tables::kAd1Drive[c1], out = tables::kAd1Out[c1] * (p[kEffectLevel] + 2) / 129.0;
-        hp2_.Set(97.339867, 2.557164, true, sr_);
+        hp2_.Set(96.2836231, 2.37189425, true, sr_);
         lp2_.Set(400.0 * std::pow(40.0, p[kEffectCtrl2] / 127.0), 3.0, false, sr_);
-        const double a = 1.0 - std::exp(-2 * M_PI * 82.703433 / sr_), z0 = Ad1Curve(kBias);
-        const double k1 = std::tan(M_PI * 227.56362 / sr_), k2 = std::tan(M_PI * 22.030046 / sr_);
+        const double a = 1.0 - std::exp(-2 * M_PI * 95.3658895 / sr_), z0 = f1(kBias1), s0 = f2(kBias2);
+        const double k1 = std::tan(M_PI * 263.480241 / sr_), k2 = std::tan(M_PI * 30.2652942 / sr_);
         float *s[2] = {l, r};
         for (int i = 0; i < n; ++i)
             for (int ch = 0; ch < 2; ++ch) {
-                const double z = Ad1Curve(drive * s[ch][i] - kLoopGain * fb_[ch] + kBias) - z0;
+                const double z = f1(drive * s[ch][i] - kLoopGain * fb_[ch] + kBias1) - z0;
                 fb_[ch] += a * (z - fb_[ch]);
                 double *h = ad1Hp_[ch]; // two bilinear one-pole highpasses: x1, y1 each
                 const double h1 = (z - h[0]) / (1 + k1) + (1 - k1) / (1 + k1) * h[1];
-                const double h2 = (h1 - h[2]) / (1 + k2) + (1 - k2) / (1 + k2) * h[3];
-                h[0] = z, h[1] = h1, h[2] = h1, h[3] = h2;
+                const double v = f2(kGain2 * h1 + kBias2) - s0;
+                const double h2 = (v - h[2]) / (1 + k2) + (1 - k2) / (1 + k2) * h[3];
+                h[0] = z, h[1] = h1, h[2] = v, h[3] = h2;
                 s[ch][i] = float(out * lp2_.Process(ch, hp2_.Process(ch, h2)));
             }
     }
