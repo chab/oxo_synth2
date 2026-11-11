@@ -527,10 +527,16 @@ private:
             if (ring) o2 *= o1;
 
             osc1Phase_ += incA * fm;
-            const bool wrapped = osc1Phase_ >= 1.0 || osc1Phase_ < 0.0;
+            const bool forward = osc1Phase_ >= 1.0, backward = osc1Phase_ < 0.0;
             osc1Phase_ = Wrap(osc1Phase_);
             subPhase_ = Wrap(subPhase_ + incA * subRatio * fm);
-            if (sync && wrapped && fm > 0) {
+            // (measured, sync + FM) the original syncs whenever osc1's phase
+            // DROPS: a forward wrap, and every sample FM drives it backward
+            // without wrapping (a backward wrap does not). Synced noise
+            // restarts on a negative value, so once FM outweighs the pitch
+            // the voice locks on a constant (Synth1's "FM above ~40 = a
+            // click", threshold an octave of FM knob per octave of key)
+            if (sync && (forward || (fm < 0 && !backward))) {
                 // (measured, alias energy matches to 0.1 dB) the original's hard
                 // sync is NAIVE: osc2 restarts at phase 0, no band-limiting
                 osc2Phase_ = 0;

@@ -709,7 +709,13 @@ original AU; keeps both renders for listening).
   osc1 detune + sub on = the sub copies skip the 0.297 gain, then the osc1
   section is bounded (modelled 1.7·tanh(x/1.7), approximate; the original
   also has osc1 × sub products); no effect without detune. Sync hard: NAIVE reset of osc2 to phase 0 (same alias energy
-  as the original to 0.1 dB; do not band-limit).
+  as the original to 0.1 dB; do not band-limit). SYNC + FM: a sync fires
+  whenever osc1's phase DROPS = a forward wrap OR any sample FM drives it
+  backward without wrapping (a backward wrap 0 → 1 does not). Synced
+  NOISE restarts on −0.65, so once FM step × 0.65 > the pitch step the
+  voice locks on a constant (silence after a click; key 60: FM ≥ 54,
+  −12.7 FM steps per octave down; nulls −87 dB vs the original).
+  Pitched modulators match by level / spectrum, not sample-exact (chaotic).
 - The "fixed output lowpass" (bilinear one-pole, analog 22 kHz, NO
   prewarp) is NOT per voice: it is the EQ TONE stage at 64 (see EQ).
 - Amp env: linear attack 0.5 ms·2^(v/8.05); decay/release exponential
