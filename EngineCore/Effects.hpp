@@ -445,7 +445,7 @@ private:
 //            level / 128 (127 = fully wet).
 //   4 r.m.:  x * sin, 8000^(ctl1 / 127) Hz (1 Hz .. 8 kHz); crossfade
 //            level / 127.
-//   5 comp.: one-pole detector of the linked mean |x| (time constant per ctl2,
+//   5 comp.: one-pole detector of |x| PER CHANNEL (time constant per ctl2,
 //            0.1 ms .. 0.2 s, attack == release), soft-knee leveller gain =
 //            (Gmax^-4 + (env / 0.2604)^4)^(-1/4), Gmax = 10 + 0.3125 ctl1
 //            dB; output gain -30 dB .. 0 dB with level (no dry).
@@ -467,7 +467,7 @@ public:
             for (double &v : c) v = 0;
         hold_[0] = hold_[1] = held_[0] = held_[1] = 0;
         holdCount_ = 0;
-        env_ = phase_ = 0;
+        env_[0] = env_[1] = phase_ = 0;
         pos_ = 0, dir_ = 1;
         apFb_[0] = apFb_[1] = 0;
     }
@@ -572,13 +572,13 @@ private:
         const double a = 1.0 - std::exp(-1.0 / (CompTau(p[kEffectCtrl2]) * sr_));
         const double gmax4 = std::pow(10.0, -(10.0 + 0.3125 * p[kEffectCtrl1]) / 5.0); // Gmax^-4
         const double out = std::pow(10.0, 1.5 * (p[kEffectLevel] / 127.0 - 1.0));
-        for (int i = 0; i < n; ++i) {
-            env_ += a * (0.5 * (std::fabs(l[i]) + std::fabs(r[i])) - env_);
-            const double e4 = std::pow(env_ / 0.2604, 4.0);
-            const double g = out / std::sqrt(std::sqrt(gmax4 + e4));
-            l[i] = float(l[i] * g);
-            r[i] = float(r[i] * g);
-        }
+        float *s[2] = {l, r};
+        for (int i = 0; i < n; ++i)
+            for (int ch = 0; ch < 2; ++ch) {
+                env_[ch] += a * (std::fabs(s[ch][i]) - env_[ch]);
+                const double e4 = std::pow(env_[ch] / 0.2604, 4.0);
+                s[ch][i] = float(s[ch][i] * (out / std::sqrt(std::sqrt(gmax4 + e4))));
+            }
     }
 
     void Phase(float *l, float *r, int n, const PatchValues &p) {
@@ -618,7 +618,7 @@ private:
     double apFb_[2] = {0, 0};
     double hold_[2] = {0, 0}, held_[2] = {0, 0};
     int holdCount_ = 0;
-    double env_ = 0, phase_ = 0, pos_ = 0, dir_ = 1;
+    double env_[2] = {0, 0}, phase_ = 0, pos_ = 0, dir_ = 1;
 };
 
 } // namespace oxo::s2

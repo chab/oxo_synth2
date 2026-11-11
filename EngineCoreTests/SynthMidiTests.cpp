@@ -231,6 +231,23 @@ OXO_TEST(CrossDelayEchoesLeftInputRightFirst) {
     OXO_EXPECT(energy(l, 22050, 24000) > 100 * energy(r, 22050, 24000));
 }
 
+// (measured, unison spread into the comp.) the compressor's detector is per
+// channel: a loud left channel does not turn the right one down.
+OXO_TEST(CompressorDetectsEachChannel) {
+    const auto rightOut = [](float leftLevel) {
+        PatchValues p = DefaultValues();
+        p[kEffectType] = 5;
+        EffectUnit fx;
+        fx.Prepare(44100);
+        std::vector<float> l(4410), r(4410);
+        for (size_t i = 0; i < l.size(); ++i)
+            l[i] = leftLevel * float(std::sin(0.05 * double(i))), r[i] = 0.1f * float(std::sin(0.07 * double(i)));
+        fx.Process(l.data(), r.data(), int(l.size()), p);
+        return r;
+    };
+    OXO_EXPECT(rightOut(0.0f) == rightOut(1.0f));
+}
+
 // (measured) a unison chord over the polyphony keeps its FIRST notes: a stack
 // never steals from a note started at the same time.
 OXO_TEST(UnisonChordKeepsFirstNotes) {

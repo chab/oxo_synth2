@@ -972,7 +972,8 @@ original AU; keeps both renders for listening).
   patch's d.d. output only nulls as deep as its voice does (-63 dB voice
   -> ~-15 dB folded); deci = hold ctl1+1 samples, floor quantiser,
   14 kHz one-pole; r.m. = sine 8000^(ctl1/127) Hz; comp = one-pole |x|
-  detector + soft-knee leveller; phasers = 2/4/8/12 allpasses, LEVEL =
+  detector PER CHANNEL (unison spread input: per-channel gains within
+  0.02 dB; linked until 2026-11-11) + soft-knee leveller; phasers = 2/4/8/12 allpasses, LEVEL =
   FEEDBACK (0.99·(lv−64)/64), ctl1 = sweep depth, ctl2 = rate, a bouncing
   log-frequency ramp around 1271 Hz (starts at 254.6 Hz).
 
@@ -1016,10 +1017,6 @@ original AU; keeps both renders for listening).
 - Approximations marked `TODO(measure)` in code: a.d.1 exact structure,
   arp random sequence (+ S&H / smooth LFO: not the original's PRNG), LPDL
   resonance frequency near the top cutoffs.
-- Seen 2026-11-11, not investigated (`s1.patch` sine, key 45): comp. +
-  8-voice unison spread 127: original L -9.4 / R -9.1 dB, ours -7.8 /
-  -11.1 (its detector or gain is not the linked mean we model, or the
-  spread acts after it).
 - Random sequences (arp random, S&H / smooth LFO): not identified. Leads:
   S&H read through LFO -> pitch is quantized to whole steps (useless), through
   LFO -> amp it sits on a 1/1024 grid; the two destinations gave
