@@ -726,7 +726,19 @@ original AU; keeps both renders for listening).
   forward or backward (e.g. pulse 64, FM 60, key 48: original runs at
   the plateau rate, ours locks near phase 0). Not resolved: resetting to
   c·incB overshoots even at c = 0.1, a sub-sample reset (overshoot / step
-  × incB) is 10x too much, "previous o2 drives FM" is worse.
+  × incB) is 10x too much, "previous o2 drives FM" is worse. 2026-11-11
+  (2): per reset (deconvolved, `h` = the chain IR from the identical-noise
+  fit) the extra value varies 0.026..0.069 from one reset to the next
+  with no link to osc1's overshoot; it depends on osc1's key (0.053 key
+  36, ~0.045 key 48, ~0.02 key 60), not on osc1's shape; a triangle shows
+  none (= a tiny positive reset phase, ~1e-5..1e-4 cycle). c = 0.02 (the
+  mean) fixes every deterministic plateau case and the triangle column
+  but is NEUTRAL on the library (one patch +3 dB better, User/006 3.5 dB
+  worse): not shipped. 2048-point linear tables (what the purity /
+  copies measurements suggest the original has): no change here. Locked
+  noise sync (osc1 running backward): the original's backward pitch is
+  0.055 % lower = noise as an FM source ±0.6500 (audio ±0.6504):
+  inaudible, but aliased saw / pulse carriers then score 2..9 dB apart.
 - The "fixed output lowpass" (bilinear one-pole, analog 22 kHz, NO
   prewarp) is NOT per voice: it is the EQ TONE stage at 64 (see EQ).
 - Amp env: linear attack 0.5 ms·2^(v/8.05); decay/release exponential
