@@ -6,6 +6,11 @@
 // fb / 127 per repeat, dry/wet crossfade (64 = both at unity), spread
 // delays ONE side by up to +100 ms (< 64 right, > 64 left, exponential), types 0 ST
 // (independent), 1 X (cross feedback), 2 PP (ping-pong, input -> left).
+// Whole samples (measured, single-tap impulse responses at 44.1 / 96 kHz,
+// tempos 60..200): the division rounds DOWN to a multiple of 4 samples,
+// the spread's offset down to a sample, at least 0.1 ms (floored): time 0
+// = 4 samples at 44.1 kHz, a comb, not 29. A new time GLIDES there
+// exponentially, tau 0.215 s (tape-like), reads interpolated meanwhile.
 // Tone (measured, measure_delay_tone.py): a bilinear one-pole in the echo
 // path, 64 = no filter, below = lowpass (200 Hz .. 22 kHz at 63), above =
 // highpass (10 Hz .. 8 kHz): kDelayToneHz.
@@ -22,7 +27,7 @@
 
 namespace oxo::s2 {
 
-inline constexpr double kDelayBeats[20] = {0.0013, 1.0 / 24, 1.0 / 12, 1.0 / 8, 1.0 / 6, 0.25, 1.0 / 3,
+inline constexpr double kDelayBeats[20] = {0.0,    1.0 / 24, 1.0 / 12, 1.0 / 8, 1.0 / 6, 0.25, 1.0 / 3,
                                            0.375,  0.5,      2.0 / 3,  0.75,    0.875,   1.0,  4.0 / 3,
                                            1.5,    1.75,     2.0,      3.0,     3.5,     4.0};
 
@@ -66,6 +71,7 @@ public:
         pos_ = 0;
         smoothL_ = smoothR_ = -1;
         fadeLen_ = std::max(1, int(sr * kClearFadeSeconds));
+        glide_ = 1.0 - std::exp(-1.0 / (kGlideSeconds * sr));
         fadeOut_ = 0;
         Empty();
     }
@@ -86,13 +92,14 @@ public:
 
     void Process(float *l, float *r, int n, const PatchValues &p, double tempo) {
         const double beat = 60.0 / std::max(tempo, 20.0);
-        const double base = kDelayBeats[std::clamp<int>(p[kDelayTime], 0, 19)] * beat * sr_;
+        const double base = 4.0 * std::floor(kDelayBeats[std::clamp<int>(p[kDelayTime], 0, 19)] * beat * sr_ / 4.0);
         // (measured, reference/meta/delay_spread.json, every value) one side
         // later by 100 ms * 10^((|v - 64| - 63) / 21): 0 at 64, 1 ms at 85 / 43
         const int sd = std::min(std::abs(p[kDelaySpread] - 64), 63);
         const double s = p[kDelaySpread] - 64;
-        const double offset = sd ? 0.1 * sr_ * std::pow(10.0, (sd - 63) / 21.0) : 0.0;
-        double tl = base + (s > 0 ? offset : 0), tr = base + (s < 0 ? offset : 0);
+        const double offset = sd ? std::floor(0.1 * sr_ * std::pow(10.0, (sd - 63) / 21.0)) : 0.0;
+        const double minT = std::floor(1e-4 * sr_);
+        double tl = std::max(minT, base + (s > 0 ? offset : 0)), tr = std::max(minT, base + (s < 0 ? offset : 0));
         const double maxT = double(buf_[0].size() - 4);
         tl = std::min(tl, maxT);
         tr = std::min(tr, maxT);
@@ -115,8 +122,8 @@ public:
                 else out = fadeOut_ * fadeStep;
             }
             // tape-like glide toward a new time
-            smoothL_ += (tl - smoothL_) * 0.0005;
-            smoothR_ += (tr - smoothR_) * 0.0005;
+            smoothL_ += (tl - smoothL_) * glide_;
+            smoothR_ += (tr - smoothR_) * glide_;
             const double el = tone_[0].Process(Read(0, smoothL_)), er = tone_[1].Process(Read(1, smoothR_));
             const double dryL = l[i], dryR = r[i], inL = dryL * inGain_, inR = dryR * inGain_;
             if (inGain_ < 1) inGain_ = std::min(1.0, inGain_ + fadeStep);
@@ -137,6 +144,7 @@ public:
 
 private:
     static constexpr double kClearFadeSeconds = 0.015;
+    static constexpr double kGlideSeconds = 0.215; // (measured) time-change glide tau
 
     // O(1) (no multi-MB fill on the audio thread): samples older than the
     // last Empty() read as silence.
@@ -162,7 +170,7 @@ private:
     double sr_ = 44100;
     std::vector<float> buf_[2];
     size_t pos_ = 0, written_ = 0;
-    double smoothL_ = -1, smoothR_ = -1;
+    double smoothL_ = -1, smoothR_ = -1, glide_ = 0.0001;
     int fadeLen_ = 1, fadeOut_ = 0;
     double inGain_ = 1;
     BilinearOnePole tone_[2];
@@ -189,12 +197,21 @@ public:
         fbL_ = fbR_ = 0;
     }
 
-    // (measured) wet base delay per time knob, ms
-    static double TimeMs(int v) {
-        static constexpr double t[9] = {0.02, 0.54, 2.18, 6.19, 15.1, 18.89, 22.67, 26.44, 30.0};
-        const double x = std::clamp(v, 0, 127) / 16.0;
-        const int i = std::min(int(x), 7);
-        return t[i] + (t[i + 1] - t[i]) * (x - i);
+    // (measured, single-tap impulse responses at depth 0) wet base delay
+    // per time knob in WHOLE samples at 44.1 kHz (30 ms at 127, the linear
+    // half from 64); 96 kHz is the same delays rounded to its samples
+    static double TimeSamples(int v, double sr) {
+        static constexpr short t[128] = {
+            2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 14, 16, 17, 19, 22, 24,
+            26, 29, 32, 35, 38, 41, 45, 49, 53, 57, 62, 67, 72, 77, 83, 90,
+            96, 103, 111, 119, 127, 136, 145, 155, 166, 177, 188, 201, 214, 228, 242, 257,
+            273, 290, 308, 327, 347, 368, 389, 412, 437, 462, 489, 517, 546, 577, 609, 643,
+            666, 677, 687, 697, 708, 718, 729, 739, 750, 760, 770, 781, 791, 802, 812, 822,
+            833, 843, 854, 864, 875, 885, 895, 906, 916, 927, 937, 947, 958, 968, 979, 989,
+            1000, 1010, 1020, 1031, 1041, 1052, 1062, 1072, 1083, 1093, 1104, 1114, 1125, 1135, 1145, 1156,
+            1166, 1177, 1187, 1197, 1208, 1218, 1229, 1239, 1250, 1260, 1270, 1281, 1291, 1302, 1312, 1323,
+        };
+        return std::round(t[std::clamp(v, 0, 127)] * sr / 44100.0);
     }
 
     // (measured: 130 s renders) knob 0 is 0.01 Hz (the manual's bottom), not
@@ -215,7 +232,7 @@ public:
     void Process(float *l, float *r, int n, const PatchValues &p) {
         const bool quad = p[kChorusType] >= 4;
         const double thetaR = p[kChorusType] == 1 ? 0.0 : 0.25; // cycles
-        const double base = TimeMs(p[kChorusTime]) * 0.001 * sr_;
+        const double base = TimeSamples(p[kChorusTime], sr_);
         const double depth = base * Depth(p[kChorusDepth]) * RateSwing(RateHz(p[kChorusRate]));
         // 0.99: the manual's -99 % / +97 % labels; echo decay vs ours (same
         // probe) was 1-3 % stronger with 0.98

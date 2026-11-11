@@ -874,6 +874,11 @@ original AU; keeps both renders for listening).
   stack voice glides from its own last pitch (PORTAMENTO).
 - Pan: patch pan q = (v-64)/64 below the centre, /63 above; balance gains
   (centre 1/1, hard side 1/0); patch pan × unison spread gains MULTIPLY.
+- Delay TIMES are WHOLE samples (single-tap IRs, identical-noise trick,
+  44.1 / 96 kHz, tempos 60..200): division × beat rounded DOWN to a
+  multiple of 4 samples, + the spread offset floored, at least
+  floor(0.1 ms · sr): time 0 = 4 samples at 44.1 kHz (a comb; it was 29,
+  interpolated). A new time glides exponentially, tau 0.215 s.
 - Delay: spread = one side later by 100 ms·10^((|v-64|-63)/21) (0 at 64);
   delay tone (`measure_delay_tone.py`, `kDelayToneHz`): a bilinear one-pole
   in the echo path, 64 = none, < 64 LP 200 Hz·110^(t/63) (22 kHz at 63),
@@ -895,7 +900,8 @@ original AU; keeps both renders for listening).
   from creation, 2.94 Hz·2^((rate−64)/8.89), rate 0 = 0.01 Hz; types 1–3
   L→L / R→R (R θ 0° type 1, 90° types 2 = 3), type 4 L→L 0°, R→L 90°, L→R
   180°, R→R 270°; comb feedback 0.99·(fb−64)/64; wet = level/127, dry
-  unity.
+  unity. Base delay = WHOLE samples (`Chorus::TimeSamples`, measured
+  table at 44.1 kHz, 30 ms at 127; 96 kHz = the same delays rounded).
 - EFFECT SECTION (`measure_effect.py`, `measure_effect_time.py`,
   `reference/meta/effect.json`; laws in the EffectUnit comment):
   distortions = drive table → curve → RBJ HP → RBJ LP 400 Hz·40^(ctl2/127)
