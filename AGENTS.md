@@ -716,6 +716,12 @@ original AU; keeps both renders for listening).
   voice locks on a constant (silence after a click; key 60: FM ≥ 54,
   −12.7 FM steps per octave down; nulls −87 dB vs the original).
   Pitched modulators match by level / spectrum, not sample-exact (chaotic).
+  OSC1 PHASE = whole 2^-27 cycles (2048-point index + 16-bit fraction),
+  each step TRUNCATED (`PhaseStep`; FM steps per sample): measured from
+  synced-noise reset times over 3-4 s at keys 30..72 (period fits match
+  to 7e-5 samples; exact doubles drift a sample every few dozen cycles,
+  and a synced noise cycle shifted by one sample nulls at 0 dB). Osc2
+  stays exact (truncated, the FM nulls get 9 dB worse).
   `check_fm.py [--sync]`: osc1 x osc2 shape x FM grid vs the original.
   No sync: every pair within 0.6 dB at every FM (2026-11-11). Sync + FM:
   off by 1..30 dB from FM ~60 (key 48) with saw / pulse / tri osc2. The

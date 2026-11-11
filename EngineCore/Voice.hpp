@@ -41,6 +41,13 @@ inline constexpr double kNoiseLevel = 0.65039;
 // (measured, locked noise sync: osc1's backward pitch at FM 70..127) as an
 // FM source the noise is +-0.6500, 0.06 % under its audio level
 inline constexpr double kNoiseFm = 0.65;
+// (measured: the reset times of synced noise over seconds, keys 30..72) the
+// original steps OSC1 in whole 2^-27 cycles (a 2048-point index + 16-bit
+// fraction), each sample's step (FM included) TRUNCATED: its pitch sits up
+// to 7e-9 cycle / sample under the exact one, which decides on which sample
+// a sync lands. Osc2 does not (FM nulls 9 dB worse with it truncated too).
+inline constexpr double kPhaseUnits = 134217728.0;
+OXO_INLINE double PhaseStep(double inc) { return double(int64_t(inc * kPhaseUnits)) * (1.0 / kPhaseUnits); }
 inline constexpr uint32_t kNoiseSeed = 0x70A6E;
 inline constexpr int kDetuneOscs = 8;
 inline constexpr double kFmRefInc = 261.6255653 / 44100.0; // (measured) FM deviation unit, cycles per sample
@@ -342,7 +349,7 @@ private:
         // pw 0 = pw 1 = 1.25 / 254, modulation tops out at 1 - 1.375 / 254
         static constexpr double kWidthMin = 1.25 / 254.0, kWidthMax = 1.0 - 1.375 / 254.0;
         // a static oscillator section's steps and width (else per sample, below)
-        const double staticIncA = inc1 * bendRatio, staticIncB = inc2 * bendRatio;
+        const double staticIncA = PhaseStep(inc1 * bendRatio), staticIncB = inc2 * bendRatio;
         const double staticWidth = std::clamp(width, kWidthMin, kWidthMax);
         double curWidth = staticWidth;
         uint32_t curWidthPoints = CopyWidth(staticWidth);
@@ -409,7 +416,7 @@ private:
                     const double m2 = r[1] ? ratio2(bendSteps + lfoAll + pitchSteps(r[1], i)) : mAll;
                     // (measured) mod env -> osc2 pitch: +-60 semitones at env 1 (not quantized)
                     const double mEnv2 = envPitch ? std::exp2(modEnv_.Next() * modAmt * 60.0 / 12.0) : 1.0;
-                    incAs[i] = inc1 * mAll, incBs[i] = inc2 * m2 * mEnv2;
+                    incAs[i] = PhaseStep(inc1 * mAll), incBs[i] = inc2 * m2 * mEnv2;
                 }
             } else {
                 std::fill_n(incAs, frames, staticIncA);
@@ -530,7 +537,8 @@ private:
             if (ring && detuneOn && subOn) osc1Out = kRingDetuneLimit * std::tanh(osc1Out / kRingDetuneLimit);
             if (ring) o2 *= o1;
 
-            osc1Phase_ += incA * fm;
+            if constexpr (kOsc == kOscCross) osc1Phase_ += PhaseStep(incA * fm);
+            else osc1Phase_ += incA; // whole units already
             const bool forward = osc1Phase_ >= 1.0, backward = osc1Phase_ < 0.0;
             osc1Phase_ = Wrap(osc1Phase_);
             subPhase_ = Wrap(subPhase_ + incA * subRatio * fm);
