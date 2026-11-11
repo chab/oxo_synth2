@@ -746,7 +746,27 @@ original AU; keeps both renders for listening).
   mean) fixes every deterministic plateau case and the triangle column
   but is NEUTRAL on the library (one patch +3 dB better, User/006 3.5 dB
   worse): not shipped. 2048-point linear tables (what the purity /
-  copies measurements suggest the original has): no change here. Locked
+  copies measurements suggest the original has): no change here.
+  2026-11-11 (3), SHIPPED: a forward-wrap sync restarts osc2 at PHASE
+  `kSyncResetPhase` = 7e-5 cycle (a phase, not a value: key-dependent
+  through the saw jump's slope, ~0 on a triangle). Fitted open loop (FM 0,
+  osc2 alone, residual energy): -6 dB at keys 36..72, osc2 saw / pulse /
+  tri, pitch ±12 (best 4.5e-5..8e-5 per case; an overshoot term adds
+  nothing). A backward-step sync keeps phase 0: the offset there is worse
+  above FM ~110. Closed loop (check_fm --sync key 48): FM 40..80 cells
+  much better (sine/pulse 60: 29 → 11 dB, tri/pulse 60: 34 → 7), saw
+  osc2 at FM ~120 worse (7 → 20 saw/saw, chaotic islands); held-out
+  keys 42/54/66: mid FM 2.28 → 1.96 dB, all 3.78 → 3.63. Library (180
+  sync patches): mean -0.05 dB, 5 better > 0.5 (Kujashi Deep Other Worlds
+  12.4 → 6.5, User/006 8.5 → 7.5), 1 worse (Long Horn Atmo +1.2).
+  TRIED, NO GAIN: sync on the 2048-point INDEX dropping (fixes one
+  plateau cell, worse on the grid), offset × or ÷ |fm| (the ÷ √|fm| fit
+  did not hold on held-out keys), the offset on backward syncs too. The
+  scores move ±0.5 dB from tiny changes above FM ~90: judge on held-out
+  grids + the library, not one grid. Sample-lock harness: a note's first
+  samples are deterministic, so "first sample where |ref − ours| > 2 %"
+  shows where a rule diverges (e.g. the backward lock right after a
+  reset, sample 64 at key 48 sine/pulse FM 60). Locked
   noise sync (osc1 running backward): the original's backward pitch is
   0.055 % lower = noise as an FM SOURCE is ±0.6500 (audio ±0.65039, the
   locked DC nulls at -87 dB only with that): `kNoiseFm`. With it the

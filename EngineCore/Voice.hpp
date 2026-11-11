@@ -52,6 +52,13 @@ inline constexpr uint32_t kNoiseSeed = 0x70A6E;
 inline constexpr int kDetuneOscs = 8;
 inline constexpr double kFmRefInc = 261.6255653 / 44100.0; // (measured) FM deviation unit, cycles per sample
 inline constexpr double kRingDetuneLimit = 1.7; // (fitted) ring + osc1 detune + sub: osc1 section limiter
+// (fitted, sync with FM 0, osc2 alone: residual -6 dB at keys 36..72, osc2
+// saw / pulse / tri, pitch -12..+12; best 4.5e-5..8e-5 per case) a sync on
+// osc1's forward wrap restarts osc2 a hair AFTER phase 0: on a saw that sample
+// reads the steep side of the band-limited jump, not its midpoint. Under sync
+// + FM it decides whether osc1 escapes a backward lock. The syncs FM's
+// backward steps fire keep phase 0 (that offset there: worse above FM ~110).
+inline constexpr double kSyncResetPhase = 7e-5;
 inline constexpr double kDetuneOffsets[kDetuneOscs] = {-7, -5, -3, -1, 1, 3, 5, 7}; // x d cents (measured)
 
 inline double NoteHz(double note) { return 440.0 * std::exp2((note - 69.0) / 12.0); }
@@ -554,8 +561,8 @@ private:
             // click", threshold an octave of FM knob per octave of key)
             if (sync && (forward || (fm < 0 && !backward))) {
                 // (measured, alias energy matches to 0.1 dB) the original's hard
-                // sync is NAIVE: osc2 restarts at phase 0, no band-limiting
-                osc2Phase_ = 0;
+                // sync is NAIVE: osc2 restarts at a fixed phase, no band-limiting
+                osc2Phase_ = forward ? kSyncResetPhase : 0.0;
                 // (measured, v1.12 manual "synced noise") the noise generator
                 // restarts too, from one fixed state shared by every voice and
                 // note: synced noise repeats per osc1 cycle (pitched)
