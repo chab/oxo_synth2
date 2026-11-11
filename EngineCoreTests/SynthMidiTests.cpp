@@ -248,6 +248,25 @@ OXO_TEST(CompressorDetectsEachChannel) {
     OXO_EXPECT(rightOut(0.0f) == rightOut(1.0f));
 }
 
+// (measured, small noise, 1..4 kHz) the a.d.1 small-signal gain per ctl1 is
+// not monotonic: lowest near 16 (drive and output gain both per ctl1).
+OXO_TEST(Ad1SmallSignalGainFollowsTheOriginal) {
+    const auto gain = [](int c1) {
+        PatchValues p = DefaultValues();
+        p[kEffectType] = 0, p[kEffectCtrl1] = c1, p[kEffectCtrl2] = 127, p[kEffectLevel] = 127;
+        EffectUnit fx;
+        fx.Prepare(44100);
+        std::vector<float> l(44100), r(44100);
+        for (size_t i = 0; i < l.size(); ++i) l[i] = r[i] = 1e-5f * float(std::sin(2 * M_PI * 2500.0 * double(i) / 44100));
+        fx.Process(l.data(), r.data(), int(l.size()), p);
+        double peak = 0;
+        for (size_t i = 22050; i < l.size(); ++i) peak = std::max(peak, std::fabs(double(l[i])));
+        return peak / 1e-5;
+    };
+    const std::pair<int, double> measured[] = {{0, 2.401}, {16, 1.259}, {32, 2.362}, {64, 17.47}, {96, 132.8}};
+    for (const auto &[c1, g] : measured) OXO_EXPECT(std::fabs(20 * std::log10(gain(c1) / g)) < 1.0);
+}
+
 // (measured) a unison chord over the polyphony keeps its FIRST notes: a stack
 // never steals from a note started at the same time.
 OXO_TEST(UnisonChordKeepsFirstNotes) {

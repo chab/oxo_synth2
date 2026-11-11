@@ -185,7 +185,7 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
 - `make -C EngineCoreTests test`, `make -C tools/s2render`, CPU bench
   `clang++ -std=c++20 -O2 tools/bench/main.cpp -o build/bench && ./build/bench`
   (16 voices, one core, Apple M4: LP12 x135, LP24 x109, LPDL x35,
-  detune+sub x88, all fx x90 realtime; `./build/bench <x.sy1>...` = a
+  detune+sub x88, all fx x90 realtime (it runs the a.d.1: x74 with the 2026-11-11 model vs x83 before, same session, its 4 pow per sample); `./build/bench <x.sy1>...` = a
   keyboard scrub, ~31 voices: Madame Eljay 010 x46, the heaviest case
   reported),
   `make -C tools/s1ref` (x86_64, needs the original AU).
@@ -961,8 +961,7 @@ original AU; keeps both renders for listening).
 - EFFECT SECTION (`measure_effect.py`, `measure_effect_time.py`,
   `reference/meta/effect.json`; laws in the EffectUnit comment):
   distortions = drive table → curve → RBJ HP → RBJ LP 400 Hz·40^(ctl2/127)
-  Q3 → gain (level+2)/129, no dry (a.d.1 = fitted asymmetric tanh in a 69
-  Hz negative-feedback loop); d.d. = F(x) = P·tri(S·x/P), slope S and
+  Q3 → gain (level+2)/129, no dry (a.d.1: below); d.d. = F(x) = P·tri(S·x/P), slope S and
   peak P PER CTL1 (`measure_dd.py` → kDdSlope / kDdPeak: P 1.64 at ctl1 0
   falling to 0.5778 from ~64 up, S 0.895 .. 1000; nulls -50..-78 dB on the
   effect's exact input = the effect-off render with the EQ tone stage
@@ -976,6 +975,37 @@ original AU; keeps both renders for listening).
   0.02 dB; linked until 2026-11-11) + soft-knee leveller; phasers = 2/4/8/12 allpasses, LEVEL =
   FEEDBACK (0.99·(lv−64)/64), ctl1 = sweep depth, ctl2 = rate, a bouncing
   log-frequency ramp around 1271 Hz (starts at 254.6 Hz).
+- A.D.1 (effect type 0) STATUS 2026-11-11: a FITTED model, not the exact
+  structure. `fit_ad1.py` (+ `ad1_model.c`, the same model in C) fits it
+  sample by sample to the original (sines 49..1568 Hz x 5 levels, saw,
+  noise; input = effect-off render with the EQ tone stage undone):
+  z = f(d·x − G·lp(z) + b) − f(b), f(w) = w/(1+|w/L|^k)^(1/k) per side,
+  82.7 Hz one-pole loop on the previous z, then one-pole HPs 227.6 / 22
+  Hz, RBJ HP 97.3 Hz Q 2.56, the RBJ LP Q 3; only d and out per ctl1
+  (13 knots, kAd1Drive / kAd1Out, d·out = the measured small-signal gain
+  within 1 %). Median sample error -17.5 (ctl1 127) .. -24 dB (ctl1 0),
+  worst tests -10..-14 dB (49 Hz sines, loud saws: the LF and the HF of
+  sharp edges). Library a.d.1 patches (5 + Desktop ad1.sy1): spec 3.40 ->
+  1.13 dB, level |mean| 1.82 -> 0.51 dB vs the model before (asymmetric
+  tanh in a 69 Hz loop, LP Q 1.6 instead of 3).
+  MEASURED FACTS: the LP is exactly the other distortions' RBJ LP (Q 3,
+  c2 law, 0.01 dB); level = (level+2)/129; at small signal ctl1 only
+  scales the response (same shape, phase within 1°), the gain is NOT
+  monotonic (2.40 at 0, min 1.26 at 16, 17.5 at 64, x2.78 per 16 above:
+  probe: low-level noise, H at 1..4 kHz); the response falls ~24 dB/oct
+  below 100 Hz (4th order, phase ~+360° at 16 Hz), +9 dB from 200 Hz to
+  3 kHz, -2 dB from 3 to 20 kHz; strong EVEN harmonics already at small
+  levels (H2 -10 dB at 392 Hz, input 0.024), a square-ish wave with
+  exponential decays when driven hard; compression starts at input ~0.7 /
+  |small-signal gain| for f >= 200 Hz (the 200 Hz..3 kHz rise acts BEFORE
+  the limiting), later below. NO static curve between linear filters fits
+  (every split of the small-signal response tried: harmonic-domain linear
+  fit of a free curve, -4..-6 dB residual), so the nonlinearity has memory.
+  Tried, no gain over the model above: a free 41-knot curve, a bias per
+  ctl1, a pre highpass / shelf, a one-pole smoother before or after the
+  curve, the loop without the sample delay, feedback taken after the first
+  highpass. Leads: the exact loop topology (filter inside the loop), two
+  limiting stages, a signal-dependent bias.
 
 ## Measurement methods (reuse them)
 
@@ -1014,7 +1044,7 @@ original AU; keeps both renders for listening).
 
 - Preset-wide diff (`compare.py presets`, 416 renders): level |mean| 1.00
   dB, spec 2.40 dB, env 3.01 dB; `compare.py filter` 0.87 / 2.05 / 2.83.
-- Approximations marked `TODO(measure)` in code: a.d.1 exact structure,
+- Approximations marked `TODO(measure)` in code: a.d.1 exact structure (status above),
   arp random sequence (+ S&H / smooth LFO: not the original's PRNG), LPDL
   resonance frequency near the top cutoffs.
 - Random sequences (arp random, S&H / smooth LFO): not identified. Leads:

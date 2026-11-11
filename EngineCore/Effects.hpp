@@ -435,10 +435,14 @@ private:
 //            ctl1 (measure_dd.py, kDdSlope / kDdPeak; the peak falls from
 //            1.64 at ctl1 0 to 0.5778 from ~64 up), same filters (nulls
 //            -50..-75 dB, every ctl1).
-//   0 a.d.1: asymmetric tanh (limits 0.414 / 1.017) inside negative
-//            feedback through a 69 Hz one-pole (gain 9.9): the low cut and
-//            the even harmonics; HP 131 Hz Q 2.38, LP Q 1.61 (FITTED model,
-//            ~10-18 % waveform error).
+//   0 a.d.1: (FITTED model, fit_ad1.py, median sample error -17..-24 dB,
+//            TODO(measure) the exact structure) z = f(d x - G lp(z) + b) -
+//            f(b): an asymmetric soft limit f(w) = w / (1 + |w / L|^k)^(1/k)
+//            (L+ 0.606 k+ 1.31, L- 0.934 k- 2.93, bias b 0.333) inside
+//            negative feedback through an 82.7 Hz one-pole on the previous z
+//            (G 8.34); then bilinear one-pole highpasses 227.6 Hz and 22 Hz,
+//            RBJ HP 97.3 Hz Q 2.56, the same RBJ LP (Q 3); drive d and output
+//            gain per ctl1 (kAd1Drive / kAd1Out).
 //   3 deci.: sample & hold every ctl1 + 1 samples, floor quantiser q =
 //            0.00643 * 2^(floor(ctl2 / 8) - 8) (integer bits), then (ctl1 > 0
 //            only) a bilinear one-pole lowpass at 14 kHz; dry / wet crossfade
@@ -463,6 +467,8 @@ public:
         hp2_.Reset();
         lp2_.Reset();
         fb_[0] = fb_[1] = 0;
+        for (auto &c : ad1Hp_)
+            for (double &v : c) v = 0;
         for (auto &c : ap_)
             for (double &v : c) v = 0;
         hold_[0] = hold_[1] = held_[0] = held_[1] = 0;
@@ -473,6 +479,7 @@ public:
     }
     void Process(float *l, float *r, int n, const PatchValues &p) {
         const int type = p[kEffectType];
+        if (type == 0) return Ad1(l, r, n, p);
         if (type <= 2) return Distort(l, r, n, p);
         if (type == 3) return Decimate(l, r, n, p);
         if (type == 5) return Compress(l, r, n, p);
@@ -488,6 +495,31 @@ public:
     }
 
 private:
+    static double Ad1Side(double w, double limit, double knee) {
+        return w / std::pow(1.0 + std::pow(std::fabs(w / limit), knee), 1.0 / knee);
+    }
+    static double Ad1Curve(double w) { return w >= 0 ? Ad1Side(w, 0.606164, 1.312394) : Ad1Side(w, 0.933646, 2.931868); }
+    // (fit_ad1.py) per channel
+    void Ad1(float *l, float *r, int n, const PatchValues &p) {
+        static constexpr double kBias = 0.333312, kLoopGain = 8.342729;
+        const int c1 = std::clamp(p[kEffectCtrl1], 0, 127);
+        const double drive = tables::kAd1Drive[c1], out = tables::kAd1Out[c1] * (p[kEffectLevel] + 2) / 129.0;
+        hp2_.Set(97.339867, 2.557164, true, sr_);
+        lp2_.Set(400.0 * std::pow(40.0, p[kEffectCtrl2] / 127.0), 3.0, false, sr_);
+        const double a = 1.0 - std::exp(-2 * M_PI * 82.703433 / sr_), z0 = Ad1Curve(kBias);
+        const double k1 = std::tan(M_PI * 227.56362 / sr_), k2 = std::tan(M_PI * 22.030046 / sr_);
+        float *s[2] = {l, r};
+        for (int i = 0; i < n; ++i)
+            for (int ch = 0; ch < 2; ++ch) {
+                const double z = Ad1Curve(drive * s[ch][i] - kLoopGain * fb_[ch] + kBias) - z0;
+                fb_[ch] += a * (z - fb_[ch]);
+                double *h = ad1Hp_[ch]; // two bilinear one-pole highpasses: x1, y1 each
+                const double h1 = (z - h[0]) / (1 + k1) + (1 - k1) / (1 + k1) * h[1];
+                const double h2 = (h1 - h[2]) / (1 + k2) + (1 - k2) / (1 + k2) * h[3];
+                h[0] = z, h[1] = h1, h[2] = h1, h[3] = h2;
+                s[ch][i] = float(out * lp2_.Process(ch, hp2_.Process(ch, h2)));
+            }
+    }
     static double Drive(const float *table, int c1) {
         const double x = std::clamp(c1, 0, 127) / 4.0;
         const int i = std::min(int(x), 31);
@@ -509,28 +541,18 @@ private:
 
     void Distort(float *l, float *r, int n, const PatchValues &p) {
         const int type = p[kEffectType];
-        const bool ad1 = type == 0;
         const int c1 = std::clamp(p[kEffectCtrl1], 0, 127);
-        const double drive = ad1 ? 2.65 * Drive(tables::kAd1Drive, c1)
-                           : type == 1 ? Drive(tables::kAd2Drive, c1)
+        const double drive = type == 1 ? Drive(tables::kAd2Drive, c1)
                                        : tables::kDdSlope[c1] / tables::kDdPeak[c1]; // d.d.: fold rate
         const double ddPeak = tables::kDdPeak[c1];
-        hp2_.Set(ad1 ? 131.0 : 100.0, ad1 ? 2.379 : 2.29, true, sr_);
-        lp2_.Set(400.0 * std::pow(40.0, p[kEffectCtrl2] / 127.0), ad1 ? 1.607 : 3.0, false, sr_);
-        const double out = (p[kEffectLevel] + 2) / 129.0 * (ad1 ? 0.4613 : 1.0);
-        const double fbA = 1.0 - std::exp(-2 * M_PI * 69.2 / sr_);
+        hp2_.Set(100.0, 2.29, true, sr_);
+        lp2_.Set(400.0 * std::pow(40.0, p[kEffectCtrl2] / 127.0), 3.0, false, sr_);
+        const double out = (p[kEffectLevel] + 2) / 129.0;
         for (int i = 0; i < n; ++i) {
             float *s[2] = {l + i, r + i};
             for (int ch = 0; ch < 2; ++ch) {
-                double z;
-                if (ad1) {
-                    const double v = drive * *s[ch] - 9.914 * fb_[ch];
-                    z = v > 0 ? 0.4138 * std::tanh(v / 0.4138) : 1.0174 * std::tanh(v / 1.0174);
-                    fb_[ch] += fbA * (z - fb_[ch]);
-                } else {
-                    const double u = drive * *s[ch];
-                    z = type == 1 ? Ad2(u) : ddPeak * Fold(u);
-                }
+                const double u = drive * *s[ch];
+                const double z = type == 1 ? Ad2(u) : ddPeak * Fold(u);
                 *s[ch] = float(out * lp2_.Process(ch, hp2_.Process(ch, z)));
             }
         }
@@ -614,6 +636,7 @@ private:
     double sr_ = 44100;
     Biquad hp2_, lp2_;
     double fb_[2] = {0, 0};
+    double ad1Hp_[2][4] = {};
     double ap_[2][12] = {};
     double apFb_[2] = {0, 0};
     double hold_[2] = {0, 0}, held_[2] = {0, 0};
