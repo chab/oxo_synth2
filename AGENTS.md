@@ -737,8 +737,10 @@ original AU; keeps both renders for listening).
   worse): not shipped. 2048-point linear tables (what the purity /
   copies measurements suggest the original has): no change here. Locked
   noise sync (osc1 running backward): the original's backward pitch is
-  0.055 % lower = noise as an FM source ±0.6500 (audio ±0.6504):
-  inaudible, but aliased saw / pulse carriers then score 2..9 dB apart.
+  0.055 % lower = noise as an FM SOURCE is ±0.6500 (audio ±0.65039, the
+  locked DC nulls at -87 dB only with that): `kNoiseFm`. With it the
+  backward pitch matches to 2e-5 and check_fm's noise columns are within
+  0.4 dB (sync, bar 3 cells at 1.7..2.8) / 0.06 dB (no sync).
 - The "fixed output lowpass" (bilinear one-pole, analog 22 kHz, NO
   prewarp) is NOT per voice: it is the EQ TONE stage at 64 (see EQ).
 - Amp env: linear attack 0.5 ms·2^(v/8.05); decay/release exponential

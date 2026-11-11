@@ -38,6 +38,9 @@ inline constexpr double kOscAmplitude = 0.2;  // (measured) sine/saw/tri peak at
 // carries on across notes (frozen while idle) like the oscillators; a
 // synced osc1 wrap restarts it.
 inline constexpr double kNoiseLevel = 0.65039;
+// (measured, locked noise sync: osc1's backward pitch at FM 70..127) as an
+// FM source the noise is +-0.6500, 0.06 % under its audio level
+inline constexpr double kNoiseFm = 0.65;
 inline constexpr uint32_t kNoiseSeed = 0x70A6E;
 inline constexpr int kDetuneOscs = 8;
 inline constexpr double kFmRefInc = 261.6255653 / 44100.0; // (measured) FM deviation unit, cycles per sample
@@ -459,6 +462,7 @@ private:
         }
 
         double fmIncA = NAN, fmRef = 0; // kFmRefInc / incA, recomputed when incA changes
+        const double fmScale = shape2 == 4 ? kNoiseFm / kNoiseLevel : 1.0;
         double copyStep = NAN; // the osc1 step copyInc holds (the copies' steps, recomputed when it changes)
         simd::P4 copyInc[2] = {};
         for (int i = 0; i < frames; ++i) {
@@ -489,7 +493,7 @@ private:
             // up, rises with the sample rate
             double fm = 1.0;
             if constexpr (kOsc == kOscCross) {
-                if (incA != fmIncA) fmIncA = incA, fmRef = kFmRefInc / incA;
+                if (incA != fmIncA) fmIncA = incA, fmRef = kFmRefInc / incA * fmScale;
                 fm = 1.0 + fmBs[i] * o2 * fmRef;
             }
             double o1 = OscRead(shape1, saw1, tri1, osc1Phase_, curWidth);
