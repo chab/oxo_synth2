@@ -90,7 +90,9 @@ public:
         if (fadeOut_) fadeOut_ = 0, Empty(), inGain_ = 0;
     }
 
-    void Process(float *l, float *r, int n, const PatchValues &p, double tempo) {
+    // wetL / wetR given: l / r keep the dry part, the echoes go there (the
+    // chorus takes them, see Chorus)
+    void Process(float *l, float *r, int n, const PatchValues &p, double tempo, float *wetL = nullptr, float *wetR = nullptr) {
         const double beat = 60.0 / std::max(tempo, 20.0);
         const double base = 4.0 * std::floor(kDelayBeats[std::clamp<int>(p[kDelayTime], 0, 19)] * beat * sr_ / 4.0);
         // (measured, reference/meta/delay_spread.json, every value) one side
@@ -106,7 +108,8 @@ public:
         if (smoothL_ < 0) smoothL_ = tl, smoothR_ = tr;
         const double fb = p[kDelayFeedback] / 127.0;
         const double dw = p[kDelayDryWet];
-        const double wet = std::min(1.0, dw / 64.5), dry = std::min(1.0, (127 - dw) / 64.5);
+        // (measured, IR taps) dry = (127 - dw) / 63 above 64, unity below
+        const double wet = std::min(1.0, dw / 64.5), dry = std::min(1.0, (127 - dw) / 63.0);
         const int type = p[kDelayType];
         const int t = p[kDelayTone];
         for (auto &f : tone_) {
@@ -137,8 +140,13 @@ public:
             buf_[1][pos_] = float(wr);
             if (++pos_ == size) pos_ = 0;
             if (written_ < size) ++written_;
-            l[i] = float(dry * dryL + wet * out * el);
-            r[i] = float(dry * dryR + wet * out * er);
+            if (wetL) {
+                l[i] = float(dry * dryL), r[i] = float(dry * dryR);
+                wetL[i] = float(wet * out * el), wetR[i] = float(wet * out * er);
+            } else {
+                l[i] = float(dry * dryL + wet * out * el);
+                r[i] = float(dry * dryR + wet * out * er);
+            }
         }
     }
 
@@ -184,7 +192,10 @@ private:
 // voice theta 0 for type 1, 90 degrees for types 2 / 3 = identical). Type
 // 4: L -> L 0, R -> L 90, L -> R 180, R -> R 270 degrees. Comb feedback
 // into each channel's own line, 0.99 * (fb - 64) / 64; wet = level / 127,
-// dry stays at unity.
+// dry stays at unity. With the DELAY on (measured, IR taps): its echoes
+// never reach the output directly, they go through the chorus voices only,
+// at unity whatever the level (level 0 = the echoes come chorus-delayed):
+// out = dry + level * chorus(dry) + chorus(echoes), feedback alike.
 class Chorus {
 public:
     void Prepare(double sr) {
@@ -194,7 +205,7 @@ public:
     }
     void Reset() {
         for (auto &b : buf_) std::fill(b.begin(), b.end(), 0.0f);
-        fbL_ = fbR_ = 0;
+        echoes_ = false;
     }
 
     // (measured, single-tap impulse responses at depth 0) wet base delay
@@ -229,7 +240,8 @@ public:
     }
     static double Depth(int v) { return (std::pow(100.0, v / 127.0) - 1.0) / 99.0; }
 
-    void Process(float *l, float *r, int n, const PatchValues &p) {
+    // echoL / echoR: the delay's echoes (nullptr: delay off)
+    void Process(float *l, float *r, int n, const PatchValues &p, const float *echoL = nullptr, const float *echoR = nullptr) {
         const bool quad = p[kChorusType] >= 4;
         const double thetaR = p[kChorusType] == 1 ? 0.0 : 0.25; // cycles
         const double base = TimeSamples(p[kChorusTime], sr_);
@@ -240,29 +252,47 @@ public:
         const double level = p[kChorusLevel] / 127.0;
         const double inc = RateHz(p[kChorusRate]) / sr_;
         const double maxD = double(buf_[0].size() - 3);
-        auto tap = [&](int ch, double theta) {
-            const double d = base + depth * std::sin(2 * M_PI * (lfoPhase_ - theta));
-            return Read(ch, std::clamp(d, 0.0, maxD));
-        };
+        if (!echoL && echoes_) { // the delay went off: its chorus lines empty
+            std::fill(buf_[2].begin(), buf_[2].end(), 0.0f);
+            std::fill(buf_[3].begin(), buf_[3].end(), 0.0f);
+            echoes_ = false;
+        }
+        echoes_ = echoL != nullptr;
         const size_t size = buf_[0].size();
         for (int i = 0; i < n; ++i) {
-            // write first (delays down to 0 read the current input); the
-            // comb feeds back the previous sample's tap
-            buf_[0][pos_] = float(l[i] + fb * fbL_);
-            buf_[1][pos_] = float(r[i] + fb * fbR_);
+            double d[4]; // tap delays: L voice, R voice (types 1-3) / LL RL LR RR (type 4)
+            const auto at = [&](double theta) { return std::clamp(base + depth * std::sin(2 * M_PI * (lfoPhase_ - theta)), 0.0, maxD); };
+            if (quad) d[0] = at(0.0), d[1] = at(0.25), d[2] = at(0.5), d[3] = at(0.75);
+            else d[0] = at(0.0), d[1] = at(thetaR);
+            // write first (delays down to 0 read the current input); the comb
+            // adds the tap read now (measured: echoes every base delay, no
+            // extra sample)
+            const auto voices = [&](int line, double inL, double inR, double &wetL, double &wetR) {
+                buf_[line][pos_] = float(inL);
+                buf_[line + 1][pos_] = float(inR);
+                double fbl, fbr;
+                if (quad) {
+                    const double ll = Read(line, d[0]), rl = Read(line + 1, d[1]), lr = Read(line, d[2]), rr = Read(line + 1, d[3]);
+                    wetL = ll + rl, wetR = lr + rr, fbl = ll, fbr = rr;
+                } else {
+                    wetL = fbl = Read(line, d[0]);
+                    wetR = fbr = Read(line + 1, d[1]);
+                }
+                buf_[line][pos_] = float(inL + fb * fbl);
+                buf_[line + 1][pos_] = float(inR + fb * fbr);
+            };
             double wetL, wetR;
-            if (quad) {
-                const double ll = tap(0, 0.0), rl = tap(1, 0.25), lr = tap(0, 0.5), rr = tap(1, 0.75);
-                wetL = ll + rl, wetR = lr + rr, fbL_ = ll, fbR_ = rr;
-            } else {
-                wetL = fbL_ = tap(0, 0.0);
-                wetR = fbR_ = tap(1, thetaR);
+            voices(0, l[i], r[i], wetL, wetR);
+            double outL = l[i] + level * wetL, outR = r[i] + level * wetR;
+            if (echoL) {
+                voices(2, echoL[i], echoR[i], wetL, wetR);
+                outL += wetL, outR += wetR;
             }
             if (++pos_ == size) pos_ = 0;
             lfoPhase_ += inc;
             if (lfoPhase_ >= 1.0) lfoPhase_ -= std::floor(lfoPhase_);
-            l[i] = float(l[i] + level * wetL);
-            r[i] = float(r[i] + level * wetR);
+            l[i] = float(outL);
+            r[i] = float(outR);
         }
     }
 
@@ -274,8 +304,8 @@ public:
 
 private:
     // delay in samples; 0 = the sample just written.
-    double Read(int ch, double delay) const {
-        const std::vector<float> &b = buf_[ch];
+    double Read(int line, double delay) const {
+        const std::vector<float> &b = buf_[line];
         const size_t size = b.size();
         double rp = double(pos_) - delay;
         while (rp < 0) rp += double(size);
@@ -285,9 +315,10 @@ private:
     }
 
     double sr_ = 44100;
-    std::vector<float> buf_[2];
+    std::vector<float> buf_[4]; // L R lines, then the delay echoes' L R
     size_t pos_ = 0;
-    double lfoPhase_ = 0, fbL_ = 0, fbR_ = 0;
+    double lfoPhase_ = 0;
+    bool echoes_ = false;
 };
 
 } // namespace oxo::s2

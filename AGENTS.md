@@ -902,6 +902,12 @@ original AU; keeps both renders for listening).
   180°, R→R 270°; comb feedback 0.99·(fb−64)/64; wet = level/127, dry
   unity. Base delay = WHOLE samples (`Chorus::TimeSamples`, measured
   table at 44.1 kHz, 30 ms at 127; 96 kHz = the same delays rounded).
+  The comb adds the CURRENT tap (echoes every base delay exactly).
+  DELAY + CHORUS both on: the delay's echoes never reach the output
+  directly; they run through the chorus voices only, at UNITY whatever
+  the chorus level (level 0 = echoes chorus-delayed, still full):
+  out = dry + level·chorus(dry) + chorus(echoes) (separate lines, same
+  LFO / taps / feedback). Delay dry = (127 − dw)/63 above 64.
 - EFFECT SECTION (`measure_effect.py`, `measure_effect_time.py`,
   `reference/meta/effect.json`; laws in the EffectUnit comment):
   distortions = drive table → curve → RBJ HP → RBJ LP 400 Hz·40^(ctl2/127)

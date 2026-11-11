@@ -445,10 +445,19 @@ public:
         // (measured, measure_fx_order.py) voices -> effect -> EQ -> delay -> chorus
         if (values_[kEffectOn]) effect_.Process(left, right, frames, values_);
         eq_.Process(left, right, frames, values_);
-        if (values_[kDelayOn]) delay_.Process(left, right, frames, values_, tempo_);
-        else delay_.ClearNow();
-        if (values_[kChorusOn]) chorus_.Process(left, right, frames, values_);
-        else chorus_.Advance(frames, values_);
+        if (values_[kDelayOn] && values_[kChorusOn]) {
+            // (measured) the echoes reach the output through the chorus only
+            for (int pos = 0; pos < frames; pos += kEchoChunk) {
+                const int n = std::min(kEchoChunk, frames - pos);
+                delay_.Process(left + pos, right + pos, n, values_, tempo_, echoL_, echoR_);
+                chorus_.Process(left + pos, right + pos, n, values_, echoL_, echoR_);
+            }
+        } else {
+            if (values_[kDelayOn]) delay_.Process(left, right, frames, values_, tempo_);
+            else delay_.ClearNow();
+            if (values_[kChorusOn]) chorus_.Process(left, right, frames, values_);
+            else chorus_.Advance(frames, values_);
+        }
         if (volume_ != 1.0 || volumeTarget_ != 1.0) { // master volume, linear ramp over the block
             const double step = frames > 0 ? (volumeTarget_ - volume_) / frames : 0.0;
             for (int i = 0; i < frames; ++i) {
@@ -600,6 +609,8 @@ private:
     Lfo lfo_[2];
     TempoDelay delay_;
     Chorus chorus_;
+    static constexpr int kEchoChunk = 256;
+    float echoL_[kEchoChunk] = {}, echoR_[kEchoChunk] = {};
     Equalizer eq_;
     EffectUnit effect_;
     double lfoBuf_[2][kLfoBlock] = {};
