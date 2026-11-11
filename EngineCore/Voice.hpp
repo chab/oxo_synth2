@@ -103,7 +103,9 @@ public:
         gate_ = true;
         const bool stolen = amp_.Active();
         amp_.Configure(sampleRate_, p[kAmpAttack], p[kAmpDecay], p[kAmpSustain], p[kAmpRelease]);
+        amp_.SetQuantized(true);
         amp_.Trigger();
+        ampSince_ = 0, ampLeft_ = 0;
         // (measured) the filter env shares the amp env's laws
         filterEnv_.Configure(sampleRate_, p[kFilterAttack], p[kFilterDecay], p[kFilterSustain], p[kFilterRelease],
                              Adsr::SustainLaw::Linear);
@@ -577,7 +579,7 @@ private:
                 filterOut = filter_.ProcessDiode(mixed);
             }
             const double filtered = Saturate(filterOut, satA);
-            const double env = amp_.Next();
+            const double env = AmpGain(amp_.Next(), pos + i, blockEnd);
             double gainMod = 1.0;
             for (int k = 0; k < r[4].n; ++k) gainMod *= 1.0 - r[4].scale[k] * 0.5 * (1.0 - r[4].v[k][i]);
             const double x = filtered * env * ampGain * gainMod;
@@ -606,6 +608,40 @@ private:
             }
             tail_ = !amp_.Active();
         }
+    }
+
+    // (measured: a locked synced-noise DC through the amp env, whole
+    // seconds) the original's amp env outside the attack is a CONTROL-RATE
+    // gain: at every 256-sample boundary of the host block (the voice end
+    // grid) it takes the envelope's value floored to 1/2048 (11 bits: the
+    // sustain table's grid; 1/2048 = -66 dB, where decays and releases
+    // land), and ramps linearly to the next boundary's. The attack stays per
+    // sample, and so is the first block after a note on (the original
+    // updates every ~1 ms there: kinks at +64, +107, +193, +255 samples from
+    // the note's sub-block); the ramps start at the first grid boundary
+    // 256 samples or more after it. A stage change mid-ramp restarts the
+    // ramp from the current gain. `at` = the sample's offset in the host block.
+    OXO_INLINE double AmpGain(double env, int64_t at, int64_t blockEnd) {
+        const Adsr::Stage stage = amp_.CurrentStage();
+        const bool boundary = (at & 255) == 0;
+        if (ampSince_ < 256) ++ampSince_;
+        if (stage == Adsr::Stage::Attack || stage == Adsr::Stage::Idle || (ampLeft_ <= 0 && (ampSince_ < 256 || !boundary))) {
+            ampStage_ = stage;
+            ampLeft_ = 0;
+            return ampGain_ = env;
+        }
+        if (boundary || stage != ampStage_ || ampLeft_ <= 0) {
+            if (boundary) ampGain_ = std::floor(env * 2048.0) * (1.0 / 2048);
+            ampStage_ = stage;
+            const int64_t n = std::max<int64_t>(1, std::min<int64_t>(256 - (at & 255), blockEnd - at));
+            Adsr ahead = amp_;
+            for (int64_t k = 0; k < n; ++k) ahead.Next();
+            ampStep_ = (std::floor(ahead.Level() * 2048.0) * (1.0 / 2048) - ampGain_) / double(n);
+            ampLeft_ = int(n);
+            return ampGain_;
+        }
+        --ampLeft_;
+        return ampGain_ += ampStep_;
     }
 
     // osc1's shape (0 sine, 1 saw, 2 pulse of duty `width`, 3 tri) at phase ph
@@ -712,6 +748,9 @@ private:
     double detuneRatio_[kDetuneOscs] = {};
     uint32_t noise_ = kNoiseSeed;
     bool tail_ = false; // envelope done, running silent to the block boundary
+    double ampGain_ = 0, ampStep_ = 0; // the control-rate amp gain (AmpGain)
+    int ampLeft_ = 0, ampSince_ = 0;
+    Adsr::Stage ampStage_ = Adsr::Stage::Idle;
 };
 
 } // namespace oxo::s2

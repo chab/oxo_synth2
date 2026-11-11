@@ -749,6 +749,18 @@ original AU; keeps both renders for listening).
   0.4 dB (sync, bar 3 cells at 1.7..2.8) / 0.06 dB (no sync).
 - The "fixed output lowpass" (bilinear one-pole, analog 22 kHz, NO
   prewarp) is NOT per voice: it is the EQ TONE stage at 64 (see EQ).
+- AMP ENV IS A CONTROL-RATE, 11-BIT GAIN outside the attack (measured on
+  a locked synced-noise DC, the cleanest envelope probe there is): at every
+  256-sample boundary of the HOST block grid it takes floor(2048·env)/2048
+  and ramps linearly to the next one (`Voice::AmpGain`); the decay /
+  release are then PLAIN exponentials stopping within 1/2048 of their
+  target (`Adsr::SetQuantized`; the last step holds 1/2048 for ln 2 tau).
+  The first block after a note on is finer (kinks at +64, +107, +193,
+  +255 samples from the note's sub-block, ~1 ms steps: modelled per
+  sample). OPEN: s1's knot sequence is up to 2 % above a pure exponential
+  mid-decay and below it later (decay 62: +2.2 % at -20 dB, -7 % at
+  -43 dB): not a fixed tau; the exact law is unknown. A d.d. with high
+  drive amplifies these -60..-90 dB steps by ~40 dB (Kaiyoti 027's tail).
 - Amp env: linear attack 0.5 ms·2^(v/8.05); decay/release exponential
   tau table (same law); sustain = curved table. Filter env = same times,
   LINEAR sustain. Velocity: dB = -15 (sens/64)(127-vel)/126.

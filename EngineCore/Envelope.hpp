@@ -31,6 +31,11 @@ public:
         releaseCoef_ = 1.0 - std::exp(-1.0 / (tables::kEnvTauSeconds[release] * sampleRate));
         sustain_ = law == SustainLaw::Amp ? tables::kAmpSustainLevel[sustain] : sustain / 127.0;
     }
+    // Quantized (the amp env, see Voice::AmpGain): decay / release run as
+    // plain exponentials and stop within 1/2048 of their target, where the
+    // 11-bit gain lands on it (measured: the last steps hold 1/2048 for
+    // ln 2 tau, a pure exponential's). Otherwise they aim 1/2048 below.
+    void SetQuantized(bool q) { aim_ = q ? 0.0 : kAim, stop_ = q ? kAim : 0.0; }
 
     void Trigger() { stage_ = Stage::Attack; }
     void ReleaseNote() {
@@ -45,6 +50,7 @@ public:
     bool Releasing() const { return stage_ == Stage::Release; }
     bool Attacking() const { return stage_ == Stage::Attack; }
     double Level() const { return level_; }
+    Stage CurrentStage() const { return stage_; }
 
     OXO_INLINE double Next() {
         switch (stage_) {
@@ -60,12 +66,12 @@ public:
         // their target and stop on it: they land in finite time (a decay
         // to sustain 0 = silent but still held; a release = the end)
         case Stage::Decay:
-            level_ += (sustain_ - kAim - level_) * decayCoef_;
-            if (level_ <= sustain_) level_ = sustain_;
+            level_ += (sustain_ - aim_ - level_) * decayCoef_;
+            if (level_ <= sustain_ + stop_) level_ = sustain_;
             break;
         case Stage::Release:
-            level_ += (-kAim - level_) * releaseCoef_;
-            if (level_ <= 0) Reset();
+            level_ += (-aim_ - level_) * releaseCoef_;
+            if (level_ <= stop_) Reset();
             break;
         }
         return level_;
@@ -84,7 +90,7 @@ private:
 
     Stage stage_ = Stage::Idle;
     double level_ = 0;
-    double attackStep_ = 1, decayCoef_ = 1, releaseCoef_ = 1, sustain_ = 1;
+    double attackStep_ = 1, decayCoef_ = 1, releaseCoef_ = 1, sustain_ = 1, aim_ = kAim, stop_ = 0;
 };
 
 } // namespace oxo::s2
