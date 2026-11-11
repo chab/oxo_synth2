@@ -434,6 +434,11 @@ public:
     bool PatchChanging() const { return switch_ != Switch::None; }
 
     void Render(float *left, float *right, int frames) {
+        if (frames > kMaxRender) { // (the LFO pan gains' buffer)
+            for (int pos = 0; pos < frames; pos += kMaxRender)
+                Render(left + pos, right + pos, std::min(kMaxRender, frames - pos));
+            return;
+        }
         FlushNoteOns();
         const simd::ScopedNoDenormals noDenormals;
         std::fill(left, left + frames, 0.0f);
@@ -442,6 +447,7 @@ public:
         // trunc((v - 8192) / 128) clamped to +-63, / 63 = the full range
         const double bendSemis = std::clamp(bend_ / 128, -63, 63) / 63.0 * values_[kBendRange];
         int toArp = ArpAdvance(0);
+        bool panLfo = false;
         for (int pos = 0, n = 0; pos < frames; pos += n) {
             n = std::min({kLfoBlock, frames - pos, toArp});
             const double *lfo[2] = {nullptr, nullptr};
@@ -466,10 +472,12 @@ public:
                 v.Render(left + pos, right + pos, n, blockPos_ + pos, blockEnd_, values_, bendSemis, lfo, lfoSteps, cutoffStart,
                          cutoffStep);
             if (switch_ != Switch::None) SwitchFade(left + pos, right + pos, n);
+            panLfo = LfoPanGains(pos, n, lfo);
             toArp = ArpAdvance(n);
         }
-        // (measured, measure_fx_order.py) voices -> effect -> EQ -> delay -> chorus
+        // (measured, measure_fx_order.py) voices -> effect -> pan -> EQ -> delay -> chorus
         if (values_[kEffectOn]) effect_.Process(left, right, frames, values_);
+        Pan(left, right, frames, panLfo);
         eq_.Process(left, right, frames, values_);
         if (values_[kDelayOn] && values_[kChorusOn]) {
             // (measured) the echoes reach the output through the chorus only
@@ -561,6 +569,45 @@ private:
         return step;
     }
 
+    // (measured, pan with each effect type, delay / chorus types that cross
+    // the channels) the patch pan and the LFOs on pan act on the voice mix
+    // AFTER the effect, before the delay and chorus: an effect sees the
+    // centred mix, both channels = its output times the pan gains (only the
+    // unison spread pans before it, Voice). Patch pan q = (pan - 64) / 64
+    // below the centre, / 63 above, balance gains (centre 1/1, hard side
+    // 1/0). LFO -> position q = 1 - (1 - s)^3 for s = depth / 127 * lfo >= 0
+    // (odd, + = left, both LFOs: s = the depth-weighted sum, unclamped:
+    // 127 + 127 -> gains 2 / -1), gains toward side 1 + |q| / 2, away side
+    // 1 - |q|; the two gains multiply.
+    // The LFOs' gains for the chunk at pos (the effect runs on the whole
+    // block first); false = no LFO on pan.
+    bool LfoPanGains(int pos, int n, const double *const lfo[2]) {
+        const double *v[2];
+        double scale[2];
+        int routes = 0;
+        for (int k = 0; k < 2; ++k)
+            if (Voice::LfoDest(values_, lfo, k) == 7) v[routes] = lfo[k], scale[routes++] = values_[k ? kLfo2Depth : kLfo1Depth] / 127.0;
+        for (int i = 0; i < n && routes; ++i) {
+            double s = 0;
+            for (int k = 0; k < routes; ++k) s += scale[k] * v[k][i];
+            // (the cube by hand: a pow call here, even never taken, cost the loop ~40 instructions)
+            const double u = 1.0 - std::fabs(s), cube = u * u * u;
+            const double q = s >= 0 ? 1.0 - cube : cube - 1.0;
+            panGain_[0][pos + i] = float(q >= 0 ? 1.0 + 0.5 * q : 1.0 + q);
+            panGain_[1][pos + i] = float(q >= 0 ? 1.0 - q : 1.0 - 0.5 * q);
+        }
+        return routes > 0;
+    }
+    void Pan(float *left, float *right, int n, bool lfo) const {
+        const double q = (values_[kPan] - 64) / (values_[kPan] < 64 ? 64.0 : 63.0);
+        const double pl = std::min(1.0, 1.0 - q), pr = std::min(1.0, 1.0 + q);
+        if (!lfo && q == 0) return;
+        for (int i = 0; i < n; ++i) {
+            left[i] = float(left[i] * (lfo ? pl * panGain_[0][i] : pl));
+            right[i] = float(right[i] * (lfo ? pr * panGain_[1][i] : pr));
+        }
+    }
+
     // Patch switch fade on one render chunk: ramp x (gain = smoothstep(x)),
     // stage changes at chunk ends.
     void SwitchFade(float *left, float *right, int n) {
@@ -641,6 +688,8 @@ private:
     float echoL_[kEchoChunk] = {}, echoR_[kEchoChunk] = {};
     Equalizer eq_;
     EffectUnit effect_;
+    static constexpr int kMaxRender = 4096; // longer Render calls run in pieces
+    float panGain_[2][kMaxRender] = {};
     double lfoBuf_[2][kLfoBlock] = {};
     int32_t lfoSteps_[2][kLfoBlock] = {};
     Rng rng_;

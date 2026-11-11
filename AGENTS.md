@@ -914,6 +914,12 @@ original AU; keeps both renders for listening).
   stack voice glides from its own last pitch (PORTAMENTO).
 - Pan: patch pan q = (v-64)/64 below the centre, /63 above; balance gains
   (centre 1/1, hard side 1/0); patch pan × unison spread gains MULTIPLY.
+  The patch pan AND the LFOs on pan act AFTER THE EFFECT (`Synth::Pan`),
+  before the delay / chorus (their crossing types carry a hard-left pan
+  to the right); only the unison spread pans per voice, before it. Every
+  effect type: L and R = the effect's output x the pan gains exactly
+  (2026-11-11; before, a d.d. folded a 3 % pan difference into two
+  uncorrelated channels: Kaiyoti 027 / 069 spec 4..5 dB -> 0.5).
 - Delay TIMES are WHOLE samples (single-tap IRs, identical-noise trick,
   44.1 / 96 kHz, tempos 60..200): division × beat rounded DOWN to a
   multiple of 4 samples, + the spread offset floored, at least
@@ -924,7 +930,7 @@ original AU; keeps both renders for listening).
   in the echo path, 64 = none, < 64 LP 200 Hz·110^(t/63) (22 kHz at 63),
   > 64 HP 10 Hz .. 8 kHz.
 - Arp gate 0 = silent.
-- Chain order (`measure_fx_order.py`): voices → effect → EQ → delay →
+- Chain order (`measure_fx_order.py`): voices → effect → pan → EQ → delay →
   chorus.
 - EQ (`check_eq.py`: every tone / freq / level / Q case within 0.06 dB):
   TONE (`measure_eq_tone.py`, `kEqToneHz`) = one bilinear one-pole, no
@@ -1006,6 +1012,11 @@ original AU; keeps both renders for listening).
 - Approximations marked `TODO(measure)` in code: a.d.1 exact structure,
   arp random sequence (+ S&H / smooth LFO: not the original's PRNG), LPDL
   resonance frequency near the top cutoffs.
+- Seen 2026-11-11, not investigated (`s1.patch` sine, key 45): delay type
+  1 at pan 0 (hard left), time 8, feedback 80: R -24.5 dB in the
+  original, -28.6 ours (types 0 / 2 match); comp. + 8-voice unison spread
+  127: original L -9.4 / R -9.1 dB, ours -7.8 / -11.1 (its detector or
+  gain is not the linked mean we model, or the spread acts after it).
 - Random sequences (arp random, S&H / smooth LFO): not identified. Leads:
   S&H read through LFO -> pitch is quantized to whole steps (useless), through
   LFO -> amp it sits on a 1/1024 grid; the two destinations gave

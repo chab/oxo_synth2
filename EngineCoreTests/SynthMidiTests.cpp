@@ -169,6 +169,41 @@ OXO_TEST(UnisonPanSpreadDirectionAndPatchPan) {
     OXO_EXPECT(right < 1e-9);
 }
 
+// (measured) the patch pan and an LFO on pan act AFTER the effect: a d.d.
+// folds the centred signal once, the two channels are that output times the
+// pan gains (panned before the fold, a 3 % level difference decorrelated them).
+OXO_TEST(PanActsAfterTheEffect) {
+    for (const bool lfo : {false, true}) {
+        Synth s;
+        s.SetSampleRate(44100);
+        s.SetParam(kOsc1Shape, 0);
+        s.SetParam(kOscMix, 0);
+        s.SetParam(kEffectOn, 1);
+        s.SetParam(kEffectType, 2);
+        s.SetParam(kEffectCtrl1, 64);
+        s.SetParam(kPan, lfo ? 64 : 62);
+        if (lfo) {
+            s.SetParam(kLfo1On, 1);
+            s.SetParam(kLfo1Dest, 7);
+            s.SetParam(kLfo1Type, 5);
+            s.SetParam(kLfo1Speed, 70);
+            s.SetParam(kLfo1Depth, 100);
+        }
+        std::vector<float> l(22050), r(22050);
+        s.NoteOn(45, 127);
+        s.Render(l.data(), r.data(), 22050);
+        // per 64-sample window: r = g l, the residue against r's power
+        double res = 0, total = 0;
+        for (size_t a = 4096; a + 64 <= l.size(); a += 64) {
+            double lr = 0, ll = 0;
+            for (size_t i = a; i < a + 64; ++i) lr += double(l[i]) * r[i], ll += double(l[i]) * l[i];
+            const double g = ll > 0 ? lr / ll : 0;
+            for (size_t i = a; i < a + 64; ++i) res += (r[i] - g * l[i]) * (r[i] - g * l[i]), total += double(r[i]) * r[i];
+        }
+        OXO_EXPECT(total > 0 && res < 1e-3 * total);
+    }
+}
+
 // (measured) a unison chord over the polyphony keeps its FIRST notes: a stack
 // never steals from a note started at the same time.
 OXO_TEST(UnisonChordKeepsFirstNotes) {

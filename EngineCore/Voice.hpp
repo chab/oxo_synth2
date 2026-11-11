@@ -208,7 +208,6 @@ public:
         }
     }
 
-private:
     // LFO k's destination (1..7), 0 = no route. (measured, bend on a step +
     // a square LFO on pitch) depth 0 = no modulation at all, whatever the
     // destination: no route
@@ -216,6 +215,7 @@ private:
         return lfo[k] && p[k ? kLfo2Depth : kLfo1Depth] > 0 ? std::clamp<int>(p[k ? kLfo2Dest : kLfo1Dest], 1, 7) : 0;
     }
 
+private:
     // The per-sample loop is compiled once per case (RenderChunkAs), so each
     // holds only what its case computes: with every feature as a run-time
     // test it carried twice the instructions (and live values to spill).
@@ -381,24 +381,19 @@ private:
         static constexpr double kFastStepLimit = 0.9;
 
         // (measured, key-synced square LFO: measure_lfo_keysync.py /
-        // measure_lfo_cutoff.py) cutoff, amp and pan are UNIPOLAR, u =
+        // measure_lfo_cutoff.py) cutoff and amp are UNIPOLAR, u =
         // (lfo + 1) / 2 (linear in between assumed):
         // cutoff -> pulled toward knob 125 by (depth / 127) * u;
         // amp    -> gain 1 - (depth / 127) * (1 - u);
-        // pan    -> position q = 1 - (1 - s)^3 for s = depth / 127 * lfo >= 0
-        //           (odd), gains toward side 1 + |q| / 2, away side 1 - |q|.
         // pw     -> (measured, measure_lfo_pw.py) the low-part duty moves toward
         //           1 (lfo > 0) or 0 (lfo < 0) by depth / 127 * |lfo| of the
         //           room left on that side: never wraps, +-0.5 for a square.
+        // (pan: after the effect, Synth::Pan)
 
         // balance law (measured on unison spread): centre 1/1, hard side 1/0.
-        // (measured, check_unison.py) patch pan (q = (pan - 64) / 64 below
-        // the centre, / 63 above) and the unison spread MULTIPLY their gains.
-        double panL = 1, panR = 1;
-        for (const double q : {(p[kPan] - 64) / (p[kPan] < 64 ? 64.0 : 63.0), unisonPan_}) {
-            panL *= std::min(1.0, 1.0 - q);
-            panR *= std::min(1.0, 1.0 + q);
-        }
+        // (measured, check_unison.py) the patch pan (Synth::Pan, after the
+        // effect) MULTIPLIES its gains with the unison spread's.
+        const double panL = std::min(1.0, 1.0 - unisonPan_), panR = std::min(1.0, 1.0 + unisonPan_);
 
         // ---- the oscillators' per-sample modulation, computed ahead for the
         // chunk: osc1 / osc2 steps, pulse width, FM index, each in its own
@@ -584,17 +579,8 @@ private:
             for (int k = 0; k < r[4].n; ++k) gainMod *= 1.0 - r[4].scale[k] * 0.5 * (1.0 - r[4].v[k][i]);
             const double x = filtered * env * ampGain * gainMod;
             const double y = x; // (the original's 22 kHz output lowpass = the EQ tone stage)
-            double gl = panL, gr = panR;
-            if (r[7]) {
-                const double s = r[7].Signed(i); // + = left; unclamped (measured: 127 + 127 -> gains 2 / -1)
-                // (the cube by hand: a pow call here, even never taken, cost the loop ~40 instructions)
-                const double u = 1.0 - std::fabs(s), cube = u * u * u;
-                const double q = s >= 0 ? 1.0 - cube : cube - 1.0;
-                gl *= q >= 0 ? 1.0 + 0.5 * q : 1.0 + q;
-                gr *= q >= 0 ? 1.0 - q : 1.0 - 0.5 * q;
-            }
-            left[i] += float(y * gl);
-            right[i] += float(y * gr);
+            left[i] += float(y * panL);
+            right[i] += float(y * panR);
             if (!amp_.Active() && (((pos + i + 1) & 255) == 0 || pos + i + 1 >= blockEnd)) {
                 tail_ = false;
                 // the voice ends here: the mod env stops with it (it ran ahead)
