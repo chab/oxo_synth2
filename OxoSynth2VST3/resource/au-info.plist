@@ -36,7 +36,7 @@
 			<key>type</key>
 			<string>aumu</string>
 			<key>version</key>
-			<integer>65797</integer>
+			<integer>@OXO_AU_VERSION@</integer>
 		</dict>
 	</array>
 </dict>

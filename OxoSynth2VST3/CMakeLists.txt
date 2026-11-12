@@ -24,6 +24,18 @@ endforeach()
 set(OXO_MARKETING_VERSION ${MARKETING_VERSION})
 set(OXO_BUILD_NUMBER ${CURRENT_PROJECT_VERSION})
 string(REPLACE " " "" OXO_VST3_PACKAGE_NAME "${OXO_PRODUCT_NAME}")
+
+# The AU AudioComponents "version" integer: major*65536 + minor*256 + patch
+# (65536 = 1.0). Derived from MARKETING_VERSION so a fork's AU does not
+# advertise the official product's version.
+string(REGEX MATCH "^([0-9]+)\\.([0-9]+)(\\.([0-9]+))?$" OXO_UNUSED "${OXO_MARKETING_VERSION}")
+set(OXO_AU_VERSION_PATCH 0)
+if(NOT "${CMAKE_MATCH_4}" STREQUAL "")
+    set(OXO_AU_VERSION_PATCH ${CMAKE_MATCH_4})
+endif()
+math(EXPR OXO_AU_VERSION "${CMAKE_MATCH_1} * 65536 + ${CMAKE_MATCH_2} * 256 + ${OXO_AU_VERSION_PATCH}"
+    OUTPUT_FORMAT DECIMAL)
+
 foreach(OXO_UID PROCESSOR CONTROLLER)
     string(REGEX REPLACE "([0-9A-Fa-f]+)" "0x\\1," OXO_TEXT "${OXO_VST3_${OXO_UID}_UID}")
     string(REGEX REPLACE ",$" "" OXO_VST3_${OXO_UID}_UID_WORDS "${OXO_TEXT}")

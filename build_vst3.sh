@@ -44,7 +44,7 @@ rm -rf "$PLUGIN_SRC/Contents/Resources/Synth2 Factory" "$PLUGIN_SRC/Contents/Res
 
 echo "==> Building (Release)"
 cmake --build "$BUILD_DIR" --config Release -j 8 > "$BUILD_DIR.build.log" 2>&1 \
-  || { grep -E "error:|BUILD FAILED" "$BUILD_DIR.build.log" | head -30; exit 1; }
+  || { grep -aE "error:|BUILD FAILED" "$BUILD_DIR.build.log" | head -30; exit 1; }
 
 [[ -d "$PLUGIN_SRC" ]] || { echo "ERROR: built plugin not found at $PLUGIN_SRC" >&2; exit 1; }
 if [[ $INSTALL -eq 0 ]]; then
@@ -59,5 +59,20 @@ echo "==> Installed $PLUGIN_DST_DIR/$(basename "$PLUGIN_SRC")"
 if [[ -d "$AUV2_SRC" ]]; then
   mkdir -p "$AUV2_DST_DIR"
   rsync -a --delete "$AUV2_SRC" "$AUV2_DST_DIR/"
-  echo "==> Installed $AUV2_DST_DIR/$PRODUCT_NAME.component"
+  # AUv2 loads its DSP from Contents/Resources/plugin.vst3, a SYMLINK into the
+  # build tree. rsync copies the link as is, so the installed AU would break
+  # the moment this checkout moves: replace it with the real bundle (what
+  # tools/prepare_mac_installer does for the pkg, and what the code seal wants).
+  AUV2_INNER="$AUV2_DST/Contents/Resources/plugin.vst3"
+  if [[ -L "$AUV2_INNER" ]]; then
+    rm -f "$AUV2_INNER"
+    rsync -a --exclude '.DS_Store' "$PLUGIN_SRC/" "$AUV2_INNER/"
+    # Sealing an added resource invalidates the component's signature, so sign
+    # inner-out again (adhoc: a dev install is not a release), like
+    # tools/prepare_mac_installer does with the real identity.
+    codesign --force --sign - "$AUV2_INNER"
+    codesign --force --sign - "$AUV2_DST"
+    echo "==> Replaced the AU's plugin.vst3 symlink with a real, signed copy"
+  fi
+  echo "==> Installed $AUV2_DST"
 fi
