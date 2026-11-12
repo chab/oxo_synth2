@@ -34,6 +34,8 @@ public protocol SynthHost: AnyObject {
     /// Bumps whenever the bank list changes, 0 = never scanned.
     var libraryRevision: Int { get }
     var libraryScanning: Bool { get }
+    /// banks streamed into the browser so far, their patches, banks expected
+    var libraryScanProgress: (banks: Int, patches: Int, total: Int) { get }
     /// "X.zip imported and moved to Trash" since the last call, "" = none.
     func libraryNotice() -> String
     var libraryRoot: String { get }
@@ -52,9 +54,31 @@ public protocol SynthHost: AnyObject {
     /// Browser > Export bank: copies the bank as a new folder into `dir`;
     /// returns that folder, "" = failed.
     func exportBank(_ bank: Int, to dir: String) -> String
-    /// Copies into the library and rescans; newline-separated paths in,
-    /// the new top-level folders out.
-    func importItems(_ paths: String) -> [String]
+    /// Copies into the library and rescans; newline-separated paths in.
+    func importItems(_ paths: String) -> ImportOutcome
+    /// Categories, favourites, tags (EngineCore/PatchCategories.hpp).
+    /// Records are keyed by the patch's bytes, so the marks follow a patch
+    /// through renames, imports and a new setup.
+    /// `category` = index into `categoryNames`, -1 = back to the name rule.
+    func setPatchCategory(bank: Int, slot: Int, category: Int)
+    func setPatchFavourite(bank: Int, slot: Int, on: Bool)
+    func addPatchTag(bank: Int, slot: Int, tag: String)
+    func removePatchTag(bank: Int, slot: Int, tag: String)
+    /// A patch's colour: the .sy1's own `color=` line, so it travels with
+    /// the file. Rewrites it; false = refused (factory bank) or failed.
+    @discardableResult
+    func setPatchColor(bank: Int, slot: Int, color: String) -> Bool
+    /// The whole store as JSON -> `path`, true = written.
+    func exportTags(_ path: String) -> Bool
+    /// Merges a store file into ours (marks we already have win, so a new
+    /// setup never loses its own work), then rescans. -1 = unreadable.
+    func importTags(_ path: String) -> Int
+    /// Tags in use, one per line, "" = none yet.
+    func tagVocabulary() -> String
+    /// Patches whose file bytes are identical, across every bank:
+    /// "groups=N" then one line per group of "bank,slot" tokens.
+    /// "" = the library is still loading.
+    func findDuplicates() -> String
     /// MIDI learn: plugin-global table (0 = not learned) and the latest
     /// "a CC arrived" token ((counter << 7) | cc, 0 = none yet).
     func midiCC(_ id: Int) -> Int
@@ -86,6 +110,22 @@ final class VoiceActivity: ObservableObject {
     @Published fileprivate(set) var states: UInt64 = 0
 }
 
+/// One flag, tolerant of both `true`/`false` and `0`/`1`. The engine emits
+/// booleans; documents written by older builds held numbers, and a decode
+/// failure there used to blank the entire browser.
+private struct LooseBit: Decodable {
+    let value: Bool
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if let flag = try? c.decode(Bool.self) {
+            value = flag
+        } else {
+            value = try c.decode(Int.self) != 0
+        }
+    }
+}
+
 /// One bank = a folder of the library, 128 program slots ("" = empty),
 /// Synth1's numbering.
 struct PatchBankInfo: Decodable, Identifiable, Equatable {
@@ -94,31 +134,144 @@ struct PatchBankInfo: Decodable, Identifiable, Equatable {
     let slots: [String]
     /// The factory bank (plugin bundle): no write / move / delete.
     let readOnly: Bool
+    /// Type, per slot (index into `LibraryInfo.categoryNames`). Derived
+    /// from the patch name, or whatever the user set.
+    let categories: [Int]
+    let favourites: [Bool]
+    /// User tags per slot, already normalised / sorted by the engine.
+    let tags: [[String]]
+    /// Per slot, the .sy1's own `color=` line ("default" = untinted).
+    let colors: [String]
     var id: String { source }
 
-    private enum CodingKeys: String, CodingKey { case name, source, slots, readOnly }
+    private enum CodingKeys: String, CodingKey { case name, source, slots, readOnly, cats, favs, tags, colors }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
         source = try c.decode(String.self, forKey: .source)
         slots = try c.decode([String].self, forKey: .slots)
         readOnly = try c.decodeIfPresent(Bool.self, forKey: .readOnly) ?? false
+        // Parallel to `slots`, so they index alike; a missing array (an
+        // older document) simply means "Unclassified, unstarred, no tags".
+        categories = try c.decodeIfPresent([Int].self, forKey: .cats) ?? []
+        favourites = try c.decodeIfPresent([LooseBit].self, forKey: .favs)?.map(\.value) ?? []
+        tags = try c.decodeIfPresent([[String]].self, forKey: .tags) ?? []
+        colors = try c.decodeIfPresent([String].self, forKey: .colors) ?? []
     }
+
     var count: Int { slots.filter { !$0.isEmpty }.count }
+
+    func category(_ slot: Int) -> Int { slot < categories.count ? categories[slot] : 0 }
+    func isFavourite(_ slot: Int) -> Bool { slot < favourites.count && favourites[slot] }
+    func tags(_ slot: Int) -> [String] { slot < tags.count ? tags[slot] : [] }
+    func color(_ slot: Int) -> String { slot < colors.count ? colors[slot] : "default" }
 }
 
 private struct LibraryInfo: Decodable {
     let root: String
+    let categoryNames: [String]
+    let tagVocab: [String]
     let banks: [PatchBankInfo]
+
+    private enum CodingKeys: String, CodingKey { case root, catNames, tagVocab, banks }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        root = try c.decodeIfPresent(String.self, forKey: .root) ?? ""
+        categoryNames = try c.decodeIfPresent([String].self, forKey: .catNames) ?? []
+        tagVocab = try c.decodeIfPresent([String].self, forKey: .tagVocab) ?? []
+        banks = try c.decode([PatchBankInfo].self, forKey: .banks)
+    }
+
+    /// Name for a `cats` value ("Unclassified" when out of range).
+    func categoryName(_ category: Int) -> String {
+        category >= 0 && category < categoryNames.count ? categoryNames[category] : "Unclassified"
+    }
 }
 
 /// File dialogs the panel presents (NSOpenPanel / NSSavePanel on mac, the
-/// system file importer / exporter on iPad). `importFolder`: the iPad's
-/// folder picker (the mac's Import… panel takes both, `importBanks`);
-/// `exportBank`: pick the folder that receives the bank (its id).
+/// system file importer / exporter on iPad). `importFolder`: pick bank
+/// folders, `importBanks`: pick files (zips / .sy1) - two panels, because
+/// one panel taking folders and files hits neither well; `exportBank`:
+/// pick the folder that receives the bank (its id).
 enum FileAction: Equatable {
     case importBanks, importFolder, loadPatch, savePatch
     case exportBank(String)
+    /// The portable categories / tags file (categories.json).
+    case exportTags, importTags
+}
+
+/// What one Import… answered (EngineCore/PatchLibrary.hpp `ImportResult`,
+/// via the hook's newline payload): the folders created with their patch
+/// counts, a total, and why anything was left out.
+public struct ImportOutcome: Equatable {
+    public struct Added: Equatable {
+        public let path: String
+        public let patches: Int
+    }
+    public var added: [Added] = []
+    public var patches = 0
+    public var refused: [String] = []
+    public var isEmpty: Bool { added.isEmpty }
+
+    /// Decodes `patches=N` / `+<n> <folder>` / `!<path>: <reason>` lines.
+    /// A bare list of folders (an older host) still reads as "added".
+    public init(payload: String) {
+        for line in payload.split(separator: "\n", omittingEmptySubsequences: true) {
+            if line.hasPrefix("patches=") {
+                patches = Int(line.dropFirst(8)) ?? 0
+            } else if line.hasPrefix("+") {
+                let rest = line.dropFirst()
+                let count = Int(rest.prefix { $0.isNumber }) ?? 0
+                let path = rest.drop { $0.isNumber || $0 == " " }
+                if !path.isEmpty { added.append(Added(path: String(path), patches: count)) }
+            } else if line.hasPrefix("!") {
+                refused.append(String(line.dropFirst()))
+            } else if !line.isEmpty {
+                added.append(Added(path: String(line), patches: 0))
+            }
+        }
+        if patches == 0 { patches = added.reduce(0) { $0 + $1.patches } }
+    }
+}
+
+/// One set of patches whose file BYTES are identical
+/// (`PatchManager::FindDuplicates`): only where each member sits, since
+/// names and colours come from the bank list, so a group stays valid
+/// across a rescan.
+public struct DuplicateGroup: Equatable, Identifiable {
+    public struct Member: Equatable, Hashable {
+        public let bank: Int
+        public let slot: Int
+    }
+
+    public var members: [Member]
+
+    public var id: String {
+        members.map { "\($0.bank),\($0.slot)" }.joined(separator: " ")
+    }
+
+    /// Decodes "groups=N" + one line of "bank,slot" tokens per group. A
+    /// malformed token drops its whole group rather than half of one.
+    public static func groups(payload: String) -> [DuplicateGroup] {
+        var out: [DuplicateGroup] = []
+        for line in payload.split(separator: "\n", omittingEmptySubsequences: true) {
+            if line.hasPrefix("groups=") { continue }
+            let tokens = line.split(whereSeparator: { $0 == " " || $0 == "," })
+            guard tokens.count >= 4, tokens.count % 2 == 0 else { continue }
+            var members: [Member] = []
+            var malformed = false
+            for i in stride(from: 0, to: tokens.count, by: 2) {
+                guard let bank = Int(tokens[i]), let slot = Int(tokens[i + 1]),
+                      bank >= 0, slot >= 0 else {
+                    malformed = true
+                    break
+                }
+                members.append(Member(bank: bank, slot: slot))
+            }
+            if !malformed { out.append(DuplicateGroup(members: members)) }
+        }
+        return out
+    }
 }
 
 /// Editor state mirrored from the host by a 30 Hz poll (host automation,
@@ -136,8 +289,79 @@ final class SynthModel: ObservableObject {
     @Published private(set) var patchName: String
     @Published private(set) var banks: [PatchBankInfo] = []
     @Published private(set) var libraryRoot = ""
+    /// Category names the engine's `cats` values index into.
+    @Published private(set) var categoryNames: [String] = []
+    /// Every tag in use, sorted (tag dialog's suggestions).
+    @Published private(set) var tagVocabulary: [String] = []
+    /// Browser search text (patch / bank name, category, tags).
+    @Published var librarySearch = ""
+    /// Browser filter: a category index, `favouritesOnly` or nil = all.
+    @Published var categoryFilter: Int?
+    @Published var favouritesOnly = false
+
+    // MARK: - browser filter
+
+    var hasActiveFilter: Bool {
+        categoryFilter != nil || favouritesOnly
+            || !librarySearch.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    func clearLibraryFilter() {
+        categoryFilter = nil
+        favouritesOnly = false
+        librarySearch = ""
+    }
+
+    /// Patches of a given type (decides which chips are worth showing).
+    func categoryCount(_ category: Int) -> Int {
+        banks.reduce(0) { total, bank in
+            total + bank.slots.indices.reduce(0) { inner, slot in
+                inner + (!bank.slots[slot].isEmpty && bank.category(slot) == category ? 1 : 0)
+            }
+        }
+    }
+
+    /// A slot passes search text + type + star. The bank's name takes part
+    /// in the text match, so "chill" finds a whole bank's patches too.
+    func slotMatches(bank: Int, slot: Int) -> Bool {
+        guard bank >= 0, bank < banks.count, slot >= 0, slot < banks[bank].slots.count,
+              !banks[bank].slots[slot].isEmpty else { return false }
+        let info = banks[bank]
+        if favouritesOnly && !info.isFavourite(slot) { return false }
+        if let category = categoryFilter, info.category(slot) != category { return false }
+        let needle = librarySearch.trimmingCharacters(in: .whitespaces).lowercased()
+        if needle.isEmpty { return true }
+        if info.slots[slot].lowercased().contains(needle) { return true }
+        if info.name.lowercased().contains(needle) { return true }
+        if categoryName(info.category(slot)).lowercased().contains(needle) { return true }
+        return info.tags(slot).contains { $0.lowercased().contains(needle) }
+    }
+
+    /// Patches of a bank that pass the filter (0 dims the row while one is on).
+    func matchCount(bank: Int) -> Int {
+        guard bank >= 0, bank < banks.count else { return 0 }
+        guard hasActiveFilter else { return banks[bank].count }
+        return banks[bank].slots.indices.reduce(0) { $0 + (slotMatches(bank: bank, slot: $1) ? 1 : 0) }
+    }
     /// A background rescan is running (the browser says "loading…").
     @Published private(set) var libraryLoading = false
+    /// How much of the library the running (or last) scan has delivered:
+    /// banks streamed in, their patches, banks the scan expects. The browser
+    /// shows a bar and keeps the streamed banks usable meanwhile.
+    @Published private(set) var libraryScan = (banks: 0, patches: 0, total: 0)
+    /// Fraction 0...1 for the progress bar (1 when no scan is running).
+    var libraryScanFraction: Double {
+        let total = max(libraryScan.total, libraryScan.banks, 1)
+        return libraryLoading ? min(1, Double(libraryScan.banks) / Double(total)) : 1
+    }
+    /// Last Import… result, shown in the browser header for a few seconds
+    /// (the LCD is behind the browser).
+    @Published private(set) var importNotice: String?
+    private var importNoticeHide: Date?
+    /// Why the last `loadLibrary` could not read the engine's JSON. A
+    /// decode failure is a bug, not an empty library: say so instead of
+    /// leaving the browser looking like it has no banks.
+    @Published private(set) var libraryError: String?
     /// `host.libraryRevision` of `banks`.
     private var libraryRevision = 0
     /// Bank shown in the browser / LCD, and the loaded program slot.
@@ -155,6 +379,12 @@ final class SynthModel: ObservableObject {
     /// Browser > Delete bank…: the bank (id) awaiting the in-browser
     /// confirmation, nil = none.
     @Published var bankToDelete: String?
+    /// Browser > Edit tags…: the slot whose category / star / tags the
+    /// in-browser dialog edits, nil = none.
+    @Published var tagEdit: (bank: Int, slot: Int)?
+    /// Browser > Find duplicates…: the groups reported, nil = dialog
+    /// closed. `[]` = the dialog is open showing "none found".
+    @Published var duplicateGroups: [DuplicateGroup]?
     @Published var fileAction: FileAction?
     /// The in-panel Themes dialog (menu > Themes…).
     @Published var showThemes = false
@@ -267,6 +497,7 @@ final class SynthModel: ObservableObject {
         }
         let loading = host.libraryScanning
         if loading != libraryLoading { libraryLoading = loading }
+        if loading { libraryScan = host.libraryScanProgress }
         let voiceStates = host.voiceStates
         if voiceStates != voices.states { voices.states = voiceStates }
         let now = Date()
@@ -277,6 +508,10 @@ final class SynthModel: ObservableObject {
         if let hide = readoutHide, hide <= now {
             readoutHide = nil
             readout = nil
+        }
+        if let hide = importNoticeHide, hide <= now {
+            importNoticeHide = nil
+            importNotice = nil
         }
         // a session restore may bring the other mode
         if let mode = uiWidthModeStorage?.get(), mode != uiWidthMode { uiWidthMode = mode }
@@ -412,14 +647,32 @@ final class SynthModel: ObservableObject {
         let keep = currentBank.flatMap { $0 < banks.count ? banks[$0] : nil }
         if rescan { host.rescanLibrary() }
         libraryRevision = host.libraryRevision // before the JSON: a scan adopted by this read is in it
-        guard let data = host.libraryJSON().data(using: .utf8),
-              let info = try? JSONDecoder().decode(LibraryInfo.self, from: data) else { return }
+        guard let data = host.libraryJSON().data(using: .utf8) else { return }
+        let info: LibraryInfo
+        do {
+            info = try JSONDecoder().decode(LibraryInfo.self, from: data)
+        } catch {
+            // Never let this be a silent no-op: a decode failure here used
+            // to leave `banks` empty and look exactly like an empty library.
+            libraryError = Self.describe(error: error)
+            flash("LIBRARY: \(libraryError!)", seconds: 10)
+            return
+        }
+        libraryError = nil
         banks = info.banks
         libraryRoot = info.root
+        categoryNames = info.categoryNames
+        tagVocabulary = info.tagVocab
         let notice = host.libraryNotice()
         if !notice.isEmpty { flash(notice, seconds: 10) }
+        // A streamed list holds only the banks scanned so far, so the bank on
+        // screen can be missing because its turn has not come yet. Keep
+        // waiting for it (nothing selected meanwhile) rather than jumping to
+        // bank 0 and back.
         if let keep, let i = banks.firstIndex(where: { $0.id == keep.id }) {
             currentBank = i
+        } else if keep != nil, libraryLoading {
+            currentBank = nil // not streamed in yet
         } else if currentBank.map({ $0 >= banks.count }) ?? true {
             currentBank = banks.isEmpty ? nil : 0
             currentProgram = nil
@@ -442,6 +695,7 @@ final class SynthModel: ObservableObject {
     func refreshLibrary() {
         host.startLibraryScan()
         libraryLoading = host.libraryScanning
+        libraryScan = host.libraryScanProgress
     }
 
     /// Rescans on every open: banks edited in Finder show up by themselves.
@@ -458,6 +712,8 @@ final class SynthModel: ObservableObject {
         showBrowser = false
         writing = false
         bankToDelete = nil
+        tagEdit = nil
+        duplicateGroups = nil
     }
 
     /// LCD / browser selection from the host's program (a fresh instance
@@ -469,6 +725,10 @@ final class SynthModel: ObservableObject {
             if showBank { currentBank = p.bank }
             currentProgram = p.slot
             loadedBankID = banks[p.bank].id
+        } else if libraryLoading, host.loadedProgram() != nil {
+            // mid-stream: the program's bank has not streamed in yet; the
+            // selection resolved before is still right, and the next
+            // revision re-syncs.
         } else {
             currentProgram = nil
             loadedBankID = nil
@@ -506,6 +766,55 @@ final class SynthModel: ObservableObject {
         }
     }
 
+    /// Load a random patch, honouring the browser filter ("find undiscovered
+    /// sounds"). Reservoir sample over the slots on screen: one pass, no
+    /// allocation, empty slots never win.
+    func randomPatch() {
+        if banks.isEmpty { loadLibrary() }
+        var pick: (bank: Int, slot: Int)?
+        var seen = 0
+        for b in banks.indices {
+            for p in banks[b].slots.indices {
+                guard !banks[b].slots[p].isEmpty, slotMatches(bank: b, slot: p) else { continue }
+                seen += 1
+                if Int.random(in: 0..<seen) == 0 { pick = (b, p) }
+            }
+        }
+        guard let pick else {
+            flash(hasActiveFilter ? "no patch matches the filter" : "library is empty")
+            return
+        }
+        load(bank: pick.bank, slot: pick.slot)
+    }
+
+    /// Browser > Find duplicates…: every set of patches whose file bytes
+    /// match, across all banks (`PatchManager::FindDuplicates`). A library
+    /// still being scanned answers "" - nothing to report yet, so the scan
+    /// hint is shown instead (a partial list would split a group).
+    func findDuplicates() {
+        guard let groups = scanDuplicates() else {
+            flash("still loading the library")
+            return
+        }
+        duplicateGroups = groups
+        if groups.isEmpty { flash("no duplicate patches") }
+    }
+
+    /// nil = the host still has work to do (returns "" until the scan ends).
+    private func scanDuplicates() -> [DuplicateGroup]? {
+        let payload = host.findDuplicates()
+        guard !payload.isEmpty else { return nil }
+        return DuplicateGroup.groups(payload: payload)
+    }
+
+    /// Duplicates dialog > one copy's Delete: the slot's own Delete, then
+    /// the groups are worked out again (a set that lost all but one member
+    /// leaves the list). The readout keeps the "moved to Trash" message.
+    func deleteDuplicate(bank: Int, slot: Int) {
+        deleteSlot(bank: bank, slot: slot)
+        if let groups = scanDuplicates() { duplicateGroups = groups }
+    }
+
     /// Rows of the browser's 4-column slot grid (filled top to bottom).
     static func browserRows(_ count: Int) -> Int { (count + 3) / 4 }
 
@@ -529,6 +838,14 @@ final class SynthModel: ObservableObject {
         guard showBrowser else { return false }
         if bankToDelete != nil { // the confirmation: Esc cancels, nothing else reaches the browser
             if key == .escape { bankToDelete = nil }
+            return true
+        }
+        if tagEdit != nil { // Esc closes it; its text field keeps the rest
+            if key == .escape { tagEdit = nil }
+            return true
+        }
+        if duplicateGroups != nil { // results stay put until asked to close
+            if key == .escape { duplicateGroups = nil }
             return true
         }
         if key == .escape {
@@ -700,13 +1017,134 @@ final class SynthModel: ObservableObject {
     /// Copies bank folders, zip banks (extracted) or loose .sy1 files into
     /// the library; selects the first new bank.
     func importItems(_ urls: [URL]) {
-        let added = SynthLibrary.withAccess(urls) { host.importItems($0) }
+        let out = SynthLibrary.withAccess(urls) { host.importItems($0) }
         loadLibrary()
-        if let first = added.first,
+        if let first = out.added.first?.path,
            let i = banks.firstIndex(where: { $0.source == first || $0.source.hasPrefix(first + "/") }) {
-            currentBank = i
+            currentBank = i // a picked container: its first bank
         }
-        flash(added.isEmpty ? "nothing imported" : "imported \(added.count) item(s)")
+        // An active filter can hide the new patches entirely, so a
+        // successful import must not look like a no-op.
+        if !out.isEmpty && hasActiveFilter { clearLibraryFilter() }
+        let text = Self.describe(out)
+        importNotice = text
+        importNoticeHide = Date().addingTimeInterval(5)
+        flash(text, seconds: 5)
+    }
+
+    /// Short "where / what" for a library JSON decode failure, e.g.
+    /// `banks[0].favs[3]`. A blank browser with no message hides a
+    /// programming error behind "the library is empty".
+    static func describe(error: Error) -> String {
+        guard let decoding = error as? DecodingError else { return error.localizedDescription }
+        func path(_ keys: [CodingKey]) -> String {
+            keys.reduce(into: "") { out, key in
+                if let i = key.intValue { out += "[\(i)]" } else { out += out.isEmpty ? key.stringValue : ".\(key.stringValue)" }
+            }
+        }
+        func where_(_ ctx: DecodingError.Context) -> String {
+            let p = path(ctx.codingPath)
+            return p.isEmpty ? "library" : p
+        }
+        switch decoding {
+        case let .keyNotFound(key, ctx):
+            let p = where_(ctx)
+            return p.isEmpty ? "missing \(key.stringValue)" : "\(p).\(key.stringValue): missing"
+        case let .typeMismatch(_, ctx), let .valueNotFound(_, ctx):
+            return "\(where_(ctx)): \(ctx.debugDescription)"
+        case let .dataCorrupted(ctx):
+            return ctx.debugDescription
+        @unknown default:
+            return error.localizedDescription
+        }
+    }
+
+    /// "imported 3 patches into Imported" - the browser header shows this
+    /// as well, because the LCD is covered by the browser.
+    static func describe(_ out: ImportOutcome) -> String {
+        if out.isEmpty {
+            if let why = out.refused.first { return "nothing imported - \(why)" }
+            return "nothing imported"
+        }
+        let n = out.patches == 1 ? "1 patch" : "\(out.patches) patches"
+        var text = out.added.count == 1 && !out.added[0].path.isEmpty
+            ? "imported \(n) into \(lastPathComponent(out.added[0].path))"
+            : "imported \(n) into \(out.added.count) banks"
+        if !out.refused.isEmpty { text += " (\(out.refused.count) skipped)" }
+        return text
+    }
+
+    private static func lastPathComponent(_ p: String) -> String {
+        p.split(separator: "/").last.map(String.init) ?? p
+    }
+
+    // MARK: - categories, favourites and tags
+
+    /// A slot's marks in the current bank list (nil = empty / out of range).
+    func patchMark(bank: Int, slot: Int) -> (category: Int, favourite: Bool, tags: [String])? {
+        guard bank >= 0, bank < banks.count, slot >= 0, slot < banks[bank].slots.count,
+              !banks[bank].slots[slot].isEmpty else { return nil }
+        return (banks[bank].category(slot), banks[bank].isFavourite(slot), banks[bank].tags(slot))
+    }
+
+    func categoryName(_ category: Int) -> String {
+        category >= 0 && category < categoryNames.count ? categoryNames[category] : "Unclassified"
+    }
+
+    /// `category` = -1 puts the slot back on the name rule.
+    func setCategory(bank: Int, slot: Int, _ category: Int) {
+        host.setPatchCategory(bank: bank, slot: slot, category: category)
+        loadLibrary()
+    }
+
+    func toggleFavourite(bank: Int, slot: Int) {
+        guard let mark = patchMark(bank: bank, slot: slot) else { return }
+        host.setPatchFavourite(bank: bank, slot: slot, on: !mark.favourite)
+        loadLibrary()
+    }
+
+    func addTag(_ tag: String, bank: Int, slot: Int) {
+        let clean = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        host.addPatchTag(bank: bank, slot: slot, tag: clean)
+        loadLibrary()
+    }
+
+    func removeTag(_ tag: String, bank: Int, slot: Int) {
+        host.removePatchTag(bank: bank, slot: slot, tag: tag)
+        loadLibrary()
+    }
+
+    /// A slot's colour from the .sy1 itself ("default" = untinted).
+    func patchColor(bank: Int, slot: Int) -> String {
+        guard bank >= 0, bank < banks.count, slot >= 0, slot < banks[bank].slots.count else { return "default" }
+        return banks[bank].color(slot)
+    }
+
+    func setPatchColor(bank: Int, slot: Int, _ color: String) {
+        guard host.setPatchColor(bank: bank, slot: slot, color: color) else {
+            flash("could not colour this patch")
+            return
+        }
+        loadLibrary()
+    }
+
+    /// Writes the whole store to `path` (the portable file to keep).
+    func exportTags(_ path: String) -> Bool {
+        let ok = host.exportTags(path)
+        flash(ok ? "categories and tags saved" : "could not save categories and tags")
+        return ok
+    }
+
+    /// Merges a store file from another setup: marks we already have win.
+    func importTags(_ path: String) {
+        let added = host.importTags(path)
+        loadLibrary()
+        if added < 0 {
+            flash("not a Synth2 categories file")
+        } else {
+            flash(added == 0 ? "no new categories or tags" : "added marks for \(added) patch(es)")
+        }
     }
 
     func allNotesOff() {

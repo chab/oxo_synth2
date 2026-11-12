@@ -32,6 +32,11 @@ final class HooksSynthHost: SynthHost {
     func startLibraryScan() { h.startLibraryScan(h.ctx) }
     var libraryRevision: Int { Int(h.libraryRevision(h.ctx)) }
     var libraryScanning: Bool { h.libraryScanning(h.ctx) != 0 }
+    var libraryScanProgress: (banks: Int, patches: Int, total: Int) {
+        var b: Int32 = 0, p: Int32 = 0, t: Int32 = 0
+        h.libraryScanProgress?(h.ctx, &b, &p, &t)
+        return (Int(b), Int(p), Int(t))
+    }
     func libraryNotice() -> String { str(h.libraryNotice(h.ctx)) }
     var libraryRoot: String { str(h.libraryRoot(h.ctx)) }
     func loadLibraryPatch(bank: Int, slot: Int) -> Bool { h.loadLibraryPatch(h.ctx, Int32(bank), Int32(slot)) != 0 }
@@ -44,9 +49,28 @@ final class HooksSynthHost: SynthHost {
     func copyPatch(bank: Int, slot: Int, to: Int) -> Int { Int(h.copyPatch(h.ctx, Int32(bank), Int32(slot), Int32(to))) }
     func deleteBank(_ bank: Int) -> Bool { h.deleteBank(h.ctx, Int32(bank)) != 0 }
     func exportBank(_ bank: Int, to dir: String) -> String { str(dir.withCString { h.exportBank(h.ctx, Int32(bank), $0) }) }
-    func importItems(_ paths: String) -> [String] {
-        str(paths.withCString { h.importItems(h.ctx, $0) }).split(separator: "\n").map(String.init)
+    func importItems(_ paths: String) -> ImportOutcome {
+        ImportOutcome(payload: str(paths.withCString { h.importItems(h.ctx, $0) }))
     }
+    func setPatchCategory(bank: Int, slot: Int, category: Int) {
+        h.setPatchCategory?(h.ctx, Int32(bank), Int32(slot), Int32(category))
+    }
+    func setPatchFavourite(bank: Int, slot: Int, on: Bool) {
+        h.setPatchFavourite?(h.ctx, Int32(bank), Int32(slot), on ? 1 : 0)
+    }
+    func addPatchTag(bank: Int, slot: Int, tag: String) {
+        tag.withCString { h.addPatchTag?(h.ctx, Int32(bank), Int32(slot), $0) }
+    }
+    func removePatchTag(bank: Int, slot: Int, tag: String) {
+        tag.withCString { h.removePatchTag?(h.ctx, Int32(bank), Int32(slot), $0) }
+    }
+    func setPatchColor(bank: Int, slot: Int, color: String) -> Bool {
+        color.withCString { (h.setPatchColor?(h.ctx, Int32(bank), Int32(slot), $0) ?? 0) != 0 }
+    }
+    func exportTags(_ path: String) -> Bool { (h.exportTags?(h.ctx, path) ?? 0) != 0 }
+    func importTags(_ path: String) -> Int { Int(h.importTags?(h.ctx, path) ?? -1) }
+    func tagVocabulary() -> String { str(h.tagVocabulary?(h.ctx)) }
+    func findDuplicates() -> String { str(h.findDuplicates?(h.ctx)) }
     func midiCC(_ id: Int) -> Int { Int(h.midiCC(h.ctx, Int32(id))) }
     func setMidiCC(_ id: Int, _ cc: Int) { h.setMidiCC(h.ctx, Int32(id), Int32(cc)) }
     var lastCC: Int { Int(h.lastCC(h.ctx)) }
