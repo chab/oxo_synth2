@@ -9,8 +9,8 @@ render gives each copy's osc1 / sub component; the ring-on render is fitted
 as A tanh((a O + b S) / A), O / S = the ring-off osc1 / sub parts. Measured:
 a ~ 1 (osc1 unchanged), b ~ 1 / 0.297 (the sub copies skip the copy gain),
 A ~ 2.2 (sub 16) .. 1.65 (sub 127), residual -22 .. -15 dB: the true bound
-is not a fixed tanh, and the original also has osc1 x sub (even) products.
-Engine: kRingDetuneLimit = 1.7.
+is not a fixed tanh. It is the post-filter limiter (AGENTS.md "Ring BUG"):
+the compression falls with the filtered level, so the engine keeps only b.
 """
 import numpy as np
 from scipy.optimize import least_squares

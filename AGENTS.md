@@ -721,9 +721,20 @@ original AU; keeps both renders for listening).
   64, residual −24 dB vs 2 × the FM 0 render; pulse / saw osc1 exact).
   Was 6 dB low on pulse until 2026-11-12 (57 library patches, mean spec
   2.57 → 1.38 dB). Ring BUG kept on purpose (`measure_ring_detune.py`): ring +
-  osc1 detune + sub on = the sub copies skip the 0.297 gain, then the osc1
-  section is bounded (modelled 1.7·tanh(x/1.7), approximate; the original
-  also has osc1 × sub products); no effect without detune. Sync hard: NAIVE reset of osc2 to phase 0 (same alias energy
+  osc1 detune + sub on = the sub copies skip the 0.297 gain; no effect
+  without detune. That loud sum is NOT bounded in the osc section: the
+  bound sits AFTER the filter, before the amp (filtered quietly, cutoff
+  35: no compression; amp gain / velocity: none; LP12 = LP24 at cutoff
+  127). It is a level-riding gain, not a waveshaper (lines near the
+  carriers, almost no 3rd harmonic): on the SVF our output AGC matches it
+  (Fairlight ARR Voice, BP12: 2.87 → 0.07 dB). Until 2026-11-12 a 1.7·tanh
+  on osc1 + sub modelled it and SATURATED audibly (87 ring + detune + sub
+  library patches: mean spec 1.55 → 1.06, 31 better > 0.5 dB, none
+  worse). OPEN: the LADDER has no such output limiter (only its in-loop
+  one), so LP24 at a high cutoff plays the loud sum unbounded (ARR on
+  LP24 127: +2.6 dB). The SVF's AGC after the ladder fixes that (−0.2)
+  but takes res 127 self-oscillation 1.4 dB lower (compare.py filter
+  t1_r127 −3.6 → −5): the two limiters' interplay is unmeasured. Sync hard: NAIVE reset of osc2 to phase 0 (same alias energy
   as the original to 0.1 dB; do not band-limit). SYNC + FM: a sync fires
   whenever osc1's phase DROPS = a forward wrap OR any sample FM drives it
   backward without wrapping (a backward wrap 0 → 1 does not). Synced

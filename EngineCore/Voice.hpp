@@ -51,7 +51,6 @@ OXO_INLINE double PhaseStep(double inc) { return double(int64_t(inc * kPhaseUnit
 inline constexpr uint32_t kNoiseSeed = 0x70A6E;
 inline constexpr int kDetuneOscs = 8;
 inline constexpr double kFmRefInc = 261.6255653 / 44100.0; // (measured) FM deviation unit, cycles per sample
-inline constexpr double kRingDetuneLimit = 1.7; // (fitted) ring + osc1 detune + sub: osc1 section limiter
 // (fitted, sync with FM 0, osc2 alone: residual -6 dB at keys 36..72, osc2
 // saw / pulse / tri, pitch -12..+12; best 4.5e-5..8e-5 per case) a sync on
 // osc1's forward wrap restarts osc2 a hair AFTER phase 0: on a saw that sample
@@ -563,14 +562,12 @@ private:
                 simd::StorePhases(copyPhase_.data() + 4, simd::LoadPhases(copyPhase_.data() + 4) + copyInc[1]);
                 o1 = acc * detuneGain;
                 // (measured, measure_ring_detune.py) ring on: the sub copies
-                // skip the copy gain (~+10 dB), see the limiter below
+                // skip the copy gain (~+10 dB). The original bounds that loud
+                // sum AFTER the filter (the SVF's AGC; none on the ladder yet)
                 sub = ring ? subAcc : subAcc * detuneGain;
             }
             if (osc1Silent) o1 = sub = 0;
             double osc1Out = subOn ? mainW * o1 + subW * sub : o1;
-            // TODO(measure): the original bounds that loud sum; a tanh at 1.7
-            // fits to -15..-22 dB (it also has some osc1 x sub products)
-            if (ring && detuneOn && subOn) osc1Out = kRingDetuneLimit * std::tanh(osc1Out / kRingDetuneLimit);
             if (ring) o2 *= ringFmSource || fmBs[i] > 0 ? o1 * ringFmGain : o1;
 
             if constexpr (kOsc == kOscCross) osc1Phase_ += PhaseStep(incA * fm);
