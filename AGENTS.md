@@ -710,10 +710,28 @@ original AU; keeps both renders for listening).
   floor; the table's fitted entry 0, 6.6e-6, is noise: `Voice::FmBeta`;
   `measure_zero_knobs.py`, with the LFO depth 0 probe).
   Ring: osc2 ×
-  osc1_norm. Ring BUG kept on purpose (`measure_ring_detune.py`): ring +
-  osc1 detune + sub on = the sub copies skip the 0.297 gain, then the osc1
-  section is bounded (modelled 1.7·tanh(x/1.7), approximate; the original
-  also has osc1 × sub products); no effect without detune. Sync hard: NAIVE reset of osc2 to phase 0 (same alias energy
+  osc1_norm. Ring on = NO FM (any FM knob / route: osc1 unchanged), BUT
+  with an FM source in the patch the product takes osc2's PULSE at full
+  scale (×2, saw(p) − saw(p+d)) and NOISE at ±1 (saw / tri unchanged):
+  FM knob > 0, an LFO on FM (depth > 0, its trough too), mod env on FM
+  amount ≥ 67 all note long; amount 65 / 66 only until its FM offset
+  reaches 0 (9.2 taus; ours at 7.6, where our mod env lands on 0). It is
+  a flag, not the FM value (FM 1 = FM 127). `check_fm.py --ring`: within
+  0.5 dB; OPEN: with osc1 sine / tri the original's ×2 is ×1.89 (pulse
+  64, residual −24 dB vs 2 × the FM 0 render; pulse / saw osc1 exact).
+  Was 6 dB low on pulse until 2026-11-12 (57 library patches, mean spec
+  2.57 → 1.38 dB). Ring BUG kept on purpose (`measure_ring_detune.py`): ring +
+  osc1 detune + sub on = the sub copies skip the 0.297 gain; no effect
+  without detune. That loud sum is NOT bounded in the osc section: the
+  bound sits AFTER the filter, before the amp (filtered quietly, cutoff
+  35: no compression; amp gain / velocity: none; LP12 = LP24 at cutoff
+  127). It is a level-riding gain, not a waveshaper (lines near the
+  carriers, almost no 3rd harmonic): the filters' output limiter (Filter
+  section) is it (Fairlight ARR Voice, BP12: 2.87 → 0.07 dB). Until 2026-11-12 a 1.7·tanh
+  on osc1 + sub modelled it and SATURATED audibly (87 ring + detune + sub
+  library patches: mean spec 1.55 → 1.06, 31 better > 0.5 dB, none
+  worse). The filters' output limiter (Filter section) bounds it on LP24
+  too (ARR on LP24 127: +2.6 → +0.15 dB). Sync hard: NAIVE reset of osc2 to phase 0 (same alias energy
   as the original to 0.1 dB; do not band-limit). SYNC + FM: a sync fires
   whenever osc1's phase DROPS = a forward wrap OR any sample FM drives it
   backward without wrapping (a backward wrap 0 → 1 does not). Synced
@@ -795,9 +813,28 @@ original AU; keeps both renders for listening).
   ~instant, res / pw / mix not measured cleanly yet.
 - Filter: LP12/HP12/BP12 = Chamberlin SVF ×2 iterations (input held),
   f = 2 sin(pi fc/2fs), fc = 16.7·2^(c/12.624) (c ≤ 125), d = 1-r,
-  in gain 1-0.7r; output AGC (T 1.427, q 0.883, att 1.2 ms, rel 0.2 s).
-  LP24 = 4 bilinear one-poles + unit-delay feedback, fc table,
-  k = (0.0297 res - 0.076)·comp[c], in-loop AGC (T 1.6). LPDL
+  in gain 1-0.7r. LP24 = 4 bilinear one-poles + unit-delay feedback, fc
+  table, k = (0.0297 res - 0.076)·comp[c], in-loop AGC on k (peak
+  follower 1.2 ms / 0.2 s, (T/e)^0.883 above T 5.5). OUTPUT LIMITER after
+  both (`measure_filter_limiter.py`, 2026-11-12): before the saturation
+  and the amp (filtered quietly it does nothing; amp gain / velocity do
+  not move it; LP12 = LP24 at cutoff 127): gain (1 + (e/1.038)^11.54)^
+  (−0.856/11.54) on a follower of |y| (3.7 ms up, 6.9 ms down), 1 below
+  e 0.39 (table `FilterTables::LimitGain`). Level-riding, not a
+  waveshaper: lines next to the carriers, H3 −49 dB at 0.6 dB of
+  compression. A full-scale sine at key 12 stays within 0.08 dB (the
+  original: untouched; softer knees / mean-abs followers cost 0.1..0.25).
+  It replaced the SVF's AGC (T 1.427, 1.2 ms / 0.2 s, fitted on
+  resonance: its slow release over-compressed loud sums) and the ladder
+  AGC's T 1.6 (now 5.5: the res 127 self-oscillation through the limiter
+  = the original's 1.72 FS at cutoff 56..96, 1.66..1.11 above, within
+  0.6..5 %; it was −3.6 dB). Library (686 patches): 446 change, none
+  worse > 0.5 dB, mean spec 0.875 → 0.868; filter corpus 1.52 → 1.36;
+  +3 % instructions (bench). OPEN (LP24 res ≥ 120): the original's
+  resonance rises faster above res ~115 (self-oscillates from res ~123 at
+  cutoff 88, 127 at 48 / 120; ours stalls or starts elsewhere at cutoff ≤
+  48), oscillates 1..2 % higher, and while oscillating suppresses the
+  input noise ~21 dB (ours ~10): t1_r127 spec still 9..30 dB. LPDL
   (`fit_lpdl.py`, ~0.5 dB): linear 303-style coupled ladder, feedback
   high-passed at 100 Hz, out = (y3+y4)/2, w/k/g tables per res×cutoff
   (fitted on SMALL-signal TFs: `measure_filter.py --types 4 --mix 10 --out
@@ -890,6 +927,21 @@ original AU; keeps both renders for listening).
 - LFO: global, free-running from instance creation; types 0 saw↓ 1 tri
   (-1 at 0) 2 square (+ first) 3 S&H 4 smooth 5 sine; Hz = 2^(s/12.0367)/12 (`measure_lfo_speed.py`, 0.02 %);
   dests 1 osc2 pitch 2 osc1+2 pitch 3 cutoff 4 amp 5 pw 6 FM 7 pan.
+  RANDOM TYPES (`measure_lfo_random_keysync.py`, LFO on amp at depth 127
+  = the envelope is the LFO; cutoff = a saw's spectral centroid; pitch;
+  pan; pw): one random r per cycle; S&H plays r, smooth random ramps
+  LINEARLY from the PREVIOUS cycle's r to r (reached at the cycle's end:
+  continuous, kinks at the cycle starts) on pitch, cutoff, pw, pan. On
+  AMP ONLY it ramps from -r to minus the previous r and jumps at every
+  cycle start (`Lfo::Render(..., amp)`). A KEY-SYNC restart (no key held:
+  overlapping notes keep the value, poly and mono) draws a new r like a
+  cycle start, so every restarted note gets a new value (smooth: from the
+  last r toward it; ours kept the old one until 2026-11-11). ARP STEPS
+  NEVER RESTART the LFO: only the key starting the arp phrase does (no
+  arp key held), tempo sync on or off (measured in poly; legato by ear,
+  032a.sy1).
+  Patches without a random LFO on render bit-identically across that
+  change. FM not checked (assumed like pitch).
   Tempo sync: 30 steps, step = floor(s·30/128), cycle = `Lfo::kSyncBeats`
   16 bars (s 0) .. 1/64T (127) = Synth1's display list; NO host-beat phase
   lock (synced LFOs free-run, the arp starts at the key press).
@@ -1110,7 +1162,8 @@ original AU; keeps both renders for listening).
 - Approximations marked `TODO(measure)` in code: a.d.1 exact structure (status above),
   arp random sequence (+ S&H / smooth LFO: not the original's PRNG), LPDL
   resonance frequency near the top cutoffs.
-- Random sequences (arp random, S&H / smooth LFO): not identified. Leads:
+- Random sequences (arp random, S&H / smooth LFO): not identified (the
+  random LFOs' STRUCTURE is, see LFO above). Leads:
   S&H read through LFO -> pitch is quantized to whole steps (useless), through
   LFO -> amp it sits on a 1/1024 grid; the two destinations gave
   DIFFERENT sequences from fresh processes (unexplained); not mac rand(),

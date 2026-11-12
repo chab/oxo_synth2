@@ -1,7 +1,7 @@
 #pragma once
 
 // Synth1 LFO (measured): global, free running from instance creation (key
-// sync resets on the first note of a phrase), bipolar +-1.
+// sync restarts it on the first note of a phrase), bipolar +-1.
 // Native types: 0 saw (falling, +1 at phase 0), 1 triangle (-1 at phase 0),
 // 2 square (+1 first half), 3 sample & hold, 4 smooth random, 5 sine.
 // Speed: Hz = 2^(speed / 12.0367) / 12.
@@ -25,15 +25,25 @@
 
 namespace oxo::s2 {
 
+// (measured, measure_lfo_random_keysync.py) the random types share ONE value
+// per cycle, r: S&H plays r, smooth random ramps LINEARLY from the previous
+// cycle's r to r (continuous: it reaches r at the cycle's end). On AMP only it
+// ramps from -r to minus the previous r instead (it jumps at every cycle
+// start). A key-sync restart draws a new r as a cycle start does: every
+// restarted note gets a new value (smooth: ramps from the last r toward it).
 class Lfo {
 public:
+    Lfo() { Reset(); }
     void Reset() {
         phase_ = 0;
-        held_ = 0;
-        from_ = 0;
-        to_ = Random();
+        state_ = kSeed;
+        prev_ = Random();
+        cur_ = Random();
     }
-    void ResetPhase() { phase_ = 0; }
+    void Restart() {
+        phase_ = 0;
+        Next();
+    }
 
     // (measured, measure_lfo_speed.py: square LFO flip times, 0.02 %) speed 0
     // = a 12 s cycle
@@ -54,16 +64,18 @@ public:
     static int PitchSteps(int depth) { return int(tables::kLfoPitchCents[std::clamp(depth, 0, 127)] / 9.375 + 0.5); }
 
     // Fills out[0..n) with the waveform at `hz`; steps (when not null) with
-    // its pitch steps for `pitchSteps` = PitchSteps(depth) (see above).
-    void Render(double *out, int n, int type, double hz, double sampleRate, int32_t *steps = nullptr, int pitchSteps = 0) {
+    // its pitch steps for `pitchSteps` = PitchSteps(depth) (see above); `amp`
+    // = routed to amp (smooth random's own form there).
+    void Render(double *out, int n, int type, double hz, double sampleRate, int32_t *steps = nullptr, int pitchSteps = 0,
+                bool amp = false) {
         const double inc = hz / sampleRate, sn = pitchSteps;
         for (int i = 0; i < n; ++i) {
             switch (type) {
             case 0: out[i] = 1.0 - 2.0 * phase_; break;
             case 1: out[i] = phase_ < 0.5 ? -1.0 + 4.0 * phase_ : 3.0 - 4.0 * phase_; break;
             case 2: out[i] = phase_ < 0.5 ? 1.0 : -1.0; break;
-            case 3: out[i] = held_; break;
-            case 4: out[i] = from_ + (to_ - from_) * phase_; break;
+            case 3: out[i] = cur_; break;
+            case 4: out[i] = amp ? -(cur_ + (prev_ - cur_) * phase_) : prev_ + (cur_ - prev_) * phase_; break;
             default: out[i] = std::sin(2.0 * M_PI * phase_); break;
             }
             if (steps) {
@@ -82,14 +94,18 @@ public:
             phase_ += inc;
             if (phase_ >= 1.0) {
                 phase_ -= std::floor(phase_);
-                held_ = Random();
-                from_ = to_;
-                to_ = Random();
+                Next();
             }
         }
     }
 
 private:
+    static constexpr uint32_t kSeed = 0x2545F491u;
+
+    void Next() {
+        prev_ = cur_;
+        cur_ = Random();
+    }
     double Random() {
         state_ ^= state_ << 13;
         state_ ^= state_ >> 17;
@@ -97,8 +113,8 @@ private:
         return state_ * (2.0 / 4294967296.0) - 1.0;
     }
 
-    double phase_ = 0, held_ = 0, from_ = 0, to_ = 0;
-    uint32_t state_ = 0x2545F491u;
+    double phase_ = 0, prev_ = 0, cur_ = 0;
+    uint32_t state_ = kSeed;
 };
 
 } // namespace oxo::s2

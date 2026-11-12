@@ -51,7 +51,6 @@ OXO_INLINE double PhaseStep(double inc) { return double(int64_t(inc * kPhaseUnit
 inline constexpr uint32_t kNoiseSeed = 0x70A6E;
 inline constexpr int kDetuneOscs = 8;
 inline constexpr double kFmRefInc = 261.6255653 / 44100.0; // (measured) FM deviation unit, cycles per sample
-inline constexpr double kRingDetuneLimit = 1.7; // (fitted) ring + osc1 detune + sub: osc1 section limiter
 // (fitted, sync with FM 0, osc2 alone: residual -6 dB at keys 36..72, osc2
 // saw / pulse / tri, pitch -12..+12; best 4.5e-5..8e-5 per case) a sync on
 // osc1's forward wrap restarts osc2 a hair AFTER phase 0: on a saw that sample
@@ -330,7 +329,7 @@ private:
         const double width = p[kOscPulseWidth] / 254.0; // (measured) duty of the low part, 127 = square
         const double mix2 = p[kOscMix] / 127.0, mix1 = 1.0 - mix2; // (measured) linear crossfade
         const bool ring = kOsc == kOscCross && p[kOsc2Ring] != 0, sync = kOsc == kOscCross && p[kOsc2Sync] != 0;
-        const double fmBeta = ring ? 0.0 : FmBeta(p[kOsc1FM]);
+        const double fmBeta = FmBeta(p[kOsc1FM]);
         const int shape1 = p[kOsc1Shape], shape2 = p[kOsc2Shape];
         const double subGainKnob = p[kSubGain];
         const double subW = subGainKnob / (subGainKnob + 32.0), mainW = 1.0 - subW; // (measured) auto level
@@ -463,7 +462,7 @@ private:
                 std::fill_n(widths, frames, staticWidth);
             }
             if constexpr (kOsc == kOscCross) {
-                if (!ring && (r[6] || envFm)) {
+                if (r[6] || envFm) {
                     for (int i = 0; i < frames; ++i) {
                         // (measured, measure_fm_mod.py) in FM knob units (fractional):
                         // LFO unipolar toward 127 by depth / 127 * u; mod env
@@ -485,14 +484,20 @@ private:
                     }
                 } else {
                     std::fill_n(fmBs, frames, fmBeta);
-                    if (envFm) // (ring on: no FM, the env still runs)
-                        for (int i = 0; i < frames; ++i) modEnv_.Next();
                 }
             }
         }
 
         double fmIncA = NAN, fmRef = 0; // kFmRefInc / incA, recomputed when incA changes
         const double fmScale = shape2 == 4 ? kNoiseFm / kNoiseLevel : 1.0;
+        // (measured, check_fm.py --ring) ring on, FM never applies, but with an
+        // FM source in the patch the product takes osc2's pulse / noise at
+        // full scale (x2 / x1 / 0.65039; saw and triangle unchanged): the FM
+        // knob above 0, an LFO on FM (depth > 0, its trough too), a mod env on
+        // FM with amount >= 67 all note long, at 65 / 66 only while its
+        // offset is above 0 (9.2 taus into the decay)
+        const bool ringFmSource = p[kOsc1FM] > 0 || r[6] || (modOn && modDest == 1 && p[kModEnvAmount] >= 67);
+        const double ringFmGain = shape2 == 2 ? 2.0 : shape2 == 4 ? 1.0 / kNoiseLevel : 1.0;
         double copyStep = NAN, copyIncA = NAN; // the osc1 steps copyInc holds (the copies' steps, recomputed when they change)
         simd::P4 copyInc[2] = {};
         for (int i = 0; i < frames; ++i) {
@@ -524,7 +529,7 @@ private:
             double fm = 1.0;
             if constexpr (kOsc == kOscCross) {
                 if (incA != fmIncA) fmIncA = incA, fmRef = kFmRefInc / incA * fmScale;
-                fm = 1.0 + fmBs[i] * o2 * fmRef;
+                if (!ring) fm = 1.0 + fmBs[i] * o2 * fmRef;
             }
             double o1 = OscRead(shape1, saw1, tri1, osc1Phase_, curWidth);
             double sub = subOn ? OscRead(subAs1, sawSub, triSub, subPhase_, 0.5) : 0.0;
@@ -557,15 +562,13 @@ private:
                 simd::StorePhases(copyPhase_.data() + 4, simd::LoadPhases(copyPhase_.data() + 4) + copyInc[1]);
                 o1 = acc * detuneGain;
                 // (measured, measure_ring_detune.py) ring on: the sub copies
-                // skip the copy gain (~+10 dB), see the limiter below
+                // skip the copy gain (~+10 dB). The original bounds that loud
+                // sum AFTER the filter (Filter.hpp, the output limiter)
                 sub = ring ? subAcc : subAcc * detuneGain;
             }
             if (osc1Silent) o1 = sub = 0;
             double osc1Out = subOn ? mainW * o1 + subW * sub : o1;
-            // TODO(measure): the original bounds that loud sum; a tanh at 1.7
-            // fits to -15..-22 dB (it also has some osc1 x sub products)
-            if (ring && detuneOn && subOn) osc1Out = kRingDetuneLimit * std::tanh(osc1Out / kRingDetuneLimit);
-            if (ring) o2 *= o1;
+            if (ring) o2 *= ringFmSource || fmBs[i] > 0 ? o1 * ringFmGain : o1;
 
             if constexpr (kOsc == kOscCross) osc1Phase_ += PhaseStep(incA * fm);
             else osc1Phase_ += incA; // whole units already
