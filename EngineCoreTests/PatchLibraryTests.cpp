@@ -152,8 +152,11 @@ OXO_TEST(ImportCopiesFoldersExtractsZips) {
     const std::string added = m.Import(s1.string() + "\n" + (src / "Two.zip").string() + "\n" + (src / "Loose.sy1").string() +
                                        "\n" + (src / "Other.sy1").string() + "\n" + (src / "zip2" / "A").string() + "\n" +
                                        root.string() + "\n" + (src / "zip2").string() + "/");
-    OXO_EXPECT_EQ(added, (root / "Synth1Patches").string() + "\n" + (root / "Two").string() + "\n" + (root / "A").string() +
-                             "\n" + (root / "zip2").string() + "\n" + (root / "Imported").string());
+    // patches= first, then "+<count> <folder>", then "!<what>: <why>" - the
+    // library root itself is refused, not silently skipped.
+    OXO_EXPECT_EQ(added, std::string("patches=11") + "\n+4 " + (root / "Synth1Patches").string() + "\n+2 " + (root / "Two").string() +
+                             "\n+1 " + (root / "A").string() + "\n+2 " + (root / "zip2").string() + "\n+2 " +
+                             (root / "Imported").string() + "\n!" + root.string() + ": already in the library");
     OXO_EXPECT(fs::exists(root / "Synth1Patches" / "Dark" / "001.sy1"));
     OXO_EXPECT(!fs::exists(root / "Synth1Patches" / "Dark" / "readme.txt"));
     OXO_EXPECT(!fs::exists(root / "Synth1Patches" / "Nothing"));
@@ -173,7 +176,10 @@ OXO_TEST(ImportCopiesFoldersExtractsZips) {
     // a second import of loose files fills the next free slots
     m.Import((src / "Loose.sy1").string());
     OXO_EXPECT(fs::exists(root / "Imported" / "003.sy1"));
-    OXO_EXPECT(m.Import((src / "Nothing.zip").string()).empty());
+    // A failed import says so (and why) instead of looking like a no-op.
+    const std::string nothing = m.Import((src / "Nothing.zip").string());
+    OXO_EXPECT(nothing.rfind("patches=0", 0) == 0);
+    OXO_EXPECT(nothing.find("!") != std::string::npos && nothing.find("no .sy1 patches found") != std::string::npos);
     fs::remove_all(base);
 }
 
@@ -571,13 +577,100 @@ OXO_TEST(BackgroundRescanNeverOverwritesNewerEdits) {
     m.Configure(root);
     m.Rescan();
     for (int round = 0; round < 20; ++round) {
+        // The list is cleared the moment a rescan starts, so nothing can be
+        // written until a bank has streamed in.
         m.StartRescan();
         Sy1Patch p;
         p.name = "Write " + std::to_string(round);
-        OXO_EXPECT(m.Write(0, 0, p));
         OXO_EXPECT(WaitScan(m));
+        OXO_EXPECT(m.Write(0, 0, p));
         OXO_EXPECT_EQ(m.Library().Banks()[0].slots[0].name, p.name);
     }
+    fs::remove_all(base);
+}
+
+// A scan streams: banks become loadable one by one while the scan still runs,
+// and the list on screen is always a prefix of the final one, so the browser's
+// bank indices stay put.
+OXO_TEST(BackgroundRescanStreamsBanksBeforeFinish) {
+    const fs::path base = FreshDir("oxo_s2_bgscan_stream_test");
+    const fs::path root = base / "Synth2", factory = base / "Factory";
+    fs::create_directories(factory);
+    WriteFile(factory / "001.sy1", "Factory\nver=112\n");
+    for (int i = 0; i < 40; ++i) {
+        fs::create_directories(root / ("Bank" + std::to_string(100 + i)));
+        for (int j = 0; j < 8; ++j)
+            WriteFile(root / ("Bank" + std::to_string(100 + i)) / (std::to_string(1 + j) + "00.sy1"),
+                      "P" + std::to_string(i) + "_" + std::to_string(j) + "\nver=112\n");
+    }
+    PatchManager m;
+    m.Configure(root, factory);
+    m.Rescan();
+    const std::vector<std::string> finalNames = [&] {
+        std::vector<std::string> v;
+        for (const PatchBank &b : m.Library().Banks()) v.push_back(b.name);
+        return v;
+    }();
+    OXO_EXPECT_EQ(finalNames.size(), size_t(41));
+
+    for (int round = 0; round < 10; ++round) {
+        m.StartRescan();
+        std::vector<std::string> prefix; // what the browser can see part-way
+        int32_t banks = 0, patches = 0, total = 0;
+        for (int i = 0; i < 4; ++i) {
+            m.PollRescan();
+            banks = 0, patches = 0, total = 0;
+            m.ScanProgress(banks, patches, total);
+            OXO_EXPECT_EQ(banks, int32_t(m.Library().Banks().size()));
+            OXO_EXPECT(total >= 40); // every root folder is a bank here
+            prefix.clear();
+            for (const PatchBank &b : m.Library().Banks()) prefix.push_back(b.name);
+            // Whatever has streamed in is usable straight away.
+            for (const PatchBank &b : m.Library().Banks()) {
+                const size_t n = size_t(std::count_if(b.slots.begin(), b.slots.end(),
+                                                     [](const PatchRef &r) { return !r.name.empty(); }));
+                OXO_EXPECT_EQ(n, b.name == kFactoryBankName ? size_t(1) : size_t(8));
+                OXO_EXPECT_EQ(int32_t(n), b.Count());
+            }
+        }
+        OXO_EXPECT(WaitScan(m));
+        const auto &banks_ = m.Library().Banks();
+        OXO_EXPECT_EQ(banks_.size(), finalNames.size());
+        // Streamed prefix and the finished list agree: nothing duplicated, no
+        // bank lost, order unchanged.
+        OXO_EXPECT(prefix.size() <= banks_.size());
+        for (size_t i = 0; i < prefix.size(); ++i) OXO_EXPECT_EQ(banks_[i].name, prefix[i]);
+        for (size_t i = 0; i < banks_.size(); ++i) OXO_EXPECT_EQ(banks_[i].name, finalNames[i]);
+        int32_t totalAfter = 0;
+        m.ScanProgress(banks, patches, totalAfter);
+        OXO_EXPECT_EQ(banks, int32_t(banks_.size()));
+        OXO_EXPECT_EQ(patches, int32_t(1 + 40 * 8));
+    }
+    fs::remove_all(base);
+}
+
+// A rescan starts from an empty list: no stale bank stays on screen, and
+// Json() (the hook the browser reads every poll) never blocks for a scan.
+OXO_TEST(BackgroundRescanClearsTheListFirst) {
+    const fs::path base = FreshDir("oxo_s2_bgscan_clear_test");
+    const fs::path root = base / "Synth2";
+    fs::create_directories(root / "Old");
+    WriteFile(root / "Old" / "001.sy1", "Old\nver=112\n");
+    WriteFile(root / "111.sy1", "Root\nver=112\n");
+    PatchManager m;
+    m.Configure(root);
+    m.Rescan();
+    OXO_EXPECT_EQ(m.Library().Banks().size(), size_t(2)); // User + the root's own
+    OXO_EXPECT(m.Json().find("\"Root\"") != std::string::npos);
+
+    m.StartRescan();
+    const std::string early = m.Json();
+    OXO_EXPECT(early.find("\"Root\"") == std::string::npos);
+    OXO_EXPECT(early.find("\"banks\":[") != std::string::npos);
+    OXO_EXPECT(WaitScan(m));
+    OXO_EXPECT(m.Json().find("\"Root\"") != std::string::npos);
+    OXO_EXPECT(m.Json().find("\"Old\"") != std::string::npos);
+    OXO_EXPECT_EQ(m.Library().Banks().size(), size_t(2));
     fs::remove_all(base);
 }
 
@@ -619,5 +712,105 @@ OXO_TEST(CopyPatchFillsFirstFreeSlot) {
     OXO_EXPECT_EQ(m.Library().Banks()[size_t(fav)].slots[3].name, std::string("Factory"));
     OXO_EXPECT_EQ(m.Library().Banks()[size_t(src)].slots[0].name, std::string("Lead"));
     OXO_EXPECT_EQ(m.Library().Banks()[size_t(src)].slots[6].name, std::string("Lead"));
+    fs::remove_all(base);
+}
+
+// The colour is the .sy1's own `color=` line (line 2), so it travels with
+// the file. SetPatchColor rewrites it; star / tags follow the new bytes.
+OXO_TEST(PatchColorReadsFromTheFileAndRoundTrips) {
+    const fs::path base = FreshDir("oxo_color");
+    const fs::path root = base / "lib", factory = base / "factory";
+    fs::create_directories(root / "Fav");
+    fs::create_directories(factory);
+    WriteFile(root / "Fav" / "001.sy1", "Green One\ncolor=green\nver=112\n0,2\n");
+    WriteFile(root / "Fav" / "002.sy1", "No Colour Line\nver=112\n0,2\n");
+    PatchManager m;
+    m.Configure(root, factory);
+    m.Rescan();
+    const auto bank = [&](const char *name) {
+        for (size_t b = 0; b < m.Library().Banks().size(); ++b)
+            if (m.Library().Banks()[b].name == name) return int(b);
+        return -1;
+    };
+    const int fav = bank("Fav");
+    OXO_EXPECT(fav >= 0);
+    OXO_EXPECT_EQ(m.Library().Banks()[size_t(fav)].slots[0].color, std::string("green"));
+    OXO_EXPECT_EQ(m.Library().Banks()[size_t(fav)].slots[1].color, std::string("default"));
+
+    m.SetFavourite(fav, 0, true);
+    m.AddPatchTag(fav, 0, "warm");
+    const int rev = m.Revision();
+    OXO_EXPECT(m.SetPatchColor(fav, 0, "red"));
+    OXO_EXPECT(m.Revision() > rev);
+    std::string text;
+    OXO_EXPECT(ReadTextFile(root / "Fav" / "001.sy1", text));
+    OXO_EXPECT(text.find("color=red") != std::string::npos);
+    OXO_EXPECT(text.find("color=green") == std::string::npos);
+    const auto &after = m.Library().Banks()[size_t(fav)].slots[0];
+    OXO_EXPECT_EQ(after.name, std::string("Green One"));
+    OXO_EXPECT_EQ(after.color, std::string("red"));
+    OXO_EXPECT(after.favourite); // sides marks follow the new bytes
+    OXO_EXPECT_EQ(after.tags.size(), size_t(1));
+    OXO_EXPECT(m.SetPatchColor(fav, 0, "default"));
+    OXO_EXPECT(ReadTextFile(root / "Fav" / "001.sy1", text));
+    OXO_EXPECT(text.find("color=default") != std::string::npos);
+
+    // a colour the file never carried can be set, and `Json` reports it
+    OXO_EXPECT(m.SetPatchColor(fav, 1, "magenta"));
+    OXO_EXPECT_EQ(m.Library().Banks()[size_t(fav)].slots[1].color, std::string("magenta"));
+    OXO_EXPECT(m.Json().find("\"magenta\"") != std::string::npos);
+    OXO_EXPECT(!m.SetPatchColor(fav, 127, "red"));  // empty slot: no file
+    OXO_EXPECT(!m.SetPatchColor(-1, 0, "red"));
+    OXO_EXPECT(!m.SetPatchColor(fav, -1, "red"));
+
+    // the colour survives a fresh manager (it is in the file, no sidecar)
+    PatchManager m2;
+    m2.Configure(root, factory);
+    m2.Rescan();
+    for (size_t b = 0; b < m2.Library().Banks().size(); ++b)
+        if (m2.Library().Banks()[b].name == "Fav") {
+            OXO_EXPECT_EQ(m2.Library().Banks()[b].slots[0].color, std::string("default"));
+            OXO_EXPECT_EQ(m2.Library().Banks()[b].slots[1].color, std::string("magenta"));
+        }
+    fs::remove_all(base);
+}
+
+// Find duplicates by FILE BYTES: a patch imported twice, or a bank copied
+// back in, is the same file under a different name - Synth1 slots hold no
+// identity. Nothing is deleted: the payload only says where the copies are.
+OXO_TEST(FindDuplicatesGroupsIdenticalBytes) {
+    const fs::path base = FreshDir("oxo_dupes");
+    const fs::path root = base / "lib", factory = base / "factory";
+    fs::create_directories(root / "One");
+    fs::create_directories(root / "Two");
+    fs::create_directories(factory);
+    const std::string shared = "Shared Sound\ncolor=blue\nver=112\n0,2\n";
+    WriteFile(root / "One" / "001.sy1", shared);
+    WriteFile(root / "Two" / "003.sy1", shared);            // same bytes, other slot / bank
+    WriteFile(root / "Two" / "001.sy1", "Shared Sound\ncolor=blue\nver=112\n0,3\n"); // 1 byte off
+    WriteFile(root / "One" / "005.sy1", "Solo\nver=112\n0,2\n");
+    PatchManager m;
+    m.Configure(root, factory);
+    m.Rescan();
+    const auto bank = [&](const char *name) {
+        for (size_t b = 0; b < m.Library().Banks().size(); ++b)
+            if (m.Library().Banks()[b].name == name) return int(b);
+        return -1;
+    };
+    const int one = bank("One"), two = bank("Two");
+    OXO_EXPECT(one >= 0);
+    OXO_EXPECT(two >= 0);
+
+    const std::string payload = m.FindDuplicates();
+    OXO_EXPECT(payload.rfind("groups=1\n", 0) == 0);
+    const std::string pair = std::to_string(one) + ",0 " + std::to_string(two) + ",2";
+    OXO_EXPECT(payload.find(pair) != std::string::npos);
+    OXO_EXPECT(payload.find(std::to_string(two) + ",0") == std::string::npos); // differs
+    OXO_EXPECT(payload.find(std::to_string(one) + ",4") == std::string::npos); // unique
+
+    // Deleting one copy leaves nothing to report.
+    OXO_EXPECT(m.DeleteBank(one)); // the manager's own bank delete
+    m.Rescan();
+    OXO_EXPECT(m.FindDuplicates().rfind("groups=0\n", 0) == 0);
     fs::remove_all(base);
 }

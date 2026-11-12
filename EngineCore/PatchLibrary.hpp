@@ -15,6 +15,7 @@
 // moved to the Trash. Bundled starter banks are copied in once
 // (SeedStarterBanks).
 
+#include "PatchCategories.hpp"
 #include "Sy1Codec.hpp"
 #include "TextEncoding.hpp"
 
@@ -211,6 +212,17 @@ inline std::vector<std::filesystem::path> FolderChildren(const std::filesystem::
 struct PatchRef {
     std::string name; // first line of the .sy1 ("" = empty slot)
     std::string file; // .sy1 path ("" = empty)
+    // The `.sy1`'s own `color=` line (Synth1 tags patches this way), so a
+    // colour travels with the file through copy / export / import and needs
+    // no sidecar. "default" = untinted.
+    std::string color = "default";
+    // Categories / favourites / tags (PatchCategories.hpp), resolved during
+    // the scan while the library has a TagStore. Kept off the .sy1: the
+    // format is third party and is never extended.
+    std::string hash; // lower hex SHA-256 of the file bytes ("" = not hashed)
+    int category = kCatUnclassified; // stored override, else derived from the name
+    bool favourite = false;
+    std::vector<std::string> tags;
     bool Empty() const { return file.empty(); }
 };
 
@@ -245,17 +257,17 @@ inline bool ReadTextFile(const std::filesystem::path &path, std::string &out) {
     return true;
 }
 
-// Patch names (a .sy1's first line) by file: a rescan only opens new or
-// changed files (path + size + mtime), the rest comes from here. Thousands
-// of .sy1 = seconds of opens otherwise. Process-wide: every instance and
-// the background scans share it.
+// Patch names (a .sy1's first line) and colours (its second, `color=blue`)
+// by file: a rescan only opens new or changed files (path + size + mtime),
+// the rest comes from here. Thousands of .sy1 = seconds of opens otherwise.
+// Process-wide: every instance and the background scans share it.
 class PatchNameCache {
 public:
     static PatchNameCache &Shared() {
         static PatchNameCache cache;
         return cache;
     }
-    bool Name(std::filesystem::directory_entry e, std::string &name) {
+    bool Name(std::filesystem::directory_entry e, std::string &name, std::string &color) {
         std::error_code ec;
         e.refresh(ec); // one stat, then size + time come from the entry
         const std::uintmax_t size = e.file_size(ec);
@@ -268,15 +280,22 @@ public:
             const auto it = names_.find(key);
             if (it != names_.end() && it->second.size == size && it->second.time == time) {
                 name = it->second.name;
+                color = it->second.color;
                 return true;
             }
         }
         std::ifstream f(e.path(), std::ios::binary);
         if (!f) return false;
-        std::getline(f, name);
-        name = LegacyToUtf8(name.substr(0, name.find('\r')));
+        std::string line;
+        if (!std::getline(f, line)) return false;
+        name = LegacyToUtf8(line.substr(0, line.find('\r')));
+        color = "default";
+        if (std::getline(f, line)) { // `color=`; patches without one stay default
+            line = line.substr(0, line.find('\r'));
+            if (line.rfind("color=", 0) == 0) color = line.substr(6);
+        }
         std::lock_guard<std::mutex> lock(mutex_);
-        names_[key] = {size, time, name};
+        names_[key] = {size, time, name, color};
         return true;
     }
     void Forget(const std::filesystem::path &path) {
@@ -284,15 +303,92 @@ public:
         names_.erase(path.string());
     }
 
+    // A rewritten file must not be served from cache by a stale stat.
+    void Forget(const std::string &path) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        names_.erase(path);
+    }
+
 private:
     struct Entry {
         std::uintmax_t size;
         std::filesystem::file_time_type time;
         std::string name;
+        std::string color;
     };
     std::mutex mutex_;
     std::unordered_map<std::string, Entry> names_;
 };
+
+// SHA-256 of a patch file by file: same trick as PatchNameCache (rescan only
+// hashes new or changed files). Only consulted when the library has a
+// TagStore, so a library nobody tagged pays nothing.
+class PatchHashCache {
+public:
+    static PatchHashCache &Shared() {
+        static PatchHashCache cache;
+        return cache;
+    }
+    bool Hash(std::filesystem::directory_entry e, std::string &hash) {
+        std::error_code ec;
+        e.refresh(ec);
+        const std::uintmax_t size = e.file_size(ec);
+        if (ec) return false;
+        const std::filesystem::file_time_type time = e.last_write_time(ec);
+        if (ec) return false;
+        const std::string key = e.path().string();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            const auto it = hashes_.find(key);
+            if (it != hashes_.end() && it->second.size == size && it->second.time == time) {
+                hash = it->second.hash;
+                return true;
+            }
+        }
+        std::string computed;
+        if (!Sha256File(e.path(), computed)) return false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        hashes_[key] = {size, time, computed};
+        hash = std::move(computed);
+        return true;
+    }
+    // A rewritten file must not be served from the cache by a stale stat.
+    void Forget(const std::string &path) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        hashes_.erase(path);
+    }
+
+private:
+    struct Entry {
+        std::uintmax_t size;
+        std::filesystem::file_time_type time;
+        std::string hash;
+    };
+    std::mutex mutex_;
+    std::unordered_map<std::string, Entry> hashes_;
+};
+
+// The store's record for a patch: category override, star, tags. `derived` =
+// what the name rule says (also used when the patch has no record), so a
+// cleared tag / star really clears.
+inline void ApplyStoredTags(PatchRef &ref, const TagStore &tags, int derived) {
+    ref.category = derived;
+    ref.favourite = false;
+    ref.tags.clear();
+    const PatchTags *stored = ref.hash.empty() ? nullptr : tags.Find(ref.hash);
+    if (stored == nullptr) return;
+    if (stored->overridden && IsCategory(stored->category)) ref.category = stored->category;
+    ref.favourite = stored->favourite;
+    ref.tags = stored->tags;
+}
+
+// Hashes a patch file unless that already happened (scans skip it while the
+// store is empty, so the first tag / star is what pays for a library's
+// hashes).
+inline bool EnsureHash(PatchRef &ref) {
+    if (!ref.hash.empty()) return true;
+    return !ref.file.empty() && Sha256File(ref.file, ref.hash);
+}
 
 // Synth1 slot number of a file name ("012.sy1" / "012_Lead.sy1" -> 11), -1 if none.
 inline int SlotFromFileName(const std::string &fileName) {
@@ -313,18 +409,23 @@ inline std::string SlotFileName(int slot) {
 class PatchLibrary {
 public:
     // `factory` = the read-only factory bank folder ("" / missing = none),
-    // listed first.
-    void Scan(const std::filesystem::path &root, const std::filesystem::path &factory = {}) {
+    // listed first. `tags` = the sidecar (nullptr / empty = no hashing at
+    // all, every slot Unclassified with no stars or tags).
+    void Scan(const std::filesystem::path &root, const std::filesystem::path &factory = {},
+              const TagStore *tags = nullptr) {
         banks_.clear();
         stopAtPatch_ = found_ = false;
+        tags_ = tags != nullptr && !tags->Empty() ? tags : nullptr;
         AddFactory(factory);
         ScanFolder(root, "", true);
     }
     // Like Scan, but stops after the first bank holding a patch (the banks
     // before it are the same as Scan's, so its index is Scan's too).
-    void ScanToFirstPatch(const std::filesystem::path &root, const std::filesystem::path &factory = {}) {
+    void ScanToFirstPatch(const std::filesystem::path &root, const std::filesystem::path &factory = {},
+                          const TagStore *tags = nullptr) {
         banks_.clear();
         stopAtPatch_ = true, found_ = false;
+        tags_ = tags != nullptr && !tags->Empty() ? tags : nullptr;
         AddFactory(factory);
         if (!found_) ScanFolder(root, "", true);
     }
@@ -337,7 +438,12 @@ public:
         if (!dir.empty() && std::filesystem::is_directory(dir, ec)) AddFolderBank(dir, dir.filename().string(), FolderEntries(dir));
     }
 
+    std::vector<PatchBank> &Banks() { return banks_; }
     const std::vector<PatchBank> &Banks() const { return banks_; }
+
+    // Streams each finished bank to a listener (the background scan's queue);
+    // the synchronous Scan leaves it empty.
+    void SetPublishSink(std::function<void(const PatchBank &)> sink) { publish_ = std::move(sink); }
 
 #if defined(_WIN32)
     // Restore a previously scanned Windows-only preset index. The index
@@ -349,6 +455,20 @@ public:
         for (size_t i = 0; i < banks_.size(); ++i)
             if (banks_[i].source == source) return int(i);
         return -1;
+    }
+
+    // Re-resolves one slot against the store (after a rewrite / tag edit) and
+    // returns its hash.
+    std::string ResolveTags(size_t bank, size_t slot, const TagStore &tags) {
+        if (bank >= banks_.size() || slot >= size_t(kBankSlots)) return {};
+        PatchRef &ref = banks_[bank].slots[slot];
+        if (!EnsureHash(ref)) return {};
+        ApplyStoredTags(ref, tags, DeriveCategory(ref.name, std::filesystem::path(ref.file).filename().string()));
+        return ref.hash;
+    }
+
+    const PatchRef *RefAt(size_t bank, size_t slot) const {
+        return bank < banks_.size() && slot < size_t(kBankSlots) ? &banks_[bank].slots[slot] : nullptr;
     }
 
     // The .sy1 file of a slot ("" = empty / out of range).
@@ -380,7 +500,10 @@ public:
         std::error_code ec;
         if (!b.slots[slot].Empty() && std::filesystem::path(b.slots[slot].file) != target)
             std::filesystem::remove(b.slots[slot].file, ec);
-        b.slots[slot] = {patch.name, target.string()};
+        PatchHashCache::Shared().Forget(target.string()); // rewritten bytes
+        PatchNameCache::Shared().Forget(target.string());
+        b.slots[slot] = MakeRef(patch.name, target);
+        b.slots[slot].color = patch.color;
         return true;
     }
 
@@ -398,7 +521,9 @@ public:
             const std::filesystem::path target = std::filesystem::path(dst.source) / SlotFileName(s);
             if (!dst.slots[size_t(s)].Empty() || std::filesystem::exists(target, ec)) continue;
             if (!std::filesystem::copy_file(src.file, target, ec)) return -2;
-            dst.slots[size_t(s)] = {src.name, target.string()};
+            PatchRef ref = src; // identical bytes: same hash, star, tags
+            ref.file = target.string();
+            dst.slots[size_t(s)] = std::move(ref);
             return s;
         }
         return -1;
@@ -425,8 +550,7 @@ private:
     void AddFactory(const std::filesystem::path &factory) {
         std::error_code ec;
         if (factory.empty() || !std::filesystem::is_directory(factory, ec)) return;
-        AddFolderBank(factory, kFactoryBankName, FolderEntries(factory));
-        banks_.back().readOnly = true;
+        AddFolderBank(factory, kFactoryBankName, FolderEntries(factory), true);
     }
 
     // `isRoot`: loose .sy1 files directly in the root form a bank named
@@ -457,23 +581,44 @@ private:
     }
 
     void AddFolderBank(const std::filesystem::path &dir, const std::string &name,
-                       const std::vector<std::filesystem::directory_entry> &items) {
+                       const std::vector<std::filesystem::directory_entry> &items, bool readOnly = false) {
         PatchBank bank;
         bank.name = name;
         bank.source = dir.string();
+        bank.readOnly = readOnly; // before the publish: a streamed factory bank is read-only too
         std::vector<std::pair<std::string, PatchRef>> files;
         for (const auto &f : items) {
             const std::string fn = f.path().filename().string();
-            std::string patchName;
-            if (IsSy1(fn) && PatchNameCache::Shared().Name(f, patchName)) files.push_back({fn, {patchName, f.path().string()}});
+            std::string patchName, color;
+            if (IsSy1(fn) && PatchNameCache::Shared().Name(f, patchName, color))
+                files.push_back({fn, MakeRef(patchName, f.path(), &f, color)});
         }
         AssignSlots(bank, std::move(files));
         banks_.push_back(std::move(bank));
         found_ = stopAtPatch_ && banks_.back().Count() > 0;
+        if (publish_) publish_(banks_.back()); // streamed to the UI mid-scan
+    }
+
+    // A resolved reference: the stored category override beats the name rule,
+    // derived categories work without any sidecar at all.
+    PatchRef MakeRef(const std::string &patchName, const std::filesystem::path &file,
+                     const std::filesystem::directory_entry *entry = nullptr, std::string color = "default") const {
+        PatchRef ref;
+        ref.name = patchName;
+        ref.file = file.string();
+        ref.color = std::move(color);
+        const int derived = DeriveCategory(ref.name, file.filename().string());
+        ref.category = derived;
+        if (tags_ == nullptr) return ref;
+        const bool hashed = entry != nullptr ? PatchHashCache::Shared().Hash(*entry, ref.hash) : Sha256File(file, ref.hash);
+        if (hashed) ApplyStoredTags(ref, *tags_, derived);
+        return ref;
     }
 
     std::vector<PatchBank> banks_;
+    const TagStore *tags_ = nullptr; // nullptr = nobody tagged: no hashing
     bool stopAtPatch_ = false, found_ = false;
+    std::function<void(const PatchBank &)> publish_; // set by the background scan
 };
 
 // A program of the library: its bank folder RELATIVE to the library root
@@ -695,25 +840,55 @@ inline int SeedStarterBanks(const std::filesystem::path &root, const std::filesy
     return n;
 }
 
+// What an import did: the new top-level folders (the first one gets
+// selected), how many .sy1 files landed, and why anything was left out
+// ("path: reason") so the browser can say more than "nothing imported".
+struct ImportResult {
+    // Folders the import created, each with how many .sy1 files landed in
+    // it, so the browser can say "3 patches into Imported" and not just a
+    // total.
+    std::vector<std::pair<std::filesystem::path, int>> added;
+    std::vector<std::string> refused;
+    int patches = 0;
+    bool Empty() const { return added.empty(); }
+};
+
+// The C-hook / IPC shape: one "patches=N" line, then "+<count> <folder>"
+// per added bank, then "!<path>: <reason>" per refusal.
+inline std::string ImportPayload(const ImportResult &r) {
+    std::string out = "patches=" + std::to_string(r.patches);
+    for (const auto &a : r.added) out += "\n+" + std::to_string(a.second) + " " + a.first.string();
+    for (const auto &s : r.refused) out += "\n!" + s;
+    return out;
+}
+
 // "Import…": COPIES what the user picked into the library root. A folder (a
 // bank, a container, a whole Synth1 bank folder) is copied, a zip is
 // extracted into a folder of its name, loose .sy1 files fill the free slots
-// of the "Imported" bank. Never clobbers ("Bank 2"). Returns the new
-// top-level folders (the first one gets selected).
-inline std::vector<std::filesystem::path> ImportItems(const std::filesystem::path &root,
-                                                      const std::vector<std::filesystem::path> &items) {
-    std::vector<std::filesystem::path> added, loose;
+// of the "Imported" bank. Never clobbers ("Bank 2"). Anything skipped is
+// reported in `refused` - a silent no-op looked like a broken import.
+inline ImportResult ImportItems(const std::filesystem::path &root, const std::vector<std::filesystem::path> &items) {
+    ImportResult r;
+    std::vector<std::filesystem::path> loose;
     std::error_code ec;
     for (std::filesystem::path p : items) {
         if (p.filename().empty()) p = p.parent_path(); // "dir/"
         const std::filesystem::path rel = root.lexically_relative(p);
-        if (!rel.empty() && *rel.begin() != "..") continue; // the library itself (or a parent)
+        if (!rel.empty() && *rel.begin() != "..") {
+            r.refused.push_back(p.string() + ": already in the library");
+            continue;
+        }
         std::filesystem::path dest;
         int n = 0;
         if (std::filesystem::is_directory(p, ec)) n = CopyBankTree(p, dest = UniquePath(root / SafeName(p.filename().string())));
         else if (Lower(p.extension().string()) == ".zip") n = ExtractZipBank(p, dest = UniquePath(root / SafeName(p.stem().string())));
-        else if (IsSy1(p.filename().string())) loose.push_back(p);
-        if (n > 0) added.push_back(dest);
+        else if (IsSy1(p.filename().string())) { loose.push_back(p); continue; }
+        else {
+            r.refused.push_back(p.string() + ": not a bank folder, a zip or a .sy1 patch");
+            continue;
+        }
+        if (n > 0) { r.added.emplace_back(dest, n); r.patches += n; }
+        else r.refused.push_back(p.string() + ": no .sy1 patches found");
     }
     if (!loose.empty()) {
         const std::filesystem::path bank = root / "Imported";
@@ -722,20 +897,21 @@ inline std::vector<std::filesystem::path> ImportItems(const std::filesystem::pat
         existing.Scan(bank);
         const int b = existing.FindBySource(bank.string());
         size_t next = 0;
-        int n = 0;
+        int n = 0, full = 0;
         for (const auto &p : loose) {
             while (next < size_t(kBankSlots) && ((b >= 0 && !existing.Banks()[size_t(b)].slots[next].Empty()) ||
                                                  std::filesystem::exists(bank / SlotFileName(int(next)), ec)))
                 ++next;
-            if (next >= size_t(kBankSlots)) break;
+            if (next >= size_t(kBankSlots)) { ++full; continue; } // keep going: say how many were left out
             n += std::filesystem::copy_file(p, bank / SlotFileName(int(next++)), ec);
         }
-        if (n > 0) added.push_back(bank);
+        if (n > 0) { r.added.emplace_back(bank, n); r.patches += n; }
+        if (full > 0) r.refused.push_back("Imported bank is full (" + std::to_string(kBankSlots) + " patches): " + std::to_string(full) + " left out");
     }
-    return added;
+    return r;
 }
 
-// Same, paths as newline-separated text in and out (C hooks).
+// Paths as newline-separated text in, the payload above out (C hooks).
 inline std::string ImportItemsText(const std::filesystem::path &root, const std::string &paths) {
     std::vector<std::filesystem::path> items;
     for (size_t at = 0; at < paths.size();) {
@@ -744,9 +920,7 @@ inline std::string ImportItemsText(const std::filesystem::path &root, const std:
         if (end > at) items.emplace_back(paths.substr(at, end - at));
         at = end + 1;
     }
-    std::string out;
-    for (const auto &p : ImportItems(root, items)) out += (out.empty() ? "" : "\n") + p.string();
-    return out;
+    return ImportPayload(ImportItems(root, items));
 }
 
 // ---- the user's library: one root folder + operations -------------------------
@@ -769,6 +943,7 @@ public:
         root_ = root;
         factory_ = factory;
         EnsureRoot();
+        tags_.Load(root_);
         if (!factory.empty()) SeedStarterBanks(root_, factory.parent_path() / kStarterBanksFolder, build);
     }
     // Moves a file to the Trash, false = no Trash here (then it is deleted).
@@ -777,6 +952,7 @@ public:
     const std::filesystem::path &Root() const { return root_; }
     const std::filesystem::path &Factory() const { return factory_; }
     const PatchLibrary &Library() const { return lib_; }
+    const TagStore &Tags() const { return tags_; }
 
 #if defined(_WIN32)
     void AdoptIndex(std::vector<PatchBank> banks) {
@@ -790,8 +966,9 @@ public:
     void Rescan() {
         EnsureRoot();
         ++generation_;
+        tags_.Load(root_); // the sidecar may have changed under us (sync, import)
         ExpandZips(root_, trash_, trashed_, removed_);
-        lib_.Scan(root_, factory_);
+        lib_.Scan(root_, factory_, &tags_);
         scanned_ = true;
         ++revision_;
     }
@@ -806,25 +983,101 @@ public:
         if (worker_.joinable()) return;
         EnsureRoot();
         ready_ = false;
-        worker_ = std::thread([this, root = root_, factory = factory_, trash = trash_, gen = generation_] {
+        tags_.Load(root_);
+        // The browser shows what is being built, so the list it was showing
+        // goes away NOW (also on Refresh): it fills in bank by bank.
+        lib_ = PatchLibrary();
+        scanned_ = true; // not false: Json() would scan synchronously
+        scan_.Reset();
+        // The denominator is known before the worker starts: the count is of the
+        // library root's own entries, no file is opened for it.
+        scanTotal_.store(TopLevelCount(root_), std::memory_order_relaxed);
+        ++revision_;
+        const int gen = generation_;
+        worker_ = std::thread([this, root = root_, factory = factory_, trash = trash_, gen, tags = tags_] {
             BackgroundScan s;
             s.generation = gen;
+            s.lib.SetPublishSink([&s](const PatchBank &bank) {
+                std::lock_guard<std::mutex> lock(s.mu);
+                s.pending.push_back(bank);
+            });
             ExpandZips(root, trash, s.trashed, s.removed);
-            s.lib.Scan(root, factory);
-            scan_ = std::move(s); // read by PollRescan after the join
+            s.lib.Scan(root, factory, &tags);
+            std::lock_guard<std::mutex> lock(scan_.mu);
+            scan_.generation = s.generation;
+            scan_.lib = std::move(s.lib);
+            scan_.pending = std::move(s.pending);
+            scan_.trashed = std::move(s.trashed);
+            scan_.removed = std::move(s.removed);
             ready_.store(true, std::memory_order_release);
         });
     }
     // True = a new list was adopted (Revision() moved).
     bool PollRescan() {
-        if (!worker_.joinable() || !ready_.load(std::memory_order_acquire)) return false;
+        if (!worker_.joinable()) return false;
+        // Banks finished since the last poll: adopted while the scan still
+        // runs, so the list GROWS instead of arriving all at once. The scan
+        // order is the bank order (factory, then a depth-first walk), so a
+        // partial list is always a prefix and bank indices stay put.
+        std::vector<PatchBank> arrived;
+        {
+            std::lock_guard<std::mutex> lock(scan_.mu);
+            if (scan_.generation == generation_) arrived.swap(scan_.pending);
+        }
+        if (!arrived.empty()) {
+            for (PatchBank &b : arrived) lib_.Banks().push_back(std::move(b));
+            ++revision_;
+        }
+        if (!ready_.load(std::memory_order_acquire)) return !arrived.empty();
         worker_.join();
         trashed_.insert(trashed_.end(), scan_.trashed.begin(), scan_.trashed.end()); // done either way
         removed_.insert(removed_.end(), scan_.removed.begin(), scan_.removed.end());
         const bool fresh = scan_.generation == generation_;
-        if (fresh) lib_ = std::move(scan_.lib), scanned_ = true, ++revision_;
-        scan_ = {};
-        return fresh;
+        if (fresh) {
+            // The worker's own library holds every bank: the list on screen is
+            // that one, whatever it had adopted so far (a partial list is a
+            // prefix, so this only appends).
+            lib_.Banks() = std::move(scan_.lib.Banks());
+            lastScanTotal_.store(int32_t(lib_.Banks().size()), std::memory_order_relaxed);
+            ++revision_;
+        }
+        scan_.Reset();
+        scanned_ = true;
+        if (!fresh) Rescan(); // an edit won mid-stream: put the whole list back
+        return true;
+    }
+
+    int32_t LibraryPatchCount() const {
+        int32_t n = 0;
+        for (const PatchBank &b : lib_.Banks()) n += b.Count();
+        return n;
+    }
+
+    // Folders directly in the library root. Every one is a bank (or a
+    // container of them), so it is the closest cheap estimate of how many
+    // banks a scan will find. Loose root .sy1 files form a bank too.
+    static int32_t TopLevelCount(const std::filesystem::path &root) {
+        std::error_code ec;
+        int32_t n = 0;
+        bool loose = false;
+        for (const auto &e : FolderEntries(root)) {
+            if (e.is_directory(ec)) ++n;
+            else if (IsSy1(e.path().filename().string())) loose = true;
+        }
+        return n + (loose ? 1 : 0);
+    }
+
+    // Banks / patches on screen so far, out of what the scan estimates it
+    // will find: the finished scan's own total, else the number of folders in
+    // the library root (an honest denominator for a flat library; sub-banks
+    // are counted through their parent, so the estimate can undershoot and
+    // the browser stops calling it a fraction once it does).
+    void ScanProgress(int32_t &banks, int32_t &patches, int32_t &total) {
+        banks = int32_t(lib_.Banks().size());
+        patches = LibraryPatchCount();
+        total = worker_.joinable() ? scanTotal_.load(std::memory_order_relaxed)
+                                   : lastScanTotal_.load(std::memory_order_relaxed);
+        if (total < banks) total = banks; // the estimate may undershoot sub-banks
     }
     bool Scanning() const { return worker_.joinable(); }
     // Bumps on every change of the list (rescans, writes, an adopted
@@ -859,10 +1112,30 @@ public:
     }
     bool Write(int bank, int slot, const Sy1Patch &p) {
         EnsureScanned();
+        // A rewrite changes the file's bytes, so its hash: the slot's star,
+        // tags and category travel with it (the user edited THIS slot).
+        // A bank that has not streamed in yet is not on screen, so nothing can
+        // be written into it (the indices that ARE there are stable: a partial
+        // list is always a prefix of the final one).
+        std::string oldHash;
+        if (bank >= 0 && slot >= 0 && size_t(bank) < lib_.Banks().size() && slot < kBankSlots)
+            oldHash = lib_.Banks()[size_t(bank)].slots[size_t(slot)].hash;
+        PatchTags carried;
+        if (const PatchTags *stored = oldHash.empty() ? nullptr : tags_.Find(oldHash); stored != nullptr) carried = *stored;
         if (bank < 0 || slot < 0 || !lib_.Write(size_t(bank), size_t(slot), p)) return false;
+        const std::string newHash = lib_.ResolveTags(size_t(bank), size_t(slot), tags_);
+        if (!oldHash.empty() && oldHash != newHash) {
+            if (!carried.Empty() && !newHash.empty()) tags_.Set(newHash, carried);
+            // The old bytes are gone; keep their record while another slot
+            // still holds them (a copy of this patch).
+            if (!HashInUse(oldHash, bank, slot)) tags_.Set(oldHash, PatchTags());
+            lib_.ResolveTags(size_t(bank), size_t(slot), tags_);
+            SaveTags();
+        }
         ++generation_, ++revision_;
         return true;
     }
+
     int Copy(int bank, int slot, int to) {
         EnsureScanned();
         const int s = bank < 0 || slot < 0 || to < 0 ? -2 : lib_.Copy(size_t(bank), size_t(slot), size_t(to));
@@ -926,11 +1199,15 @@ public:
             return std::filesystem::is_directory(p, ec);
         });
         bool ok = true;
+        // Bank deletion implies its patches': nobody wants dead records
+        // (a hash never comes back, a re-copied file would inherit a star).
+        const std::vector<PatchRef> removed(banks[size_t(bank)].slots.begin(), banks[size_t(bank)].slots.end());
         if (wholeFolder) ok = Remove(dir);
         else
             for (const auto &p : items)
                 if (IsSy1(p.filename().string()) && !std::filesystem::is_directory(p, ec)) ok = Remove(p) && ok;
         Rescan();
+        if (ok) ForgetPatches(removed);
         return ok;
     }
 
@@ -949,6 +1226,13 @@ public:
         bool ok = true;
         for (const PatchRef &p : b.slots)
             if (!p.Empty()) ok = std::filesystem::copy_file(p.file, out / std::filesystem::path(p.file).filename(), ec) && ok;
+        // A sidecar of just this bank's records, so importing the folder on
+        // another machine restores its stars and tags. No records, no file.
+        TagStore carried;
+        for (const PatchRef &p : b.slots)
+            if (const PatchTags *stored = p.hash.empty() ? nullptr : tags_.Find(p.hash); stored != nullptr)
+                carried.Set(p.hash, *stored), carried.SetNameHint(p.hash, p.name);
+        if (ok && !carried.Empty()) ok = carried.SaveFile(out / TagStore::kFileName);
         return ok ? out.string() : std::string();
     }
 
@@ -968,32 +1252,267 @@ public:
 
     std::string Import(const std::string &paths) {
         EnsureRoot();
-        std::string added = ImportItemsText(root_, paths);
+        const std::string added = ImportItemsText(root_, paths);
+        // A categories.json brought along (a folder exported elsewhere, a
+        // library tagged on another machine) MERGES into ours: patches we
+        // already know keep their stars and tags, only hashes we never saw
+        // are added. Never replace - importing must not lose local work.
+        MergeBroughtTags(paths);
         Rescan();
         return added;
     }
 
-    // {"root":..,"banks":[{"name","source","readOnly","slots":[128 names, "" = empty]}]}
+    // ---- categories, favourites, tags ---------------------------------------
+    // Each mutation updates the slot in place (the caller's list stays right),
+    // saves the sidecar and does NOT rescan (nothing on disk moved).
+
+    // `category` = a kCat* value (kCatUnclassified stores an explicit
+    // "Unclassified"), or -1 = forget the override and derive it again.
+    bool SetCategory(int bank, int slot, int category) {
+        EnsureScanned();
+        PatchRef *ref = MutableRef(bank, slot);
+        if (ref == nullptr || !EnsureHash(*ref) || (category >= 0 && !IsCategory(category))) return false;
+        const std::string hash = ref->hash;
+        tags_.Update(hash, [&](PatchTags &patch) {
+            patch.category = category < 0 ? int(kCatUnclassified) : category;
+            patch.overridden = category >= 0;
+        });
+        lib_.ResolveTags(size_t(bank), size_t(slot), tags_);
+        return SaveTags();
+    }
+    // True = stars, false = un-stars (one call for both, the UI toggles).
+    bool SetFavourite(int bank, int slot, bool favourite) {
+        EnsureScanned();
+        PatchRef *ref = MutableRef(bank, slot);
+        if (ref == nullptr || !EnsureHash(*ref)) return false;
+        const std::string hash = ref->hash;
+        tags_.Update(hash, [&](PatchTags &patch) { patch.favourite = favourite; });
+        lib_.ResolveTags(size_t(bank), size_t(slot), tags_);
+        return SaveTags();
+    }
+    bool AddPatchTag(int bank, int slot, const std::string &tag) {
+        EnsureScanned();
+        PatchRef *ref = MutableRef(bank, slot);
+        if (ref == nullptr || !EnsureHash(*ref)) return false;
+        const std::string hash = ref->hash;
+        bool changed = false;
+        tags_.Update(hash, [&](PatchTags &patch) { changed = AddTag(patch, tag); });
+        if (!changed) return false; // full / duplicate / nothing left of it
+        lib_.ResolveTags(size_t(bank), size_t(slot), tags_);
+        return SaveTags();
+    }
+    bool RemovePatchTag(int bank, int slot, const std::string &tag) {
+        EnsureScanned();
+        PatchRef *ref = MutableRef(bank, slot);
+        if (ref == nullptr || !EnsureHash(*ref)) return false;
+        const std::string hash = ref->hash;
+        bool changed = false;
+        tags_.Update(hash, [&](PatchTags &patch) { changed = RemoveTag(patch, tag); });
+        if (!changed) return false;
+        lib_.ResolveTags(size_t(bank), size_t(slot), tags_);
+        return SaveTags();
+    }
+
+    // The tag chips: every tag in the library, sorted.
+    std::vector<std::string> TagVocabulary() const { return tags_.Vocabulary(); }
+
+    // A patch's colour lives in its own .sy1 (`color=`), so this rewrites the
+    // file: the patch's hash changes, and Write carries its star / tags /
+    // category over to the new bytes (same path a re-save takes).
+    bool SetPatchColor(int bank, int slot, const std::string &color) {
+        EnsureScanned();
+        if (bank < 0 || slot < 0) return false;
+        Sy1Patch patch;
+        if (!Load(bank, slot, patch)) return false;
+        if (patch.color == color) return true; // nothing to rewrite
+        patch.color = color.empty() ? "default" : color;
+        return Write(bank, slot, patch);
+    }
+
+    // Patches whose BYTES are identical, everywhere in the library: an
+    // import that brought the same module twice, a bank copied back in,
+    // a save that took another patch's bytes. Synth1 slots hold no
+    // identity, so the file's SHA-256 is the only truth. Payload: a
+    // "groups=N" line, then one line per group, "bank,slot" tokens
+    // space separated (names / colours come from Json, so a group
+    // carries only where its members ARE). "" = library still loading.
+    // Nothing is connected to the scan worker: it hashes the whole
+    // library (~0.2 s once on 19,200 patches, then cached), so a
+    // second call is instant.
+    std::string FindDuplicates() {
+        EnsureScanned();
+        if (Scanning()) return {};
+        std::unordered_map<std::string, std::vector<int>> byHash;
+        const auto &banks = lib_.Banks();
+        for (size_t b = 0; b < banks.size(); ++b) {
+            for (size_t s = 0; s < size_t(kBankSlots); ++s) {
+                const PatchRef &ref = banks[b].slots[s];
+                if (ref.Empty()) continue;
+                std::string hash = ref.hash;
+                if (hash.empty()) {
+                    std::error_code ec;
+                    const std::filesystem::directory_entry entry(std::filesystem::path(ref.file), ec);
+                    if (ec || !PatchHashCache::Shared().Hash(entry, hash)) continue;
+                }
+                byHash[hash].push_back(int(b));
+                byHash[hash].push_back(int(s));
+            }
+        }
+        std::vector<std::vector<int>> groups;
+        for (auto &pair : byHash)
+            if (pair.second.size() >= 4) groups.push_back(std::move(pair.second));
+        std::sort(groups.begin(), groups.end());
+        std::string out = "groups=" + std::to_string(groups.size()) + "\n";
+        for (const std::vector<int> &group : groups) {
+            for (size_t i = 0; i + 1 < group.size(); i += 2) {
+                if (i != 0) out += ' ';
+                out += std::to_string(group[i]) + "," + std::to_string(group[i + 1]);
+            }
+            out += '\n';
+        }
+        return out;
+    }
+
+    // "Tags…" > Export: the whole store (every patch of every library this
+    // user tagged, not just this folder) as one file to keep somewhere safe.
+    bool ExportTags(const std::filesystem::path &file) const { return tags_.SaveFile(file); }
+
+    // "Tags…" > Import: MERGE a file made on another machine into ours.
+    // Returns how many patches the file added; 0 = nothing new / unreadable.
+    int ImportTags(const std::filesystem::path &file) {
+        TagStore incoming;
+        incoming.LoadFile(file);
+        if (incoming.Empty()) return 0;
+        const std::size_t added = tags_.MergeMissing(incoming);
+        if (added == 0 || !SaveTags()) return 0;
+        Rescan(); // the list's stars / tags are now stale
+        return int(added);
+    }
+
+    // {"root":..,"catNames":[..],"tagVocab":[..],
+    //  "banks":[{"name","source","readOnly",
+    //            "slots":[128 names, "" = empty],
+    //            "cats":[128 kCat* values],"favs":[128 true/false],
+    //            "tags":[[128 lists of tags]]}]}
+    // The per-slot arrays are parallel to "slots", so the UI indexes them alike.
     std::string Json() {
         EnsureScanned();
-        std::string j = "{\"root\":" + JsonString(root_.string()) + ",\"banks\":[";
+        std::string j = "{\"root\":" + JsonString(root_.string()) + ",\"catNames\":[";
+        for (int c = 0; c < kCategoryCount; ++c) j += (c ? "," : "") + JsonString(CategoryName(c));
+        const std::vector<std::string> vocab = tags_.Vocabulary();
+        j += "],\"tagVocab\":[";
+        for (size_t t = 0; t < vocab.size(); ++t) j += (t ? "," : "") + JsonString(vocab[t]);
+        j += "],\"banks\":[";
         const auto &banks = lib_.Banks();
         for (size_t b = 0; b < banks.size(); ++b) {
             j += (b ? ",{" : "{");
             j += "\"name\":" + JsonString(banks[b].name) + ",\"source\":" + JsonString(banks[b].source) +
                  ",\"readOnly\":" + (banks[b].readOnly ? "true" : "false") + ",\"slots\":[";
             for (int s = 0; s < kBankSlots; ++s) j += (s ? "," : "") + JsonString(banks[b].slots[size_t(s)].name);
+            j += "],\"cats\":[";
+            for (int s = 0; s < kBankSlots; ++s)
+                j += (s ? "," : "") + std::to_string(banks[b].slots[size_t(s)].category);
+            j += "],\"favs\":[";
+            for (int s = 0; s < kBankSlots; ++s)
+                j += (s ? "," : "") + std::string(banks[b].slots[size_t(s)].favourite ? "true" : "false");
+            j += "],\"tags\":[";
+            for (int s = 0; s < kBankSlots; ++s) {
+                j += (s ? "," : "") + std::string("[");
+                const auto &tags = banks[b].slots[size_t(s)].tags;
+                for (size_t t = 0; t < tags.size(); ++t) j += (t ? "," : "") + JsonString(tags[t]);
+                j += "]";
+            }
+            j += "],\"colors\":[";
+            for (int s = 0; s < kBankSlots; ++s)
+                j += (s ? "," : "") + JsonString(banks[b].slots[size_t(s)].color);
             j += "]}";
         }
         return j + "]}";
     }
 
 private:
+    PatchRef *MutableRef(int bank, int slot) {
+        return bank >= 0 && slot >= 0 && size_t(bank) < lib_.Banks().size() && slot < kBankSlots
+                   ? &lib_.Banks()[size_t(bank)].slots[size_t(slot)]
+                   : nullptr;
+    }
+
+    // The sidecar is tiny: save it on every edit, so a crash never loses a
+    // star. No records at all = no file to keep.
+    bool SaveTags() {
+        if (tags_.Empty()) { // nothing tagged anywhere: no file to keep
+            std::error_code ec;
+            std::filesystem::remove(root_ / TagStore::kFileName, ec);
+            return true;
+        }
+        for (const auto &bank : lib_.Banks())
+            for (const PatchRef &ref : bank.slots)
+                if (!ref.hash.empty() && tags_.Find(ref.hash) != nullptr) tags_.SetNameHint(ref.hash, ref.name);
+        return tags_.Save(root_);
+    }
+
+    // A deleted patch's record goes with it.
+    void ForgetPatches(const std::vector<PatchRef> &slots) {
+        bool dropped = false;
+        for (const PatchRef &ref : slots)
+            if (!ref.hash.empty() && tags_.Find(ref.hash) != nullptr && !HashInUse(ref.hash, -1, -1))
+                tags_.Set(ref.hash, PatchTags()), dropped = true;
+        if (dropped) SaveTags();
+    }
+
+    // An imported FOLDER may carry a categories.json of its own (an exported
+    // bank does): its records MERGE into ours, never replacing ours.
+    void MergeBroughtTags(const std::string &sourcePaths) {
+        bool changed = false;
+        for (size_t at = 0; at < sourcePaths.size();) {
+            size_t end = sourcePaths.find('\n', at);
+            if (end == std::string::npos) end = sourcePaths.size();
+            const std::filesystem::path dir(sourcePaths.substr(at, end - at));
+            at = end + 1;
+            if (dir.empty()) continue;
+            std::error_code ec;
+            const std::filesystem::path file = dir / TagStore::kFileName;
+            if (!std::filesystem::is_regular_file(file, ec)) continue;
+            TagStore incoming;
+            incoming.LoadFile(file);
+            if (tags_.MergeMissing(incoming) > 0) changed = true;
+        }
+        if (changed) tags_.Save(root_);
+    }
+
+    // Another slot still holding these bytes (its tags must not be dropped
+    // when THIS slot is rewritten).
+    bool HashInUse(const std::string &hash, int bank, int slot) const {
+        const auto &banks = lib_.Banks();
+        for (size_t b = 0; b < banks.size(); ++b)
+            for (size_t s = 0; s < size_t(kBankSlots); ++s)
+                if (banks[b].slots[s].hash == hash && !(int(b) == bank && int(s) == slot)) return true;
+        return false;
+    }
+
     using TrashFn = std::function<bool(const std::filesystem::path &)>;
+    // Built on the worker thread, drained by PollRescan on the UI thread. A
+    // finished bank is MOVED here (O(1)), never the whole growing list
+    // (O(n^2) over a scan), so the browser can show banks as they arrive.
     struct BackgroundScan {
         int generation = 0;
         PatchLibrary lib;
+        std::mutex mu;
+        std::vector<PatchBank> pending; // finished banks not yet adopted
         std::vector<std::string> trashed, removed;
+
+        BackgroundScan() = default;
+        BackgroundScan(const BackgroundScan &) = delete;
+        BackgroundScan &operator=(const BackgroundScan &) = delete;
+
+        // A mutex can't be assigned, so a finished scan is cleared by hand.
+        void Reset() {
+            std::lock_guard<std::mutex> lock(mu);
+            generation = 0;
+            lib = PatchLibrary();
+            pending.clear();
+            trashed.clear(), removed.clear();
+        }
     };
 
     // A zip put into the library counts as an import: extracted into a
@@ -1037,12 +1556,15 @@ private:
 
     std::filesystem::path root_, factory_;
     PatchLibrary lib_;
+    TagStore tags_;
     bool scanned_ = false;
     TrashFn trash_;
     std::vector<std::string> trashed_, removed_;
     int generation_ = 0, revision_ = 0; // generation: what a background scan must still match
     std::thread worker_;
     std::atomic<bool> ready_{false};
+    std::atomic<int32_t> scanTotal_{0}; // the running scan's denominator
+    std::atomic<int32_t> lastScanTotal_{0}; // banks the last finished scan found
     BackgroundScan scan_;
 };
 
