@@ -549,11 +549,21 @@ the iPad plist `OxoSynth2AudioUnit/Info.plist` still carries it by hand.
   name, bank name, category name, tags), the 22 type chips ("All" first,
   Unclassified only once something is in it), the star-only chip, a "…"
   menu (export / import categories and tags, find duplicates, clear filter)
-  and Clear. It narrows SLOTS in every bank at once: a non-matching slot
-  stays in place (drag / copy still land) but fades to 0.3, the loaded
-  patch stays legible, and a bank shows "matching / total" and dims when
-  nothing matches but stays selectable (copy workflows). Client-side in
-  Swift, so no EngineCore work and no rescan.
+  and Clear. It narrows SLOTS in every bank at once: a non-matching slot is
+  HIDDEN (the grid keeps its 4-column order, the gaps close up, a matching
+  bank shows "matching / total"), the loaded patch always stays so the
+  sound you hear is visible, and a bank with nothing matching keeps its row,
+  dimmed and "0/N", so it stays selectable for copy workflows. Client-side
+  in Swift, so no EngineCore work and no rescan.
+- ALL PATCHES (the bank list's first row, under the filter bar): one flat
+  list of every patch of every bank, narrowed by the same filter, each row
+  prefixed with its bank name. Selected by clicking the row; choosing a
+  bank leaves the mode. It is lazy (a big library is 19,200 rows) and rows
+  keep their real bank + slot, so load / drag / copy / menus work; move by
+  drop inside a bank does not (no target). The browser's arrow keys walk
+  that list, and `scrollToLoaded` scrolls the loaded patch into view. A
+  write dialog excludes the mode (it must show one bank's 128 slots); the
+  browser otherwise reopens on the last view.
 - TagDialog (`Edit tags…`, drawn in the browser like DeleteBankDialog):
   the add field at the TOP (clear of the iPad keyboard), suggestions from
   the tags already in use (`.prefix(32)`), the tag list with remove
@@ -701,8 +711,11 @@ the iPad plist `OxoSynth2AudioUnit/Info.plist` still carries it by hand.
   updates… (mac). The version box in the title band
   opens the GitHub project (`SynthPanelView.projectURL`).
 - BROWSER KEYS (mac, `SynthModel.browserKey`): arrows load at once (up /
-  down = ◀ ▶, left / right = next column, nearest non-empty slot), Return /
-  Enter / Esc close (write dialog: Esc only), Esc closes the logo menu.
+  down = ◀ ▶, left / right = next column, nearest slot), Return / Enter /
+  Esc close (write dialog: Esc only), Esc closes the logo menu. Arrows walk
+  the VISIBLE list: with a filter on (and in the All patches view) they skip
+  hidden patches, so a key never loads a patch you cannot see; the LCD's
+  ◀ ▶ still walk every non-empty slot.
   Routed by `Synth2HostingView`: local NSEvent monitor + own keyDown; Logic
   fallback = editor is the front window. Windows: `WindowsEditor::keyDown`
   (WM_KEYDOWN + `IPlugView::onKeyDown`, WM_GETDLGCODE wants all keys; Ctrl

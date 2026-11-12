@@ -337,12 +337,60 @@ final class SynthModel: ObservableObject {
         return info.tags(slot).contains { $0.lowercased().contains(needle) }
     }
 
-    /// Patches of a bank that pass the filter (0 dims the row while one is on).
+    /// The one rule `visibleSlots`, `allVisiblePatches` and `step` share.
+    func slotShown(bank: Int, slot: Int) -> Bool {
+        guard bank >= 0, bank < banks.count, slot >= 0, slot < banks[bank].slots.count,
+              !banks[bank].slots[slot].isEmpty else { return false }
+        return !hasActiveFilter || slotMatches(bank: bank, slot: slot)
+            || (bank == loadedBank && slot == currentProgram)
+    }
+
+    /// Slots the browser shows for a bank: all of them, or — while a filter
+    /// is on — only the patches that pass it. The patch being played is
+    /// always kept, so a filter never hides what you hear. Slot numbers are
+    /// real (load / drag / copy keep their targets); the gaps simply close.
+    func visibleSlots(bank: Int) -> [Int] {
+        guard bank >= 0, bank < banks.count else { return [] }
+        let slots = Array(banks[bank].slots.indices)
+        guard hasActiveFilter else { return slots }
+        return slots.filter { slotShown(bank: bank, slot: $0) }
+    }
+
+    /// Patches of a bank that pass the filter (= slots on screen with one on;
+    /// the row dims at 0 so a bank with nothing to show says why).
     func matchCount(bank: Int) -> Int {
         guard bank >= 0, bank < banks.count else { return 0 }
         guard hasActiveFilter else { return banks[bank].count }
-        return banks[bank].slots.indices.reduce(0) { $0 + (slotMatches(bank: bank, slot: $1) ? 1 : 0) }
+        return visibleSlots(bank: bank).count
     }
+
+    /// Browser mode: every patch of every bank in one list, instead of the
+    /// selected bank's 128-slot grid. The filter bar narrows it the same way
+    /// (so "show me every pad in the library" is one click + one chip).
+    @Published var showingAllBanks = false
+
+    /// Every non-empty (bank, slot) the filter lets through, in bank then
+    /// slot order: the "All patches" list. Cached, because the browser asks
+    /// on every redraw (a big library is 19,200 patches x 30 Hz polls, and
+    /// each test is a few lowercased `contains` calls).
+    func allVisiblePatches() -> [(bank: Int, slot: Int)] {
+        let filter = "\(categoryFilter ?? -1)|\(favouritesOnly)|\(librarySearch)"
+            + "|\(loadedBank.map(String.init) ?? "-")/\(currentProgram.map(String.init) ?? "-")"
+        if let c = allCache, c.stamp == libraryStamp, c.filter == filter { return c.value }
+        var out: [(bank: Int, slot: Int)] = []
+        for b in banks.indices {
+            for s in banks[b].slots.indices where slotShown(bank: b, slot: s) { out.append((b, s)) }
+        }
+        allCache = (libraryStamp, filter, out)
+        return out
+    }
+
+    /// Patches in the library (every bank's non-empty slots).
+    var libraryPatchTotal: Int { banks.reduce(0) { $0 + $1.count } }
+
+    private var libraryStamp = 0 // bumped by every loadLibrary (any list change)
+    private var allCache: (stamp: Int, filter: String, value: [(bank: Int, slot: Int)])?
+
     /// A background rescan is running (the browser says "loading…").
     @Published private(set) var libraryLoading = false
     /// How much of the library the running (or last) scan has delivered:
@@ -660,6 +708,8 @@ final class SynthModel: ObservableObject {
         }
         libraryError = nil
         banks = info.banks
+        libraryStamp &+= 1
+        allCache = nil
         libraryRoot = info.root
         categoryNames = info.categoryNames
         tagVocabulary = info.tagVocab
@@ -705,10 +755,19 @@ final class SynthModel: ObservableObject {
         if let b = loadedBank { currentBank = b }
         showThemes = false
         writing = write
+        if write { showingAllBanks = false } // a write needs one concrete bank
+        else { showingAllBanks = Self.lastShowedAllBanks } // this session's choice
         showBrowser = true
     }
 
+    /// The browser reopens on the view it was left on (a user browsing all
+    /// patches does not want the loaded bank back every time); a write always
+    /// opens a bank, so that choice is kept aside for the next browse.
+    private static var lastShowedAllBanks = false
+
     func closeBrowser() {
+        // a write cleared the mode for itself: keep the browse choice aside
+        if !writing { Self.lastShowedAllBanks = showingAllBanks }
         showBrowser = false
         writing = false
         bankToDelete = nil
@@ -746,6 +805,13 @@ final class SynthModel: ObservableObject {
     /// Next / previous program, skipping empty slots, rolling into the
     /// neighbouring banks at the ends.
     func step(_ delta: Int) {
+        step(delta, throughFilter: false)
+    }
+
+    /// Step to the next / previous patch, rolling over banks. `throughFilter`
+    /// walks only the patches browser shows (all view / a filtered grid), so an
+    /// arrow key never lands on a hidden one; the LCD's ◀ ▶ keep every slot.
+    func step(_ delta: Int, throughFilter: Bool) {
         if banks.isEmpty { loadLibrary() }
         guard banks.contains(where: { $0.count > 0 }) else { return }
         var b = min(loadedBank ?? currentBank ?? 0, banks.count - 1)
@@ -762,7 +828,9 @@ final class SynthModel: ObservableObject {
                 p = banks[b].slots.count
                 continue
             }
-            if !banks[b].slots[p].isEmpty { return load(bank: b, slot: p) }
+            let steppable = throughFilter ? slotShown(bank: b, slot: p)
+                                         : !banks[b].slots[p].isEmpty
+            if steppable { return load(bank: b, slot: p) }
         }
     }
 
@@ -857,23 +925,35 @@ final class SynthModel: ObservableObject {
             closeBrowser()
             return true
         }
+        // "All patches": one column, so every arrow moves in that list.
+        // The filter bar narrows it like a bank; the list is bank then slot
+        // order, the same order `step` walks. No bank needs to be selected.
+        if showingAllBanks {
+            step(key == .down || key == .right ? 1 : -1, throughFilter: true)
+            return true
+        }
         guard let b = currentBank, b < banks.count else { return true }
-        let slots = banks[b].slots
-        guard b == loadedBank, let p = currentProgram else {
-            if let first = slots.firstIndex(where: { !$0.isEmpty }) { load(bank: b, slot: first) }
+        // The grid shows `visibleSlots` (filtered gaps closed), so navigation
+        // is in LIST positions, and the slot loaded is the one at that
+        // position: arrows never land on a hidden patch.
+        let shown = visibleSlots(bank: b)
+        let empty = shown.first { !banks[b].slots[$0].isEmpty }
+        guard b == loadedBank, let p = currentProgram, let at = shown.firstIndex(of: p) else {
+            if let first = empty { load(bank: b, slot: first) }
             return true
         }
         switch key {
         case .up, .down:
-            step(key == .down ? 1 : -1)
+            step(key == .down ? 1 : -1, throughFilter: hasActiveFilter)
         default:
-            let rows = Self.browserRows(slots.count)
-            let col = p / rows + (key == .right ? 1 : -1)
-            guard col >= 0, col * rows < slots.count else { break }
-            let wanted = col * rows + p % rows
-            let column = (col * rows)..<min((col + 1) * rows, slots.count)
-            if let s = column.filter({ !slots[$0].isEmpty }).min(by: { abs($0 - wanted) < abs($1 - wanted) }) {
-                load(bank: b, slot: s)
+            let rows = Self.browserRows(shown.count)
+            let col = at / rows + (key == .right ? 1 : -1)
+            guard col >= 0, col * rows < shown.count else { break }
+            let wanted = col * rows + at % rows
+            let column = (col * rows)..<min((col + 1) * rows, shown.count)
+            if let i = column.filter({ !banks[b].slots[shown[$0]].isEmpty })
+                .min(by: { abs($0 - wanted) < abs($1 - wanted) }) {
+                load(bank: b, slot: shown[i])
             }
         }
         return true

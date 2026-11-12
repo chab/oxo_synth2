@@ -205,6 +205,7 @@ struct PatchBrowserView: View {
     @State private var newUserBank = false
     private static let dragPrefix = SlotDrop.prefix
     private static let newUserBankRow = -1 // its scroll id (real rows: bank indices)
+    private static let allPatchesRow = -2 // idem
 
     private var bank: PatchBankInfo? {
         model.currentBank.flatMap { $0 < model.banks.count ? model.banks[$0] : nil }
@@ -264,7 +265,7 @@ struct PatchBrowserView: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            Text(model.writing ? "Write patch" : "Banks")
+            Text(model.writing ? "Write patch" : model.showingAllBanks ? "All patches" : "Banks")
                 .oxoFont(12, .semibold).foregroundColor(theme.headerText)
             if let notice = model.importNotice {
                 Text(notice).oxoFont(11).foregroundColor(theme.headerText)
@@ -320,9 +321,10 @@ struct PatchBrowserView: View {
     // MARK: search and filter
 
     /// Narrowing the slot list: free text (patch / bank name, category,
-    /// tags) plus one type chip plus the star. The loaded bank still shows
-    /// every slot, so this filters SLOTS, and a bank with nothing matching
-    /// is dimmed but still selectable (so copying between banks works).
+    /// tags) plus one type chip plus the star. Non-matching patches are
+    /// HIDDEN (the grid shows only what passes, in the same 4-column order);
+    /// the patch being played stays, and a bank with nothing matching keeps
+    /// its row, dimmed and with 0/n, so copying between banks still works.
     private var filterBar: some View {
         HStack(spacing: 6) {
             HStack(spacing: 4) {
@@ -469,6 +471,7 @@ struct PatchBrowserView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
+                    if !model.banks.isEmpty && !model.writing { allPatchesRow }
                     ForEach(model.banks.indices, id: \.self) { b in bankRow(b) }
                     if model.writing && !model.banks.isEmpty && model.userBank == nil { newUserBankRow }
                     if model.banks.isEmpty {
@@ -482,10 +485,16 @@ struct PatchBrowserView: View {
             }
             .scrollDeadZone()
             // Keyboard steps roll into other banks: keep the bank in view.
-            .onChange(of: model.currentBank) { _, b in if let b { proxy.scrollTo(b) } }
+            .onChange(of: model.currentBank) { _, b in if let b, !model.showingAllBanks { proxy.scrollTo(b) } }
             .onChange(of: newUserBank) { _, on in if on { proxy.scrollTo(Self.newUserBankRow) } }
             .onAppear {
-                if newUserBank { proxy.scrollTo(Self.newUserBankRow) } else if let b = model.currentBank { proxy.scrollTo(b) }
+                if newUserBank {
+                    proxy.scrollTo(Self.newUserBankRow)
+                } else if model.showingAllBanks {
+                    proxy.scrollTo(Self.allPatchesRow)
+                } else if let b = model.currentBank {
+                    proxy.scrollTo(b)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading) // also with no rows (loading)
@@ -519,9 +528,24 @@ struct PatchBrowserView: View {
             }
     }
 
+    /// The browser's cross-bank list: every patch of every bank, narrowed by
+    /// the filter bar like a bank is. Selected = the show-all mode is on.
+    private var allPatchesRow: some View {
+        let total = model.libraryPatchTotal
+        let shown = model.hasActiveFilter ? model.allVisiblePatches().count : total
+        let label = model.hasActiveFilter ? "\(shown)/\(total)" : "\(total)"
+        return bankLabel("All patches", count: label, selected: model.showingAllBanks)
+            .id(Self.allPatchesRow)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                newUserBank = false
+                model.showingAllBanks.toggle()
+            }
+    }
+
     private func bankRow(_ b: Int) -> some View {
         let info = model.banks[b]
-        let selected = !newUserBank && b == model.currentBank
+        let selected = !newUserBank && !model.showingAllBanks && b == model.currentBank
         let locked = model.writing && info.readOnly // the write dialog can't pick it
         let filterMiss = model.hasActiveFilter && model.matchCount(bank: b) == 0
         // Filtered: how many still match, so a dimmed bank says why.
@@ -533,6 +557,7 @@ struct PatchBrowserView: View {
         .onTapGesture {
             guard !locked else { return }
             newUserBank = false
+            model.showingAllBanks = false
             model.currentBank = b
             pickTarget()
         }
@@ -554,34 +579,74 @@ struct PatchBrowserView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 if model.writing && newUserBank { // the bank to be made: all slots free
-                    slotColumns(SynthModel.bankSlots) { s in
+                    slotColumns(Array(0..<SynthModel.bankSlots)) { s in
                         slotFace(s, "", selected: target == s)
                             .contentShape(Rectangle())
                             .onTapGesture { target = s }
                     }
+                } else if model.showingAllBanks && !model.writing {
+                    allPatchesList
                 } else if let b = model.currentBank, b < model.banks.count {
-                    slotColumns(model.banks[b].slots.count) { s in slotCell(b, s) }
+                    let slots = model.visibleSlots(bank: b)
+                    if slots.isEmpty && model.hasActiveFilter {
+                        Text("no patch matches the filter").oxoFont(11)
+                            .foregroundColor(Theme.lcdText.opacity(0.5))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        slotColumns(slots) { s in slotCell(b, s) }
+                    }
                 }
             }
             .scrollDeadZone()
             .onChange(of: [model.currentBank, model.currentProgram]) { _, _ in scrollToLoaded(proxy) }
+            .onChange(of: model.showingAllBanks) { _, _ in scrollToLoaded(proxy) }
             .onAppear { scrollToLoaded(proxy) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.lcdBottom)
     }
 
-    private func scrollToLoaded(_ proxy: ScrollViewProxy) {
-        if let p = model.currentProgram, model.loadedBank == model.currentBank { proxy.scrollTo(p) }
+    /// Every patch of every bank in one list ("All patches"): the bank name,
+    /// then the slot number and name as usual. A huge library is 19,200 rows,
+    /// so it is lazy; rows keep their real (bank, slot) for load / drag /
+    /// drop / menus, and a scroll id that is unique across banks.
+    private var allPatchesList: some View {
+        let rows = model.allVisiblePatches()
+        return LazyVStack(spacing: 2) {
+            if rows.isEmpty {
+                Text(model.libraryLoading ? "Loading…" : "no patch matches the filter")
+                    .oxoFont(11).foregroundColor(Theme.lcdText.opacity(0.5)).padding(8 * scale)
+            }
+            ForEach(rows.indices, id: \.self) { i in
+                slotCell(rows[i].bank, rows[i].slot, flat: true)
+                    .id(Self.flatScrollID(rows[i].bank, rows[i].slot))
+            }
+        }
+        .padding(6 * scale)
     }
 
-    /// 4 columns filled top to bottom (1-32, 33-64, ...); ids = slot
-    /// numbers, so the keyboard selection can scroll in.
-    private func slotColumns<Cell: View>(_ count: Int, @ViewBuilder cell: @escaping (Int) -> Cell) -> some View {
-        let rows = SynthModel.browserRows(count)
+    private static func flatScrollID(_ bank: Int, _ slot: Int) -> Int { bank * SynthModel.bankSlots + slot }
+
+    private func scrollToLoaded(_ proxy: ScrollViewProxy) {
+        guard let p = model.currentProgram, let b = model.loadedBank else { return }
+        if model.showingAllBanks && !model.writing {
+            return proxy.scrollTo(Self.flatScrollID(b, p))
+        }
+        guard b == model.currentBank else { return }
+        // ids are positions in the (possibly filtered) list, not slot numbers
+        if let i = model.visibleSlots(bank: b).firstIndex(of: p) { proxy.scrollTo(i) }
+    }
+
+    /// 4 columns filled top to bottom (1-32, 33-64, ...); ids = positions in
+    /// `slots` (the browser's keyboard selection and `scrollToLoaded` use
+    /// them), the cells themselves get their real slot number. `slots` is
+    /// every slot, or — while a filter is on — only the matching ones, so
+    /// the gaps close up.
+    private func slotColumns<Cell: View>(_ slots: [Int], @ViewBuilder cell: @escaping (Int) -> Cell) -> some View {
+        let rows = SynthModel.browserRows(slots.count)
         return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 4), spacing: 2) {
-            ForEach((0..<rows * 4).map { $0 % 4 * rows + $0 / 4 }, id: \.self) { s in
-                if s < count { cell(s) } else { Color.clear }
+            ForEach((0..<rows * 4).map { $0 % 4 * rows + $0 / 4 }, id: \.self) { i in
+                if i < slots.count { cell(slots[i]) } else { Color.clear }
             }
         }
         .padding(6 * scale)
@@ -601,17 +666,13 @@ struct PatchBrowserView: View {
             .background(RoundedRectangle(cornerRadius: 2).fill(selected ? theme.displayText : theme.display))
     }
 
-    private func slotCell(_ b: Int, _ s: Int) -> some View {
+    private func slotCell(_ b: Int, _ s: Int, flat: Bool = false) -> some View {
         let patch = model.banks[b].slots[s]
         let readOnly = model.banks[b].readOnly
         let selected = model.writing ? target == s : (b == model.loadedBank && s == model.currentProgram)
         let info = model.banks[b]
         let mark = patch.isEmpty ? nil
             : (category: info.category(s), favourite: info.isFavourite(s), tags: info.tags(s))
-        // A filtered-out patch keeps its place (drag / copy still land) but
-        // fades back; the LOADED one stays legible whatever the filter.
-        let filtered = model.hasActiveFilter && !patch.isEmpty && !model.slotMatches(bank: b, slot: s)
-            && !(b == model.loadedBank && s == model.currentProgram)
         let text = String(format: "%03d:", s + 1) + patch
         // Colour lives in the .sy1 itself: a tint on the cell, not a badge
         // (an 11 pt monospaced name has no spare width).
@@ -620,6 +681,12 @@ struct PatchBrowserView: View {
             if let mark, mark.favourite {
                 Image(systemName: "star.fill").oxoFont(7, .bold)
                     .foregroundColor(selected ? theme.lcdBottom : theme.displayText)
+            }
+            if flat { // cross-bank list: which bank the patch lives in
+                Text(info.name)
+                    .oxoFont(11, design: .monospaced)
+                    .foregroundColor(selected ? theme.lcdBottom : Theme.lcdText.opacity(0.55))
+                    .lineLimit(1)
             }
             Text(text)
                 .oxoFont(11, design: .monospaced)
@@ -632,9 +699,9 @@ struct PatchBrowserView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 2).fill(selected ? theme.displayText : theme.display)
                 .overlay(RoundedRectangle(cornerRadius: 2).fill((tint ?? .clear).opacity(0.28))))
-            .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(dropTarget == s ? theme.displayText : (tint ?? .clear),
-                                                                  lineWidth: dropTarget == s ? 1.5 : (tint == nil ? 0 : 1)))
-            .opacity(filtered ? 0.3 : 1)
+            .overlay(RoundedRectangle(cornerRadius: 2)
+                .strokeBorder(!flat && dropTarget == s ? theme.displayText : (tint ?? .clear),
+                              lineWidth: !flat && dropTarget == s ? 1.5 : (tint == nil ? 0 : 1)))
             .contentShape(Rectangle())
             .onTapGesture {
                 if model.writing {
@@ -659,7 +726,8 @@ struct PatchBrowserView: View {
             // a bank: copy (factory patches can only be copied)
             .slotDraggable(patch.isEmpty ? nil : Self.dragPrefix + "\(b):\(s)",
                            label: String(format: "%03d:", s + 1) + patch, fill: theme.display, scaleForDrag: scale)
-            .onDrop(of: SlotDrop.types, delegate: SlotDrop(bank: b, slot: s, enabled: !readOnly, target: $dropTarget) { from in
+            .onDrop(of: SlotDrop.types, delegate: SlotDrop(bank: b, slot: s, enabled: !readOnly && !flat,
+                                                           target: $dropTarget) { from in
                 model.movePatch(bank: b, from: from, to: s)
             })
     }

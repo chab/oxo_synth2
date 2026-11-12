@@ -179,8 +179,13 @@ if args.count > 2 {
         model.load(bank: 1, slot: 1)
         if args[2] == "delete-bank" { model.bankToDelete = model.banks[0].id }
         // filter: a type chip + the star on, so the dimmed slots / banks show
-        // filter: one type chip on, so banks / slots that do not match dim
+        // filter: one type chip on, so non-matching patches are hidden
         if args[2] == "filter" { model.categoryFilter = 4 }
+        // all: every patch of every bank in one filtered list
+        if args[2] == "all" || args[2] == "all-filter" {
+            model.showingAllBanks = true
+            if args[2] == "all-filter" { model.categoryFilter = 2 }
+        }
         // the tag dialog for the loaded patch
         if args[2] == "tags" { model.tagEdit = (1, 1) }
         // duplicate sets, from the mock host's payload
