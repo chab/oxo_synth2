@@ -710,7 +710,17 @@ original AU; keeps both renders for listening).
   floor; the table's fitted entry 0, 6.6e-6, is noise: `Voice::FmBeta`;
   `measure_zero_knobs.py`, with the LFO depth 0 probe).
   Ring: osc2 ×
-  osc1_norm. Ring BUG kept on purpose (`measure_ring_detune.py`): ring +
+  osc1_norm. Ring on = NO FM (any FM knob / route: osc1 unchanged), BUT
+  with an FM source in the patch the product takes osc2's PULSE at full
+  scale (×2, saw(p) − saw(p+d)) and NOISE at ±1 (saw / tri unchanged):
+  FM knob > 0, an LFO on FM (depth > 0, its trough too), mod env on FM
+  amount ≥ 67 all note long; amount 65 / 66 only until its FM offset
+  reaches 0 (9.2 taus; ours at 7.6, where our mod env lands on 0). It is
+  a flag, not the FM value (FM 1 = FM 127). `check_fm.py --ring`: within
+  0.5 dB; OPEN: with osc1 sine / tri the original's ×2 is ×1.89 (pulse
+  64, residual −24 dB vs 2 × the FM 0 render; pulse / saw osc1 exact).
+  Was 6 dB low on pulse until 2026-11-12 (57 library patches, mean spec
+  2.57 → 1.38 dB). Ring BUG kept on purpose (`measure_ring_detune.py`): ring +
   osc1 detune + sub on = the sub copies skip the 0.297 gain, then the osc1
   section is bounded (modelled 1.7·tanh(x/1.7), approximate; the original
   also has osc1 × sub products); no effect without detune. Sync hard: NAIVE reset of osc2 to phase 0 (same alias energy
