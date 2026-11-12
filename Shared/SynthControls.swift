@@ -39,18 +39,79 @@ struct Theme {
     var waveOn: Color { p[.displayText].color }
     static let red = Color(red: 0.68, green: 0.06, blue: 0.05)
     static let learn = Color(red: 0.35, green: 0.65, blue: 0.91)
-    static let labelFont = Font.system(size: 9.5, weight: .medium)
-    static let buttonFont = Font.system(size: 10, weight: .semibold)
 }
 
 private struct ThemeKey: EnvironmentKey {
     static let defaultValue = Theme(.synth2)
 }
 
+/// The panel's live scale (view points per design point, 1 = 100 %). Set
+/// once by `SynthPanelView.panel(scale:)`; every size and font the panel
+/// draws multiplies by it, so text is laid out at the FINAL size and stays
+/// crisp (a `.scaleEffect` would rasterise at design size and upsample).
+private struct ScaleKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 1
+}
+
 extension EnvironmentValues {
     var theme: Theme {
         get { self[ThemeKey.self] }
         set { self[ThemeKey.self] = newValue }
+    }
+
+    var scale: CGFloat {
+        get { self[ScaleKey.self] }
+        set { self[ScaleKey.self] = newValue }
+    }
+}
+
+/// A text style at the panel's scale (see `\.scale`).
+private struct ScaledFont: ViewModifier {
+    @Environment(\.scale) private var scale
+    let size: CGFloat
+    let weight: Font.Weight
+    let design: Font.Design
+
+    func body(content: Content) -> some View {
+        content.font(.system(size: size * scale, weight: weight, design: design))
+    }
+}
+
+/// A height in design points at the panel's scale (see `\.scale`).
+private struct ScaledHeight: ViewModifier {
+    @Environment(\.scale) private var scale
+    let height: CGFloat
+
+    func body(content: Content) -> some View {
+        content.frame(height: height * scale)
+    }
+}
+
+/// A `.frame(width:height:)` in design points, at the panel's scale.
+private struct ScaledFrame: ViewModifier {
+    @Environment(\.scale) private var scale
+    let width: CGFloat
+    let height: CGFloat
+
+    func body(content: Content) -> some View {
+        content.frame(width: width * scale, height: height * scale)
+    }
+}
+
+extension View {
+    /// `.frame(width:height:)` in design points, scaled to the live UI size.
+    func scaleForPanel(_ width: CGFloat, _ height: CGFloat) -> some View {
+        modifier(ScaledFrame(width: width, height: height))
+    }
+
+    /// `.oxoFont()` in design points, scaled to the live UI size.
+    func oxoFont(_ size: CGFloat, _ weight: Font.Weight = .regular, design: Font.Design = .default) -> some View {
+        modifier(ScaledFont(size: size, weight: weight, design: design))
+    }
+
+    /// `.frame(height:)` in design points, scaled to the live UI size.
+    func oxoHeight(_ height: CGFloat) -> some View {
+        modifier(ScaledHeight(height: height))
     }
 }
 
@@ -84,7 +145,7 @@ private struct Learnable: ViewModifier {
                         RoundedRectangle(cornerRadius: 4)
                             .strokeBorder(Theme.learn.opacity(selected ? 1 : 0.6), lineWidth: selected ? 2 : 1)
                         if cc != 0 {
-                            Text("\(cc)").font(.system(size: 9, weight: .bold)).foregroundColor(.white)
+                            Text("\(cc)").oxoFont(9, .bold).foregroundColor(.white)
                                 .padding(.horizontal, 3).padding(.vertical, 1)
                                 .background(RoundedRectangle(cornerRadius: 2.4).fill(Theme.learn)
                                     .overlay(RoundedRectangle(cornerRadius: 2.4).strokeBorder(.white.opacity(0.75), lineWidth: 1)))
@@ -130,6 +191,7 @@ struct KnobView: View {
     let id: Int
     let label: String
     var size: CGFloat = 24
+    @Environment(\.scale) private var scale
     @State private var dragStart: Int?
     @State private var dragAccum: CGFloat = 0
     @State private var lastY: CGFloat = 0
@@ -142,26 +204,27 @@ struct KnobView: View {
         let r = model.host.range(id)
         let v = model.values[id]
         let frac = Double(v - r.min) / Double(max(1, r.max - r.min))
-        VStack(spacing: 1) {
+        let sz = size * scale
+        VStack(spacing: 1 * scale) {
             ZStack {
                 // Oxo Simple's 11-dot ring over the -140..+140 travel, at
                 // 1.3 x the body radius, pulled in 1.5 pt.
                 ForEach(0..<11, id: \.self) { i in
-                    Circle().fill(theme.knobTicks).frame(width: 1.6, height: 1.6)
-                        .offset(y: -size * 0.65 + 1.5)
+                    Circle().fill(theme.knobTicks).frame(width: 1.6 * scale, height: 1.6 * scale)
+                        .offset(y: -sz * 0.65 + 1.5 * scale)
                         .rotationEffect(.degrees(-140 + 28 * Double(i)))
                 }
                 ZStack {
                     Circle().fill(RadialGradient(colors: [theme.knobGradient, theme.knobBody], center: .init(x: 0.35, y: 0.3),
-                                                 startRadius: 0, endRadius: size * 0.6))
+                                                 startRadius: 0, endRadius: sz * 0.6))
                     // soft rim: dim, slightly blurred edge instead of a hard ring
                     Circle().strokeBorder(theme.knobRim.opacity(0.45), lineWidth: 1.6).blur(radius: 0.7)
-                    Capsule().fill(theme.knobDial).frame(width: 2, height: size * 0.36).offset(y: -size * 0.24)
+                    Capsule().fill(theme.knobDial).frame(width: 2 * scale, height: sz * 0.36).offset(y: -sz * 0.24)
                         .rotationEffect(.degrees(-140 + 280 * frac))
                 }
                 .shadow(color: .black.opacity(0.3), radius: 1, x: 1, y: 1)
             }
-            .frame(width: size, height: size)
+            .frame(width: sz, height: sz)
             .contentShape(Circle().scale(1.3))
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { g in
@@ -200,8 +263,8 @@ struct KnobView: View {
                 return true
             }
             #endif
-            Text(label).font(Theme.labelFont).foregroundColor(theme.ink).lineLimit(1).fixedSize()
-                .frame(height: 12)
+            Text(label).oxoFont(9.5, .medium).foregroundColor(theme.ink).lineLimit(1).fixedSize()
+                .frame(height: 12 * scale)
         }
         .learnable(model, id)
     }
@@ -217,15 +280,17 @@ struct ToggleButton: View {
     let title: String
     var width: CGFloat = 40
 
+    @Environment(\.scale) private var scale
+
     var body: some View {
         let on = model.values[id] != 0
-        HStack(spacing: 3) {
+        HStack(spacing: 3 * scale) {
             RoundedRectangle(cornerRadius: 1).fill(on ? theme.ledOn : theme.ledOff)
-                .frame(width: 5, height: 5)
+                .frame(width: 5 * scale, height: 5 * scale)
                 .shadow(color: on ? theme.ledOn.opacity(0.9) : .clear, radius: 2)
-            Text(title).font(Theme.buttonFont).foregroundColor(Theme.buttonText).lineLimit(1).fixedSize()
+            Text(title).oxoFont(10, .semibold).foregroundColor(Theme.buttonText).lineLimit(1).fixedSize()
         }
-        .frame(width: width, height: 17)
+        .frame(width: width * scale, height: 17 * scale)
         .background(ButtonFace())
         .contentShape(Rectangle())
         .onTapGesture { model.setOnce(id, on ? 0 : 1) }
@@ -241,10 +306,11 @@ struct CycleButton: View {
     let id: Int
     let title: String
     var width: CGFloat = 40
+    @Environment(\.scale) private var scale
 
     var body: some View {
-        Text(title).font(Theme.buttonFont).foregroundColor(Theme.buttonText).lineLimit(1).fixedSize()
-            .frame(width: width, height: 17)
+        Text(title).oxoFont(10, .semibold).foregroundColor(Theme.buttonText).lineLimit(1).fixedSize()
+            .frame(width: width * scale, height: 17 * scale)
             .background(ButtonFace())
             .contentShape(Rectangle())
             .onTapGesture { model.cycle(id, shiftHeld() ? -1 : 1) }
@@ -271,15 +337,16 @@ struct PanelButton: View {
     var fill: Color?
     var icon: String?
     let action: () -> Void
+    @Environment(\.scale) private var scale
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 4) {
-                if let icon { Image(systemName: icon).font(.system(size: 9, weight: .bold)) }
-                Text(title).font(.system(size: 11, weight: .semibold))
+            HStack(spacing: 4 * scale) {
+                if let icon { Image(systemName: icon).oxoFont(9, .bold) }
+                Text(title).oxoFont(11, .semibold)
             }
             .foregroundColor(Theme.buttonText)
-            .frame(width: width, height: height)
+            .frame(width: width * scale, height: height * scale)
             .background(ButtonFace(fill: fill))
         }
         .buttonStyle(.plain)
@@ -292,12 +359,13 @@ struct Badge: View {
     @ObservedObject var model: SynthModel
     let text: String
     var id: Int?
+    @Environment(\.scale) private var scale
 
     var body: some View {
         let on = id.map { model.values[$0] != 0 } ?? true
-        let face = Text(text).font(.system(size: 12, weight: .heavy))
+        let face = Text(text).oxoFont(12, .heavy)
             .foregroundColor(on ? (id == nil ? .white : Color(red: 1, green: 0.85, blue: 0.35)) : Color(white: 0.45))
-            .frame(width: 16, height: 18)
+            .frame(width: 16 * scale, height: 18 * scale)
             .background(RoundedRectangle(cornerRadius: 2).fill(on ? Color.black : Color(white: 0.22)))
             .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(Color(white: 0.5), lineWidth: 1))
         if let id {
@@ -323,19 +391,20 @@ struct LedRadio: View {
     var ledTrailing = false
     var showLabels = true
     var rowHeight: CGFloat = 13
+    @Environment(\.scale) private var scale
     @State private var wheelRemainder: Double = 0
 
     var body: some View {
-        let layout = horizontal ? AnyLayout(HStackLayout(spacing: 8)) : AnyLayout(VStackLayout(alignment: ledTrailing ? .trailing : .leading, spacing: 0))
+        let layout = horizontal ? AnyLayout(HStackLayout(spacing: 8 * scale)) : AnyLayout(VStackLayout(alignment: ledTrailing ? .trailing : .leading, spacing: 0))
         layout {
             ForEach(options, id: \.value) { option in
                 let on = model.values[id] == option.value
-                HStack(spacing: 3) {
+                HStack(spacing: 3 * scale) {
                     if !ledTrailing { led(on) }
-                    if showLabels { Text(option.label).font(Theme.labelFont).foregroundColor(theme.ink).fixedSize() }
+                    if showLabels { Text(option.label).oxoFont(9.5, .medium).foregroundColor(theme.ink).fixedSize() }
                     if ledTrailing { led(on) }
                 }
-                .frame(height: rowHeight)
+                .frame(height: rowHeight * scale)
                 .contentShape(Rectangle())
                 .onTapGesture { model.setOnce(id, option.value) }
             }
@@ -348,7 +417,7 @@ struct LedRadio: View {
         Circle().fill(on ? theme.radioOn : theme.radioOff)
             .overlay(Circle().strokeBorder(Color.black.opacity(0.5), lineWidth: 0.5))
             .shadow(color: on ? theme.radioOn.opacity(0.9) : .clear, radius: 2.5)
-            .frame(width: 7, height: 7)
+            .frame(width: 7 * scale, height: 7 * scale)
     }
 }
 
@@ -419,14 +488,15 @@ private struct WaveCell: View {
     let on: Bool
     var width: CGFloat = 22
     var height: CGFloat = 14
+    @Environment(\.scale) private var scale
 
     var body: some View {
         Canvas { ctx, size in
-            let r = CGRect(origin: .zero, size: size).insetBy(dx: 4, dy: 3.5)
+            let r = CGRect(origin: .zero, size: size).insetBy(dx: 4 * scale, dy: 3.5 * scale)
             ctx.stroke(icon.path(in: r), with: .color(on ? Color.black : Color(white: 0.85)),
-                       style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round))
+                       style: StrokeStyle(lineWidth: 1.3 * scale, lineCap: .round, lineJoin: .round))
         }
-        .frame(width: width, height: height)
+        .frame(width: width * scale, height: height * scale)
         .background(RoundedRectangle(cornerRadius: 2).fill(on ? theme.waveOn : theme.button))
         .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(Color.black.opacity(0.6), lineWidth: 1))
         .shadow(color: on ? theme.waveOn.opacity(0.6) : .clear, radius: 2)
@@ -439,10 +509,11 @@ struct WaveRadio: View {
     let id: Int
     let shapes: [(value: Int, icon: WaveIcon)]
     var columns = 2
+    @Environment(\.scale) private var scale
     @State private var wheelRemainder: Double = 0
 
     var body: some View {
-        Grid(horizontalSpacing: 2, verticalSpacing: 2) {
+        Grid(horizontalSpacing: 2 * scale, verticalSpacing: 2 * scale) {
             ForEach(Array(stride(from: 0, to: shapes.count, by: columns)), id: \.self) { row in
                 GridRow {
                     ForEach(row..<min(row + columns, shapes.count), id: \.self) { i in
@@ -488,6 +559,7 @@ struct ValueDisplay: View {
     var text: ((Int) -> String)?
     /// A click (no drag) calls this instead of cycling (effect type menu).
     var onTap: (() -> Void)?
+    @Environment(\.scale) private var scale
     @State private var dragStart: Int?
     @State private var moved = false
     @State private var wheelRemainder: Double = 0
@@ -495,11 +567,11 @@ struct ValueDisplay: View {
     var body: some View {
         let v = model.values[id]
         Text(text?(v) ?? model.host.format(id, v))
-            .font(.system(size: 11, weight: .bold, design: .monospaced))
+            .oxoFont(11, .bold, design: .monospaced)
             .foregroundColor(theme.displayText)
             .shadow(color: theme.displayText.opacity(0.5), radius: 2)
             .lineLimit(1).minimumScaleFactor(0.6)
-            .frame(width: width, height: 17)
+            .frame(width: width * scale, height: 17 * scale)
             .background(RoundedRectangle(cornerRadius: 2).fill(theme.displayFill))
             .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
             .contentShape(Rectangle())
@@ -535,6 +607,7 @@ struct MenuDisplay: View {
     let width: CGFloat
     let label: String
     let groups: [(title: String, items: [(value: Int, label: String)])]
+    @Environment(\.scale) private var scale
 
     var body: some View {
         Menu {
@@ -546,14 +619,16 @@ struct MenuDisplay: View {
                 }
             }
         } label: {
-            Text(label).font(.system(size: 10, weight: .bold, design: .monospaced))
+            // Inline font, not .oxoFont: a ViewModifier (extra @Environment +
+            // wrapper) inside a Menu label perturbs its layout even at scale 1.
+            Text(label).font(.system(size: 10 * scale, weight: .bold, design: .monospaced))
                 .foregroundColor(theme.displayText).lineLimit(1)
-                .frame(width: width - 8, alignment: .leading)
+                .frame(width: width * scale - 8 * scale, alignment: .leading)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .padding(.horizontal, 4)
-        .frame(width: width, height: 16)
+        .padding(.horizontal, 4 * scale)
+        .frame(width: width * scale, height: 16 * scale)
         .background(RoundedRectangle(cornerRadius: 2).fill(theme.displayFill))
         .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
     }
@@ -575,17 +650,57 @@ struct SectionBox<Content: View>: View {
     let width: CGFloat
     let height: CGFloat
     @ViewBuilder let content: Content
+    @Environment(\.scale) private var scale
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             Rectangle().fill(theme.panel)
-            Text(title).font(.system(size: 12, weight: .semibold)).foregroundColor(theme.headerText)
-                .padding(.leading, 5)
-                .frame(width: width, height: 16, alignment: .leading)
+            Text(title).oxoFont(12, .semibold).foregroundColor(theme.headerText)
+                .padding(.leading, 5 * scale)
+                .frame(width: width * scale, height: 16 * scale, alignment: .leading)
                 .background(theme.header)
-            content.frame(width: width, height: height)
+            content.frame(width: width * scale, height: height * scale)
         }
-        .frame(width: width, height: height)
+        .frame(width: width * scale, height: height * scale)
         .overlay(Rectangle().strokeBorder(theme.edge, lineWidth: 1))
+    }
+}
+
+/// A patch's colour, which Synth1 stores in the .sy1 itself (`color=`), so
+/// it travels with the file through copy / export / import. The menu of the
+/// browser's patch context menu.
+struct PatchColorEdit {
+    let current: String
+    let set: (String) -> Void
+
+    /// The names real Synth1 / Synth2 libraries use. Anything else (an old
+    /// or foreign value) reads as untinted and stays untouched.
+    static let names = ["default", "blue", "red", "yellow", "green", "magenta"]
+
+    /// nil = "default" and unknown values: the cell stays as it is.
+    static func tint(_ name: String) -> Color? {
+        switch name {
+        case "blue": return Color(red: 0.29, green: 0.55, blue: 1.00)
+        case "red": return Color(red: 1.00, green: 0.33, blue: 0.33)
+        case "yellow": return Color(red: 0.96, green: 0.80, blue: 0.20)
+        case "green": return Color(red: 0.28, green: 0.85, blue: 0.44)
+        case "magenta": return Color(red: 0.96, green: 0.38, blue: 0.96)
+        default: return nil
+        }
+    }
+
+    static func displayName(_ name: String) -> String {
+        name.isEmpty ? "Default" : name.prefix(1).uppercased() + name.dropFirst()
+    }
+
+    /// A submenu with the current one ticked (a Picker: that is what draws
+    /// the tick on both platforms; a Toggle would draw a switch on iPad).
+    var menu: some View {
+        Menu("Colour: " + Self.displayName(current)) {
+            Picker("", selection: Binding(get: { current }, set: { set($0) })) {
+                ForEach(Self.names, id: \.self) { Text(Self.displayName($0)).tag($0) }
+            }
+            .pickerStyle(.inline).labelsHidden()
+        }
     }
 }

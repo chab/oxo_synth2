@@ -86,19 +86,20 @@ struct UpdateDialog: View {
     @ObservedObject var model: SynthModel
     let state: UpdateCheck.State
     @Environment(\.openURL) private var openURL
+    @Environment(\.scale) private var scale
 
     var body: some View {
         ZStack {
             Color.black.opacity(0.3).contentShape(Rectangle()).onTapGesture { model.update = nil }
             VStack(spacing: 0) {
-                Text("Check for updates").font(.system(size: 11, weight: .semibold)).foregroundColor(Dlg.text)
-                    .frame(maxWidth: .infinity).frame(height: 22).background(Dlg.bar)
-                VStack(alignment: .leading, spacing: 14) {
-                    Text(text).font(.system(size: 11)).foregroundColor(Dlg.text)
+                Text("Check for updates").oxoFont(11, .semibold).foregroundColor(Dlg.text)
+                    .frame(maxWidth: .infinity).frame(height: 22 * scale).background(Dlg.bar)
+                VStack(alignment: .leading, spacing: 14 * scale) {
+                    Text(text).oxoFont(11).foregroundColor(Dlg.text)
                         .tint(Dlg.accent)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
-                    HStack(spacing: 8) {
+                    HStack(spacing: 8 * scale) {
                         Spacer()
                         if case .available(_, _, let page) = state {
                             button("Download page") {
@@ -109,9 +110,9 @@ struct UpdateDialog: View {
                         button(state == .checking ? "Cancel" : "OK") { model.update = nil }
                     }
                 }
-                .padding(14)
+                .padding(14 * scale)
             }
-            .frame(width: 360)
+            .frame(width: 360 * scale)
             .background(RoundedRectangle(cornerRadius: 8).fill(Dlg.bg))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
             .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -134,8 +135,8 @@ struct UpdateDialog: View {
 
     private func button(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title).font(.system(size: 11)).foregroundColor(Dlg.text)
-                .padding(.horizontal, 12).frame(minWidth: 64).frame(height: 22)
+            Text(title).oxoFont(11).foregroundColor(Dlg.text)
+                .padding(.horizontal, 12 * scale).frame(minWidth: 64 * scale).frame(height: 22 * scale)
                 .background(RoundedRectangle(cornerRadius: 3).fill(Dlg.bar))
                 .contentShape(Rectangle())
         }
