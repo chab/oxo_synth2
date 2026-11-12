@@ -70,8 +70,10 @@ listed after the saved themes, never written). Bank library: mac `~/Music/Oxo Mu
 `<app group>/Synth2`, Windows `Documents\Oxo Music\Oxo Synth2`. Windows
 portable mode: a `Synth2_Data` folder next to the `.vst3` bundle holds all
 of it (banks in `Synth2_Data\Presets`).
-VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
-+ the two plists' AudioComponents integer `version` (by hand, 65536 = 1.0).
+VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`.
+The AUv2's AudioComponents integer `version` is derived from
+MARKETING_VERSION by CMake (major*65536 + minor*256 + patch, 65536 = 1.0);
+the iPad plist `OxoSynth2AudioUnit/Info.plist` still carries it by hand.
 
 ## Layout
 
@@ -82,7 +84,8 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   + `LegacyTables.hpp` (GENERATED from `reference/meta`), `InitPatch.hpp`,
   `ParamFormat.hpp` (value labels; `DisplayName` = LCD name, effect knobs
   per effect type), `MidiLearn.hpp` (learn table, CC scaling, JSON),
-  `PatchLibrary.hpp` (banks, zip reader, import, `PatchManager`),
+  `PatchCategories.hpp` (22 types, name rules, SHA-256, tag store),
+  `PatchLibrary.hpp` (banks, zip reader, import, `PatchManager`, tags),
   `ProgramChange.hpp` (MIDI program change: current bank snapshot,
   `RtMailbox`, `SwitchProgram`), `TextEncoding.hpp` (legacy names: Shift-JIS / Windows-1252 → UTF-8),
   `Jobs.hpp` (s1ref job format → our engine, WAV writer).
@@ -174,7 +177,11 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
 
 - `./build_vst3.sh` → builds and installs `OxoSynth2.vst3` + `Oxo
   Synth2.component` into ~/Library/Audio/Plug-Ins. `--no-install` = build
-  only. Validator 47/47 (`OxoSynth2VST3/build/bin/Release/validator
+  only. The AU's nested `Contents/Resources/plugin.vst3` is a SYMLINK in
+  the build tree, so the install replaces it with a real copy and re-signs
+  the component adhoc (like `tools/prepare_mac_installer`): a symlink there
+  breaks the strict code seal and dies with the checkout. Validator 47/47
+  (`OxoSynth2VST3/build/bin/Release/validator
   <bundle>`; run it with `HOME=$(mktemp -d)` to keep your library out of
   it), `auval -v aumu OXS2 OXOM`.
 - iPad: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
@@ -463,13 +470,30 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   (`Trash.hpp`; iOS → deleted); LCD shows (10 s) "X.zip
   imported and moved to Trash" (`TakeNotice` → hook `libraryNotice`). A zip
   without .sy1 stays, ignored.
-- IMPORT (`ImportItems`, hook `importItems`, the browser's Import…):
-  COPIES into the root. Folders copied
+- IMPORT (`ImportItems`, hook `importItems`, the browser's "Import
+  folder…" / "Import files…"): COPIES into the root. Folders copied
   (only .sy1), zips EXTRACTED into a folder of their name (one wrapping
   folder dropped, __MACOSX / dot files skipped, non-UTF-8 names cleaned),
   a Synth1 `zipbank/` folder merges into its parent, loose .sy1 →
   "Imported" bank's next free slots; never clobbers ("Bank 2"). No export
   (Finder). Sessions store the patch, never a bank ref.
+  A PICKED FOLDER LANDS BESIDE `User`, at the library ROOT, named after
+  the folder (or "… 2" when taken) - it does NOT merge into `User`, and
+  a Synth1 bank pack (a folder holding `Dark/`, `zipbank/`, …) therefore
+  arrives as a CONTAINER whose sub-folders are the banks
+  (`"goldgreen / Goldbank"`). This is the tested contract
+  (`ImportCopiesFoldersExtractsZips`), so "it landed next to User"
+  is by design, not a bug; the notice names the destination. Moving it
+  into `User` afterwards in Finder is what produces the nested look.
+  TWO PICKERS on both platforms: folders only (`canChooseFiles = false`,
+  `[.folder]`) and files only (`[.zip, .sy1]`). One mixed panel made
+  macOS open a picked folder's contents instead of picking it.
+  THE RESULT IS REPORTED: `ImportResult` (folders with their patch counts,
+  the refusals and why) → a newline payload `patches=N`, `+<count>
+  <folder>`, `!<path>: <reason>` → `ImportOutcome` in Swift → a 5 s notice
+  in the BROWSER HEADER ("imported 3 patches into Imported (1 skipped)")
+  and the LCD. An active filter is cleared on success, else the new
+  patches would be invisible. A silent no-op looked like a broken import.
 - WRITE (Synth1): dialog = banks + 128-slot grid + name field + "New
   bank…" (the only in-app way to make one); writes `NNN.sy1` (replaces a
   differently named file that held the slot), "Overwrite NNN" when
@@ -506,16 +530,35 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   own bank: only its .sy1 files. Never the factory bank, never outside the
   root; the loaded program is forgotten if its bank goes (the sound plays
   on). Bank delete asks first (in-browser `DeleteBankDialog`, Esc cancels).
-- Browser header: Import… / Open library folder / Refresh / Close (mac);
-  iPad: Import folder… (picker on `[.folder]` ALONE: mixed with file types
-  iOS navigates into folders, no Open button) / Import files… (zip / .sy1,
-  multiple) / Refresh / Close. Rescans on every open. Bank / slot menu
+- Browser header, BOTH platforms: Import folder… (`[.folder]` ALONE: mixed
+  with file types the picker navigates into folders - on iOS there is then
+  no Open button, on macOS a folder package opens) / Import files… (zip /
+  .sy1, multiple) / Library (mac: the library folder in the Finder) /
+  Refresh / Random / Close, plus the last import's notice for 5 s. Random
+  (also the LCD menu's "Random patch", and mid-scan) = a reservoir sample
+  over the non-empty slots the filter lets through, so it hunts undiscovered
+  sounds inside the current filter; nothing matching = a flash, no load.
+  Rescans on every open. Bank / slot menu
   (`libraryMenu`): mac right click = [Export bank…,] Show in Finder[,
   Delete / Delete bank…]; iPad long press = [Export bank…,] [Delete /
   Delete bank…] (no delete on the factory bank); Windows right click = the
   mac's menu with "Show in Explorer" (`showLibraryMenu`; bank delete =
-  MessageBox confirmation, Recycle Bin). Rename banks =
-  Finder (mac only).
+  MessageBox confirmation, Recycle Bin). Rename banks = Finder (mac only).
+  A patch's own menu adds Add / Remove star, Edit tags… and Colour on both.
+- FILTER BAR (under the header, hidden while writing): free text (patch
+  name, bank name, category name, tags), the 22 type chips ("All" first,
+  Unclassified only once something is in it), the star-only chip, a "…"
+  menu (export / import categories and tags, find duplicates, clear filter)
+  and Clear. It narrows SLOTS in every bank at once: a non-matching slot
+  stays in place (drag / copy still land) but fades to 0.3, the loaded
+  patch stays legible, and a bank shows "matching / total" and dims when
+  nothing matches but stays selectable (copy workflows). Client-side in
+  Swift, so no EngineCore work and no rescan.
+- TagDialog (`Edit tags…`, drawn in the browser like DeleteBankDialog):
+  the add field at the TOP (clear of the iPad keyboard), suggestions from
+  the tags already in use (`.prefix(32)`), the tag list with remove
+  buttons, a type picker over "Auto" + the 22 names ("Auto" = drop the
+  override, back on the name rule) and the Starred toggle.
 - SCAN SPEED (measured on 150 banks x 128 = 19,200 .sy1): `PatchNameCache`
   (process-wide, path + size + mtime) → only new / changed files are
   opened for their name (rescan 60 ms vs 0.5–1.5 s uncached);
@@ -523,14 +566,95 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   (no stat per is_directory). Browser open / Refresh / editor open =
   `PatchManager::StartRescan` (worker thread, joined in the destructor;
   zip expansion under a process-wide mutex) → hooks `startLibraryScan` /
-  `libraryRevision` (polled at 30 Hz, adopts the finished scan) /
-  `libraryScanning`. The browser opens at once: "Loading…" with no list
-  yet, else the previous list + "loading…" in the header until the new one
-  swaps in. A library change on the UI thread meanwhile (write, move,
-  delete, import, sync rescan: `generation_`) wins, the worker's list is
-  dropped. The editor never scans synchronously at open (`syncProgram`
-  waits for a list); mutations still rescan synchronously (fast with the
-  cache).
+  `libraryRevision` (polled at 30 Hz, adopts the scan) / `libraryScanning`
+  / `libraryScanProgress`. A scan STREAMS: `StartRescan` EMPTIES the list
+  (a Refresh shows no stale patches) and every bank is handed to the
+  browser as it is scanned (`SetPublishSink` → a `pending` queue under a
+  mutex, `PollRescan` drains it), so a partial list is always a PREFIX of
+  the final one, bank indices stay put, and the patches already streamed
+  are loadable / writable / draggable while the rest scans. The header
+  shows a bar + "N/M banks · P patches" (`ScanProgress`, `M` =
+  `TopLevelCount` before the walk, exact afterwards; the browser's
+  `libraryScanFraction`). A selection whose bank has not streamed in yet
+  stays pending (nothing selected) instead of jumping to bank 0. A
+  library change on the UI thread meanwhile (write, move, delete, import,
+  sync rescan: `generation_`) wins, the worker's list is dropped and a
+  fresh `Rescan` restores a complete one. The editor never scans
+  synchronously at open (`syncProgram` waits for a list); mutations still
+  rescan synchronously (fast with the cache).
+- CATEGORIES, STARS AND TAGS (`EngineCore/PatchCategories.hpp`, tests
+  `PatchCategoriesTests.cpp` + `PatchLibraryTagsTests.cpp`): each patch
+  carries a TYPE, a STAR and free-form TAGS - never in a .sy1 (patches stay
+  portable Synth1 files), in ONE sidecar `categories.json` at the library
+  root, keyed by the SHA-256 of the patch FILE BYTES (not its path), so
+  moving / renaming / re-copying a patch keeps its marks. Records:
+  `{version, patches: {<sha256 hex>: {name, tags, favourite, category}}}`,
+  the category by NAME (absent = derive it), `name` only a comment. Save =
+  temp + rename; no records = no file.
+  - the 22 TYPES (Bass, Lead, Pluck, Pad, Strings, Brass, Keys, Organ,
+    Piano, Bell, Arp, Chord, Sequence, FX, Perc, Vocal, Guitar, Wind,
+    Mallet, Texture, Init, + Unclassified) are TYPE-ONLY: character and use
+    are tags, so a "dark pad" is one type and two tags. Derived from the
+    patch name by ~100 ordered rules (last match wins), overridable per
+    slot; Unclassified when nothing matches.
+  - tags: at most 12 per patch, 24 chars, case-insensitive uniqueness
+    (`NormalizeTag`), kept sorted so the file diffs cleanly.
+  - hashing is per library and opt-in: `Scan` leaves `tags_` null while the
+    store is empty, so an untagged library pays nothing. A patch is hashed
+    on its first tag edit and cached (`PatchHashCache`, path + size + mtime,
+    process-wide): on 19,200 patches the first tag edit costs ~210 ms more
+    (666 vs 452 ms cold), then rescans match the untagged ones (262 / 238 ms
+    warm) and only new / changed files are read again.
+  - `ExportTags` writes the sidecar to a chosen folder; `ImportTags` MERGES
+    it (`MergeMissing`, add-only) so an old file never undoes local edits.
+  - it is a LIBRARY file, not plugin state: `PatchManager::Configure` loads
+    it, and `libraryJSON` re-reads the scan on every call, so a tag edit
+    needs no notification. Hooks `setPatchCategory` (-1 = drop override),
+    `setPatchFavourite`, `addPatchTag` / `removePatchTag` (the patch's
+    location = bank id + slot, like `copyPatch`), `exportTags` /
+    `importTags` (int32 results) and `tagVocabulary` (one per line).
+  - THE PAYLOAD'S TYPES ARE A CONTRACT (`Json()`, tests
+    `PatchLibraryTagsTests.cpp`): booleans must be JSON `true` / `false`,
+    never `1` / `0`. Swift decodes the whole document with `JSONDecoder`,
+    and one wrong type anywhere throws, so the browser shows its empty
+    state over a library that is on disk and scanned correctly. That is a
+    real bug this encoding had once (`favs` as numbers vs `[Bool]`), and
+    the snapshot tool's mock emits booleans, so a rendering cannot catch
+    it - only the engine test can. `favs` also stays decodable from
+    numbers and from a missing key (an old payload still loads), and a
+    decode error now surfaces as `libraryError` (flashed + shown in the
+    empty state) instead of blanking the browser silently.
+- COLOURS (`PatchManager::SetPatchColor`, hook `setPatchColor`, tests
+  `PatchColorReadsFromTheFileAndRoundTrips`): Synth1's per-patch colour
+  lives in the patch's OWN `color=` line (line 2, next to `ver=`), so it is
+  not a sidecar record: it travels with the file through write / copy /
+  export / import and needs no hashing. `PatchRef::color` (default
+  "default") is filled by the scan (`PatchNameCache` now returns the name
+  and the colour in one read; `Write` forgets the path so a rewritten
+  colour reads back); `Json()` reports a `colors` array per bank beside
+  `tags`. `SetPatchColor` rewrites the file through `Write`, so star / tags
+  / category follow the new bytes exactly like a re-save; the factory bank
+  refuses. The browser's patch menu offers "Colour" (mac right click, iPad
+  long press; not on the factory bank) over the six names real libraries
+  use - `default` + blue / red / yellow / green / magenta - and the slot
+  cell tints: a 28 % fill + 1 pt border (`PatchColorEdit.tint`), the
+  selected cell keeping its inverted look, `default` and unknown values
+  plain. Recolouring the LOADED slot also updates the instance's
+  `patchColor_` (`SynthEditorCore::PatchColorEdited`), so a later
+  controller-side save writes the new colour.
+- DUPLICATES (`PatchManager::FindDuplicates`, hook `findDuplicates`,
+  test `FindDuplicatesGroupsIdenticalBytes`): the filter bar's "..." menu >
+  "Find duplicates..." opens `DuplicatesDialog` listing every set of patches
+  whose FILE BYTES are identical (same hash as the tag sidecar, so two
+  re-saves of one sound with the same values group, a name or colour change
+  does not). Payload = `groups=N` then one line per set of `"bank,slot"`
+  tokens (positions only: names and colours come from the bank list, so a
+  set survives a rescan and needs no escaping). Runs only on a FINISHED
+  scan (a streamed prefix would split a set across the arrival boundary =
+  "still loading the library"); an untagged library hashes on demand
+  through the process-wide `PatchHashCache` (~0.2 s cold on 19,200
+  patches, instant after). Each row loads or deletes ONE copy; nothing is
+  ever deleted automatically.
 - EXPORT BANK (`PatchManager::ExportBank`, hook `exportBank`, FileAction
   `.exportBank(id)`): pick a target folder (mac NSOpenPanel folders only,
   iPad picker on `[.folder]`); a folder named after the bank's (" 2" when
@@ -614,6 +738,20 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   = mac, the iPad gets themes only), themes. Resize = C callback
   passed to `OxoSynth2EditorCreate` → `plugFrame->resizeView`. Window
   aspect-locked, width in NSUserDefaults `oxo.synth2.editorWidth`.
+- SCALING (no `.scaleEffect` anywhere): every panel number is a DESIGN-space
+  length in the 770x560 grid; layout, widget intrinsics and fonts multiply by
+  `\.scale` and text is laid out at final size, so it stays crisp at any UI
+  size (a transform would rasterise at design size and blur). `SynthPanelView`
+  sets `\.scale` ONCE, last, inside `panel(scale:)` — never at `body`, because
+  the `FileActions` modifier lives there and the macOS panels must stay 1:1.
+  Fonts go through `.oxoFont(size, weight, design)`; `.frame` / `.padding` /
+  `spacing` literals get `* scale`; absolute placement uses `.at(x, y)`
+  (`Placed`). A `@Environment(\.scale)` reads the environment ABOVE the view,
+  so `SynthPanelView` itself cannot see the value it exports: its section
+  builders take `scale` as a parameter, and `View` extensions (e.g.
+  `slotDraggable`) must receive it too. **Inside a `Menu`'s `label:` closure
+  never use `.oxoFont`** (its extra wrapper view perturbs layout even at scale
+  1 = 1 px shifts): inline `.font(.system(size: N * scale, weight: …))`.
 - TOOLTIPS: only `.oxoTruncationTooltip` on cut patch / bank names in the
   browser (first 0.5 s, then instant while warm); no help tips, no
   `.help()`; hover via `onContinuousHover`.
