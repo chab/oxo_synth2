@@ -139,10 +139,20 @@ int main() {
         expect(pb == 0 && ps == 0 && std::strcmp(h3.patchName(h3.ctx), "Written") == 0, "session restores the program");
         Synth2Destroy(third);
     }
+    {   // recolouring the LOADED patch: a save of the current patch follows
+        std::system("rm -f /tmp/oxo_s2_harness_colour.sy1");
+        expect(h2.setPatchColor(h2.ctx, 0, 0, "blue") == 1, "colour the loaded patch");
+        expect(h2.savePatchFile(h2.ctx, "/tmp/oxo_s2_harness_colour.sy1") == 1, "save after recolour");
+        expect(std::system("grep -qx 'color=blue' /tmp/oxo_s2_harness_colour.sy1") == 0, "saved patch keeps the new colour");
+        std::system("rm -f /tmp/oxo_s2_harness_colour.sy1");
+    }
     expect(std::strstr(h.slotPath(h.ctx, 0, 0), "001.sy1") != nullptr && *h.slotPath(h.ctx, 0, 1) == 0, "slot path");
-    // import: a written patch file comes back as the "Imported" bank
+    // import: a written patch file comes back as the "Imported" bank, and
+    // the payload reports the count (the UI's "imported 1 patch into ...")
     expect(h.savePatchFile(h.ctx, "/tmp/oxo_s2_harness_import.sy1") == 1, "save patch file");
-    expect(std::strstr(h.importItems(h.ctx, "/tmp/oxo_s2_harness_import.sy1"), "/Imported") != nullptr, "import");
+    const char *imported = h.importItems(h.ctx, "/tmp/oxo_s2_harness_import.sy1");
+    expect(std::strstr(imported, "patches=1") == imported, "import reports its patch count");
+    expect(std::strstr(imported, "+1 ") != nullptr && std::strstr(imported, "/Imported") != nullptr, "import");
     expect(std::strstr(h.libraryJSON(h.ctx), "\"Imported\"") != nullptr, "imported bank listed");
     // a zip put into the library: extracted on rescan, moved to the Trash
     std::system("rm -rf /tmp/oxo_s2_hz && mkdir -p /tmp/oxo_s2_hz/Z && cp /tmp/oxo_s2_harness_import.sy1 /tmp/oxo_s2_hz/Z/001.sy1"
@@ -168,13 +178,40 @@ int main() {
                     "'/tmp/oxo_s2_ios_harness_lib/Finder Bank/001.sy1'");
         const int32_t rev = h.libraryRevision(h.ctx);
         h.startLibraryScan(h.ctx);
-        for (int i = 0; i < 2000 && (h.libraryScanning(h.ctx) || h.libraryRevision(h.ctx) == rev); ++i) usleep(1000);
-        expect(h.libraryRevision(h.ctx) != rev && !h.libraryScanning(h.ctx) &&
+        // streaming: banks arrive one at a time, the progress hook reads the
+        // streamed prefix back (denominator is known before the first bank)
+        int32_t b0 = 0, p0 = 0, t0 = 0;
+        h.libraryScanProgress(h.ctx, &b0, &p0, &t0);
+        expect(t0 >= 1, "scan progress knows the bank count up front");
+        for (int i = 0; i < 4000; ++i) {
+            const int32_t now = h.libraryRevision(h.ctx);
+            if (!h.libraryScanning(h.ctx) && now != rev) break;
+            usleep(500);
+        }
+        int32_t b1 = 0, p1 = 0, t1 = 0;
+        h.libraryScanProgress(h.ctx, &b1, &p1, &t1);
+        expect(!h.libraryScanning(h.ctx) && b1 >= 1 && p1 > 0 && t1 >= b1,
+               "scan progress reads back");
+        expect(h.libraryRevision(h.ctx) != rev &&
                    std::strstr(h.libraryJSON(h.ctx), "\"Finder Bank\"") != nullptr, "background rescan adopted");
     }
     // drag onto a bank = copy into its first free slot (bank 0 = "Finder Bank", 001 taken)
     expect(h.copyPatch(h.ctx, 0, 0, 0) == 1 &&
                std::system("test -f '/tmp/oxo_s2_ios_harness_lib/Finder Bank/002.sy1'") == 0, "copy patch");
+    // duplicate detection: the copy made above is byte-identical to its source
+    // the imported copy in bank 1 is the same bytes too, so all three group
+    expect(std::strcmp(h.findDuplicates(h.ctx), "groups=1\n0,0 0,1 1,0\n") == 0, "find duplicates");
+    // patch colour: written into the .sy1's own `color=` line, and read back
+    // by the next scan (so it needs no sidecar and travels with the file)
+    {
+        const char *before = h.libraryJSON(h.ctx);
+        expect(std::strstr(before, "\"colors\":") != nullptr, "library reports slot colours");
+        expect(h.setPatchColor(h.ctx, 0, 0, "red") == 1, "set patch colour");
+        expect(std::strstr(h.libraryJSON(h.ctx), "\"red\"") != nullptr, "colour read back");
+        h.rescanLibrary(h.ctx);
+        expect(std::strstr(h.libraryJSON(h.ctx), "\"red\"") != nullptr, "colour survives a rescan");
+        expect(h.setPatchColor(h.ctx, -1, 0, "red") == 0, "colour of a missing bank refused");
+    }
     // Initialize patch = Synth2's INIT; the double-click default follows it
     int32_t lo = 0, hi = 0, def = 0;
     h.paramInfo(h.ctx, 33, &lo, &hi, &def);
