@@ -563,7 +563,7 @@ private:
                 o1 = acc * detuneGain;
                 // (measured, measure_ring_detune.py) ring on: the sub copies
                 // skip the copy gain (~+10 dB). The original bounds that loud
-                // sum AFTER the filter (the SVF's AGC; none on the ladder yet)
+                // sum AFTER the filter (Filter.hpp, the output limiter)
                 sub = ring ? subAcc : subAcc * detuneGain;
             }
             if (osc1Silent) o1 = sub = 0;

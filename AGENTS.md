@@ -726,15 +726,12 @@ original AU; keeps both renders for listening).
   bound sits AFTER the filter, before the amp (filtered quietly, cutoff
   35: no compression; amp gain / velocity: none; LP12 = LP24 at cutoff
   127). It is a level-riding gain, not a waveshaper (lines near the
-  carriers, almost no 3rd harmonic): on the SVF our output AGC matches it
-  (Fairlight ARR Voice, BP12: 2.87 → 0.07 dB). Until 2026-11-12 a 1.7·tanh
+  carriers, almost no 3rd harmonic): the filters' output limiter (Filter
+  section) is it (Fairlight ARR Voice, BP12: 2.87 → 0.07 dB). Until 2026-11-12 a 1.7·tanh
   on osc1 + sub modelled it and SATURATED audibly (87 ring + detune + sub
   library patches: mean spec 1.55 → 1.06, 31 better > 0.5 dB, none
-  worse). OPEN: the LADDER has no such output limiter (only its in-loop
-  one), so LP24 at a high cutoff plays the loud sum unbounded (ARR on
-  LP24 127: +2.6 dB). The SVF's AGC after the ladder fixes that (−0.2)
-  but takes res 127 self-oscillation 1.4 dB lower (compare.py filter
-  t1_r127 −3.6 → −5): the two limiters' interplay is unmeasured. Sync hard: NAIVE reset of osc2 to phase 0 (same alias energy
+  worse). The filters' output limiter (Filter section) bounds it on LP24
+  too (ARR on LP24 127: +2.6 → +0.15 dB). Sync hard: NAIVE reset of osc2 to phase 0 (same alias energy
   as the original to 0.1 dB; do not band-limit). SYNC + FM: a sync fires
   whenever osc1's phase DROPS = a forward wrap OR any sample FM drives it
   backward without wrapping (a backward wrap 0 → 1 does not). Synced
@@ -816,9 +813,28 @@ original AU; keeps both renders for listening).
   ~instant, res / pw / mix not measured cleanly yet.
 - Filter: LP12/HP12/BP12 = Chamberlin SVF ×2 iterations (input held),
   f = 2 sin(pi fc/2fs), fc = 16.7·2^(c/12.624) (c ≤ 125), d = 1-r,
-  in gain 1-0.7r; output AGC (T 1.427, q 0.883, att 1.2 ms, rel 0.2 s).
-  LP24 = 4 bilinear one-poles + unit-delay feedback, fc table,
-  k = (0.0297 res - 0.076)·comp[c], in-loop AGC (T 1.6). LPDL
+  in gain 1-0.7r. LP24 = 4 bilinear one-poles + unit-delay feedback, fc
+  table, k = (0.0297 res - 0.076)·comp[c], in-loop AGC on k (peak
+  follower 1.2 ms / 0.2 s, (T/e)^0.883 above T 5.5). OUTPUT LIMITER after
+  both (`measure_filter_limiter.py`, 2026-11-12): before the saturation
+  and the amp (filtered quietly it does nothing; amp gain / velocity do
+  not move it; LP12 = LP24 at cutoff 127): gain (1 + (e/1.038)^11.54)^
+  (−0.856/11.54) on a follower of |y| (3.7 ms up, 6.9 ms down), 1 below
+  e 0.39 (table `FilterTables::LimitGain`). Level-riding, not a
+  waveshaper: lines next to the carriers, H3 −49 dB at 0.6 dB of
+  compression. A full-scale sine at key 12 stays within 0.08 dB (the
+  original: untouched; softer knees / mean-abs followers cost 0.1..0.25).
+  It replaced the SVF's AGC (T 1.427, 1.2 ms / 0.2 s, fitted on
+  resonance: its slow release over-compressed loud sums) and the ladder
+  AGC's T 1.6 (now 5.5: the res 127 self-oscillation through the limiter
+  = the original's 1.72 FS at cutoff 56..96, 1.66..1.11 above, within
+  0.6..5 %; it was −3.6 dB). Library (686 patches): 446 change, none
+  worse > 0.5 dB, mean spec 0.875 → 0.868; filter corpus 1.52 → 1.36;
+  +3 % instructions (bench). OPEN (LP24 res ≥ 120): the original's
+  resonance rises faster above res ~115 (self-oscillates from res ~123 at
+  cutoff 88, 127 at 48 / 120; ours stalls or starts elsewhere at cutoff ≤
+  48), oscillates 1..2 % higher, and while oscillating suppresses the
+  input noise ~21 dB (ours ~10): t1_r127 spec still 9..30 dB. LPDL
   (`fit_lpdl.py`, ~0.5 dB): linear 303-style coupled ladder, feedback
   high-passed at 100 Hz, out = (y3+y4)/2, w/k/g tables per res×cutoff
   (fitted on SMALL-signal TFs: `measure_filter.py --types 4 --mix 10 --out
