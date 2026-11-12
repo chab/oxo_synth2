@@ -11,6 +11,7 @@ private let sy1Type = UTType(filenameExtension: "sy1") ?? .data
 struct BottomBar: View {
     @ObservedObject var model: SynthModel
     @Environment(\.theme) private var theme
+    @Environment(\.scale) private var scale
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -37,16 +38,16 @@ struct BottomBar: View {
                     .place(758 - VoiceGrid.size.width, 34 - VoiceGrid.size.height / 2, VoiceGrid.size.width, VoiceGrid.size.height)
             } else {
                 Button(action: { model.exitLearn() }) {
-                    Text("Exit MIDI Learn").font(.system(size: 12, weight: .semibold))
+                    Text("Exit MIDI Learn").oxoFont(12, .semibold)
                         .foregroundColor(Color(red: 0.95, green: 0.87, blue: 0.87))
-                        .frame(width: 200, height: 28)
+                        .frame(width: 200 * scale, height: 28)
                         .background(RoundedRectangle(cornerRadius: 4).fill(Theme.red))
                         .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.black.opacity(0.6), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .place(540, 4, 200, 28)
                 Text("Click a control, then move a controller knob.\nDouble-click a control to clear its CC.")
-                    .font(.system(size: 9.5)).foregroundColor(theme.dimInk).fixedSize()
+                    .oxoFont(9.5).foregroundColor(theme.dimInk).fixedSize()
                     .place(540, 36, 210, 30)
             }
         }
@@ -71,7 +72,7 @@ struct BottomBar: View {
                 .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.black, lineWidth: 1.5))
                 .onTapGesture { toggleBrowser() }
             Text(programPrefix + model.patchName)
-                .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                .oxoFont(17, .semibold, design: .monospaced)
                 .foregroundColor(Theme.lcdText)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -84,7 +85,7 @@ struct BottomBar: View {
             }
             .place(348, 9, 76, 20)
             Text(model.readout ?? bankLine)
-                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                .oxoFont(13, .medium, design: .monospaced)
                 .foregroundColor(model.readout == nil ? Theme.lcdText.opacity(0.85) : theme.displayText)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -103,6 +104,7 @@ struct BottomBar: View {
             // Library chores (Import…, library folder, Refresh) live in the
             // browser's header; write = the red button.
             Button("Initialize patch") { model.initializePatch() }
+            Button("Random patch") { model.randomPatch() }
             Divider()
             Button("Load patch file…") { model.fileAction = .loadPatch }
             Button("Save patch file…") { model.fileAction = .savePatch }
@@ -121,15 +123,16 @@ struct BottomBar: View {
         } label: {
             // .button + .plain: the label is drawn as-is (centred), not
             // re-laid out by the borderless menu style.
-            Text("menu").font(.system(size: 11, weight: .semibold)).foregroundColor(Theme.buttonText)
-                .frame(width: 50, height: 26)
+            // Inline font, not .oxoFont: see MenuDisplay.
+            Text("menu").font(.system(size: 11 * scale, weight: .semibold)).foregroundColor(Theme.buttonText)
+                .frame(width: 50 * scale, height: 26)
                 .background(ButtonFace())
                 .contentShape(Rectangle())
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .frame(width: 50, height: 26)
+        .frame(width: 50 * scale, height: 26)
     }
 }
 
@@ -139,6 +142,7 @@ struct BottomBar: View {
 struct VoiceGrid: View {
     @ObservedObject var activity: VoiceActivity
     @Environment(\.theme) private var theme
+    @Environment(\.scale) private var scale
     let polyphony: Int
     /// Exactly the Voice section's width (216 incl. the outer lines).
     static let columns = 16, rows = 2, cell: CGFloat = 215.0 / 16
@@ -184,6 +188,7 @@ struct VoiceGrid: View {
 struct PatchBrowserView: View {
     @ObservedObject var model: SynthModel
     @Environment(\.theme) private var theme
+    @Environment(\.scale) private var scale
     @State private var target: Int?
     @State private var name = ""
     @State private var newBankName = ""
@@ -208,9 +213,10 @@ struct PatchBrowserView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if !model.writing { filterBar }
             HStack(spacing: 0) {
-                bankList.frame(width: 190).frame(maxHeight: .infinity)
-                Rectangle().fill(theme.edge).frame(width: 1)
+                bankList.frame(width: 190 * scale).frame(maxHeight: .infinity)
+                Rectangle().fill(theme.edge).frame(width: 1 * scale)
                 // iOS: a ScrollView takes its ideal width otherwise
                 slotGrid.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -222,6 +228,14 @@ struct PatchBrowserView: View {
             if let id = model.bankToDelete, let bank = model.banks.first(where: { $0.id == id }) {
                 DeleteBankDialog(model: model, bank: bank)
             }
+        }
+        .overlay {
+            // the browser's own dialog: the host owns the window (AUv3 can't
+            // open one), and on iPad it keeps clear of the keyboard
+            if let edit = model.tagEdit { TagDialog(model: model, bank: edit.bank, slot: edit.slot) }
+        }
+        .overlay {
+            if let groups = model.duplicateGroups { DuplicatesDialog(model: model, groups: groups) }
         }
         .shadow(color: .black.opacity(0.4), radius: 6)
         .onAppear {
@@ -251,10 +265,13 @@ struct PatchBrowserView: View {
     private var header: some View {
         HStack(spacing: 6) {
             Text(model.writing ? "Write patch" : "Banks")
-                .font(.system(size: 12, weight: .semibold)).foregroundColor(theme.headerText)
-            if model.libraryLoading && !model.banks.isEmpty { // the list shown may still change
-                Text("loading…").font(.system(size: 11)).foregroundColor(theme.headerText.opacity(0.6))
+                .oxoFont(12, .semibold).foregroundColor(theme.headerText)
+            if let notice = model.importNotice {
+                Text(notice).oxoFont(11).foregroundColor(theme.headerText)
+                    .lineLimit(1).truncationMode(.middle)
+                    .oxoTruncationTooltip(notice, size: 11, optional: true)
             }
+            if model.libraryLoading { scanProgress }
             Spacer(minLength: 6)
             if naming {
                 field("new bank name", $newBankName, width: 180) { createBank() }
@@ -266,22 +283,159 @@ struct PatchBrowserView: View {
                 button("New bank…", width: 72) { startNaming() }
                 button("Cancel") { model.closeBrowser() }
             } else {
-                #if os(macOS)
-                button("Import…") { model.fileAction = .importBanks }
-                button("Open library folder", width: 120) { Finder.open(model.host.libraryRoot) }
-                #else
-                // two pickers: the iOS one can't offer folders and files at once
+                // two pickers: one panel can't offer folders and files at
+                // once (macOS shows a folder package's contents instead)
                 button("Import folder…", width: 96) { model.fileAction = .importFolder }
                 button("Import files…", width: 90) { model.fileAction = .importBanks }
+                #if os(macOS)
+                button("Library", width: 60) { Finder.open(model.host.libraryRoot) }
                 #endif
                 button("Refresh") { model.refreshLibrary() }
+                PanelButton(title: "Random", width: 74, height: 20, icon: "die.face.5") { model.randomPatch() }
                 PanelButton(title: "Close", width: 60, height: 20, icon: "xmark") { model.closeBrowser() }
             }
         }
-        .padding(.horizontal, 8)
-        .frame(height: 28)
+        .padding(.horizontal, 8 * scale)
+        .frame(height: 28 * scale)
         .background(theme.header)
     }
+
+    /// "Scanning 6/21 banks · 412 patches" with a bar: the streamed banks are
+    /// already usable, this only says how much of the library is in yet.
+    private var scanProgress: some View {
+        let banks = model.libraryScan.banks, total = max(model.libraryScan.total, banks, 1)
+        return HStack(spacing: 5 * scale) {
+            ZStack(alignment: .leading) {
+                Capsule().fill(theme.headerText.opacity(0.2)).frame(width: 60 * scale, height: 4)
+                Capsule().fill(theme.headerText.opacity(0.75))
+                    .frame(width: 60 * model.libraryScanFraction * scale, height: 4 * scale)
+            }
+            Text("\(banks)/\(total) banks · \(model.libraryScan.patches) patches")
+                .oxoFont(10, design: .monospaced)
+                .foregroundColor(theme.headerText.opacity(0.7))
+                .fixedSize()
+        }
+    }
+
+    // MARK: search and filter
+
+    /// Narrowing the slot list: free text (patch / bank name, category,
+    /// tags) plus one type chip plus the star. The loaded bank still shows
+    /// every slot, so this filters SLOTS, and a bank with nothing matching
+    /// is dimmed but still selectable (so copying between banks works).
+    private var filterBar: some View {
+        HStack(spacing: 6) {
+            HStack(spacing: 4) {
+                Image(systemName: "magnifyingglass")
+                    .oxoFont(10).foregroundColor(theme.displayText.opacity(0.7))
+                TextField("search patches", text: $model.librarySearch)
+                    .textFieldStyle(.plain)
+                    .oxoFont(11, design: .monospaced)
+                    .foregroundColor(theme.displayText)
+                if !model.librarySearch.isEmpty {
+                    Button { model.librarySearch = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .oxoFont(10).foregroundColor(theme.displayText.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 6 * scale)
+            .frame(height: 20 * scale)
+            .background(RoundedRectangle(cornerRadius: 3).fill(theme.display))
+
+            categoryChips
+
+            Spacer(minLength: 4)
+
+            starChip
+
+            tagsMenu
+
+            if model.hasActiveFilter {
+                button("Clear", width: 52) { model.clearLibraryFilter() }
+            }
+        }
+        .padding(.horizontal, 8 * scale)
+        .frame(height: 26 * scale)
+        .background(theme.header.opacity(0.85))
+    }
+
+    /// The 22 types, "All" first. Scrolling, not wrapping: the counts do
+    /// not fit and the browser is narrow on iPad.
+    private var categoryChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 3 * scale) {
+                chip("All", active: model.categoryFilter == nil) { model.categoryFilter = nil }
+                ForEach(0 ..< max(model.categoryNames.count, 1), id: \.self) { c in
+                    if c < model.categoryNames.count {
+                        let name = model.categoryNames[c]
+                        // Unclassified only earns a chip once something is in it.
+                        if c != 0 || model.categoryCount(c) > 0 {
+                            chip(name, active: model.categoryFilter == c) {
+                                model.categoryFilter = model.categoryFilter == c ? nil : c
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 1 * scale)
+        }
+        .frame(maxWidth: 360)
+    }
+
+    private func chip(_ title: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .oxoFont(10)
+                .foregroundColor(active ? theme.lcdBottom : theme.displayText)
+                .padding(.horizontal, 6 * scale)
+                .frame(height: 18 * scale)
+                .background(RoundedRectangle(cornerRadius: 3).fill(active ? theme.displayText : theme.display))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var starChip: some View {
+        Button { model.favouritesOnly.toggle() } label: {
+            Image(systemName: model.favouritesOnly ? "star.fill" : "star")
+                .oxoFont(11)
+                .foregroundColor(model.favouritesOnly ? Theme.red : theme.displayText.opacity(0.7))
+                .padding(.horizontal, 5 * scale)
+                .frame(height: 18 * scale)
+                .background(RoundedRectangle(cornerRadius: 3).fill(theme.display))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .oxoTruncationTooltip("Show starred patches only", size: 11, monospaced: false, optional: true)
+    }
+
+    /// The portable file: the whole library's categories, stars and tags in
+    /// one categories.json (kept next to the patches, but exportable so a
+    /// new setup can import it).
+    private var tagsMenu: some View {
+        Menu {
+            Button("Export categories and tags…") { model.fileAction = .exportTags }
+            Button("Import categories and tags…") { model.fileAction = .importTags }
+            Divider()
+            Button("Find duplicates…") { model.findDuplicates() }
+            Divider()
+            Button("Clear filter") { model.clearLibraryFilter() }
+                .disabled(!model.hasActiveFilter)
+        } label: {
+            // Inline font, not .oxoFont: see MenuDisplay.
+            Text("⋯").font(.system(size: 11 * scale, weight: .bold))
+                .foregroundColor(theme.displayText.opacity(0.7))
+                .padding(.horizontal, 5 * scale).frame(height: 18 * scale)
+                .background(RoundedRectangle(cornerRadius: 3).fill(theme.display))
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .oxoTruncationTooltip("Categories and tags", size: 11, monospaced: false, optional: true)
+    }
+
+    // MARK: writeButton
 
     private var writeButton: some View {
         let bank = newUserBank ? nil : self.bank
@@ -301,9 +455,9 @@ struct PatchBrowserView: View {
     private func field(_ prompt: String, _ text: Binding<String>, width: CGFloat, submit: @escaping () -> Void) -> some View {
         TextField(prompt, text: text)
             .textFieldStyle(.plain)
-            .font(.system(size: 12, design: .monospaced))
+            .oxoFont(12, design: .monospaced)
             .foregroundColor(Theme.lcdText)
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 6 * scale)
             .frame(width: width, height: 20)
             .background(RoundedRectangle(cornerRadius: 3).fill(theme.displayFill))
             .onSubmit(submit)
@@ -319,11 +473,12 @@ struct PatchBrowserView: View {
                     if model.writing && !model.banks.isEmpty && model.userBank == nil { newUserBankRow }
                     if model.banks.isEmpty {
                         Text(model.libraryLoading ? "Loading…"
-                             : "No banks. Import… copies bank folders, zip banks or .sy1 patches into the library.")
-                            .font(.system(size: 10)).foregroundColor(Theme.lcdText.opacity(0.7)).padding(8)
+                             : model.libraryError.map { "Can't read the library: \($0)" }
+                               ?? "No banks. Import… copies bank folders, zip banks or .sy1 patches into the library.")
+                            .oxoFont(10).foregroundColor(Theme.lcdText.opacity(0.7)).padding(8 * scale)
                     }
                 }
-                .padding(.top, 4)
+                .padding(.top, 4 * scale)
             }
             .scrollDeadZone()
             // Keyboard steps roll into other banks: keep the bank in view.
@@ -337,6 +492,8 @@ struct PatchBrowserView: View {
         .background(theme.lcdBottom)
     }
 
+    /// A bank row's face: label left, count right (shared with the write
+    /// dialog's "User" row, which has no index yet).
     private func bankLabel(_ label: String, count: String, selected: Bool) -> some View {
         HStack(spacing: 4) {
             Text(label).lineLimit(1)
@@ -344,9 +501,9 @@ struct PatchBrowserView: View {
             Spacer(minLength: 2)
             Text(count).opacity(0.6)
         }
-        .font(.system(size: 11, design: .monospaced))
+        .oxoFont(11, design: .monospaced)
         .foregroundColor(selected ? theme.lcdBottom : Theme.lcdText)
-        .padding(.horizontal, 6).padding(.vertical, 3)
+        .padding(.horizontal, 6 * scale).padding(.vertical, 3 * scale)
         .background(selected ? theme.displayText : Color.clear)
     }
 
@@ -366,9 +523,12 @@ struct PatchBrowserView: View {
         let info = model.banks[b]
         let selected = !newUserBank && b == model.currentBank
         let locked = model.writing && info.readOnly // the write dialog can't pick it
-        return bankLabel(String(format: "%02d:", b) + info.name, count: "\(info.count)", selected: selected)
+        let filterMiss = model.hasActiveFilter && model.matchCount(bank: b) == 0
+        // Filtered: how many still match, so a dimmed bank says why.
+        let count = model.hasActiveFilter ? "\(model.matchCount(bank: b))/\(info.count)" : "\(info.count)"
+        return bankLabel(String(format: "%02d:", b) + info.name, count: count, selected: selected)
         .overlay(Rectangle().strokeBorder(theme.displayText, lineWidth: dropBank == b ? 1.5 : 0))
-        .opacity(locked ? 0.35 : 1)
+        .opacity(locked ? 0.35 : filterMiss ? 0.45 : 1)
         .contentShape(Rectangle())
         .onTapGesture {
             guard !locked else { return }
@@ -424,17 +584,19 @@ struct PatchBrowserView: View {
                 if s < count { cell(s) } else { Color.clear }
             }
         }
-        .padding(6)
+        .padding(6 * scale)
     }
 
+    /// A plain, always-empty slot face (the write dialog's bank to be made).
     private func slotFace(_ s: Int, _ patch: String, selected: Bool) -> some View {
-        Text(String(format: "%03d:", s + 1) + patch)
-            .font(.system(size: 11, design: .monospaced))
+        let text = String(format: "%03d:", s + 1) + patch
+        return Text(text)
+            .oxoFont(11, design: .monospaced)
             .foregroundColor(selected ? theme.lcdBottom : patch.isEmpty ? Theme.lcdText.opacity(0.3) : Theme.lcdText)
             .lineLimit(1)
             // a cut name shows whole (not a help tip: always on)
-            .oxoTruncationTooltip(String(format: "%03d:", s + 1) + patch, size: 11, monospaced: true, optional: false)
-            .padding(.horizontal, 5).padding(.vertical, 3)
+            .oxoTruncationTooltip(text, size: 11, monospaced: true, optional: false)
+            .padding(.horizontal, 5 * scale).padding(.vertical, 3 * scale)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 2).fill(selected ? theme.displayText : theme.display))
     }
@@ -443,8 +605,36 @@ struct PatchBrowserView: View {
         let patch = model.banks[b].slots[s]
         let readOnly = model.banks[b].readOnly
         let selected = model.writing ? target == s : (b == model.loadedBank && s == model.currentProgram)
-        return slotFace(s, patch, selected: selected)
-            .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(theme.displayText, lineWidth: dropTarget == s ? 1.5 : 0))
+        let info = model.banks[b]
+        let mark = patch.isEmpty ? nil
+            : (category: info.category(s), favourite: info.isFavourite(s), tags: info.tags(s))
+        // A filtered-out patch keeps its place (drag / copy still land) but
+        // fades back; the LOADED one stays legible whatever the filter.
+        let filtered = model.hasActiveFilter && !patch.isEmpty && !model.slotMatches(bank: b, slot: s)
+            && !(b == model.loadedBank && s == model.currentProgram)
+        let text = String(format: "%03d:", s + 1) + patch
+        // Colour lives in the .sy1 itself: a tint on the cell, not a badge
+        // (an 11 pt monospaced name has no spare width).
+        let tint = patch.isEmpty ? nil : PatchColorEdit.tint(info.color(s))
+        return HStack(spacing: 2) {
+            if let mark, mark.favourite {
+                Image(systemName: "star.fill").oxoFont(7, .bold)
+                    .foregroundColor(selected ? theme.lcdBottom : theme.displayText)
+            }
+            Text(text)
+                .oxoFont(11, design: .monospaced)
+                .foregroundColor(selected ? theme.lcdBottom : patch.isEmpty ? Theme.lcdText.opacity(0.3) : Theme.lcdText)
+                .lineLimit(1)
+                // a cut name shows whole (not a help tip: always on)
+                .oxoTruncationTooltip(text, size: 11, monospaced: true, optional: false)
+        }
+            .padding(.horizontal, 5 * scale).padding(.vertical, 3 * scale)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 2).fill(selected ? theme.displayText : theme.display)
+                .overlay(RoundedRectangle(cornerRadius: 2).fill((tint ?? .clear).opacity(0.28))))
+            .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(dropTarget == s ? theme.displayText : (tint ?? .clear),
+                                                                  lineWidth: dropTarget == s ? 1.5 : (tint == nil ? 0 : 1)))
+            .opacity(filtered ? 0.3 : 1)
             .contentShape(Rectangle())
             .onTapGesture {
                 if model.writing {
@@ -459,13 +649,16 @@ struct PatchBrowserView: View {
                     model.load(bank: b, slot: s)
                 }
             }
-            .libraryMenu(enabled: !patch.isEmpty, delete: readOnly ? nil : { model.deleteSlot(bank: b, slot: s) }) {
+            .libraryMenu(enabled: !patch.isEmpty, delete: readOnly ? nil : { model.deleteSlot(bank: b, slot: s) },
+                         patch: mark, star: { model.toggleFavourite(bank: b, slot: s) },
+                         tags: { model.tagEdit = (b, s) },
+                         color: readOnly ? nil : PatchColorEdit(current: info.color(s)) { model.setPatchColor(bank: b, slot: s, $0) }) {
                 model.host.slotPath(bank: b, slot: s)
             }
             // drag a patch onto another slot: move there (swap if taken); onto
             // a bank: copy (factory patches can only be copied)
             .slotDraggable(patch.isEmpty ? nil : Self.dragPrefix + "\(b):\(s)",
-                           label: String(format: "%03d:", s + 1) + patch, fill: theme.display)
+                           label: String(format: "%03d:", s + 1) + patch, fill: theme.display, scaleForDrag: scale)
             .onDrop(of: SlotDrop.types, delegate: SlotDrop(bank: b, slot: s, enabled: !readOnly, target: $dropTarget) { from in
                 model.movePatch(bank: b, from: from, to: s)
             })
@@ -597,11 +790,11 @@ private struct BankDrop: DropDelegate {
 extension View {
     /// Draggable slot (payload = "synth2-slot:bank:slot"), nothing for an empty one.
     @ViewBuilder
-    func slotDraggable(_ payload: String?, label: String, fill: Color) -> some View {
+    func slotDraggable(_ payload: String?, label: String, fill: Color, scaleForDrag: CGFloat) -> some View {
         if let payload {
             draggable(payload) {
-                Text(label).font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.lcdText)
-                    .padding(.horizontal, 5).padding(.vertical, 3)
+                Text(label).oxoFont(11, design: .monospaced).foregroundColor(Theme.lcdText)
+                    .padding(.horizontal, 5 * scaleForDrag).padding(.vertical, 3 * scaleForDrag)
                     .background(RoundedRectangle(cornerRadius: 2).fill(fill))
             }
         } else {
@@ -629,13 +822,22 @@ enum Finder {
 extension View {
     /// Browser bank / slot menu: right click (mac) = [Export bank…,] Show in
     /// Finder[, Delete]; long press (iPad) = [Export bank…,] [Delete],
-    /// nothing without either.
+    /// nothing without either. A patch adds its star / tags / type first.
     @ViewBuilder
     func libraryMenu(enabled: Bool = true, export: (() -> Void)? = nil, deleteTitle: String = "Delete",
-                     delete: (() -> Void)?, _ path: @escaping () -> String) -> some View {
+                     delete: (() -> Void)?, patch: (category: Int, favourite: Bool, tags: [String])? = nil,
+                     star: (() -> Void)? = nil, tags: (() -> Void)? = nil,
+                     color: PatchColorEdit? = nil,
+                     _ path: @escaping () -> String) -> some View {
         #if os(macOS)
         if enabled {
             contextMenu {
+                if let patch, let star, let tags {
+                    Button(patch.favourite ? "Remove star" : "Add star") { star() }
+                    Button("Edit tags…") { tags() }
+                    if let color { color.menu }
+                    Divider()
+                }
                 if let export { Button("Export bank…") { export() } }
                 Button("Show in Finder") { Finder.reveal(path()) }
                 if let delete {
@@ -647,8 +849,14 @@ extension View {
             self
         }
         #else
-        if enabled, export != nil || delete != nil {
+        if enabled, export != nil || delete != nil || patch != nil {
             contextMenu {
+                if let patch, let star, let tags {
+                    Button(patch.favourite ? "Remove star" : "Add star", systemImage: "star") { star() }
+                    Button("Edit tags…", systemImage: "tag") { tags() }
+                    if let color { color.menu }
+                    Divider()
+                }
                 if let export { Button("Export bank…", systemImage: "square.and.arrow.up") { export() } }
                 if let delete { Button(deleteTitle, systemImage: "trash", role: .destructive) { delete() } }
             }
@@ -665,6 +873,7 @@ extension View {
 struct DeleteBankDialog: View {
     @ObservedObject var model: SynthModel
     let bank: PatchBankInfo
+    @Environment(\.scale) private var scale
 
     private var detail: String {
         let patches = bank.count == 1 ? "1 patch" : "\(bank.count) patches"
@@ -679,10 +888,10 @@ struct DeleteBankDialog: View {
         ZStack {
             Color.black.opacity(0.3).contentShape(Rectangle()).onTapGesture { model.bankToDelete = nil }
             VStack(spacing: 0) {
-                Text("Delete bank?").font(.system(size: 11, weight: .semibold)).foregroundColor(Dlg.text)
-                    .frame(maxWidth: .infinity).frame(height: 22).background(Dlg.bar)
+                Text("Delete bank?").oxoFont(11, .semibold).foregroundColor(Dlg.text)
+                    .frame(maxWidth: .infinity).frame(height: 22 * scale).background(Dlg.bar)
                 VStack(alignment: .leading, spacing: 14) {
-                    Text(detail).font(.system(size: 11)).foregroundColor(Dlg.text)
+                    Text(detail).oxoFont(11).foregroundColor(Dlg.text)
                         .fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 8) {
                         Spacer()
@@ -690,9 +899,9 @@ struct DeleteBankDialog: View {
                         button("Delete", fill: Theme.red) { model.deleteBank(id: bank.id) }
                     }
                 }
-                .padding(14)
+                .padding(14 * scale)
             }
-            .frame(width: 340)
+            .frame(width: 340 * scale)
             .background(RoundedRectangle(cornerRadius: 8).fill(Dlg.bg))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
             .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -705,8 +914,304 @@ struct DeleteBankDialog: View {
 
     private func button(_ title: String, fill: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title).font(.system(size: 11)).foregroundColor(Dlg.text)
-                .padding(.horizontal, 12).frame(minWidth: 64).frame(height: 22)
+            Text(title).oxoFont(11).foregroundColor(Dlg.text)
+                .padding(.horizontal, 12 * scale).frame(minWidth: 64).frame(height: 22 * scale)
+                .background(RoundedRectangle(cornerRadius: 3).fill(fill))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Browser > ⋯ > Find duplicates…: patches whose FILES are byte for byte
+/// the same, grouped. Nothing is deleted automatically - each copy gets a
+/// Load / Delete of its own, and deleting refreshes the groups, so a set
+/// that loses all but one member disappears. Drawn inside the browser like
+/// DeleteBankDialog (the host owns the window; AUv3 can't open one).
+struct DuplicatesDialog: View {
+    @ObservedObject var model: SynthModel
+    let groups: [DuplicateGroup]
+    @Environment(\.scale) private var scale
+
+    private var copies: Int { groups.reduce(0) { $0 + $1.members.count } }
+
+    /// Tall enough for the sets reported, no taller than 260 pt (then it
+    /// scrolls). Rows are 20 pt + 3 pt spacing, a set's title 14 pt, sets
+    /// sit 10 pt apart - close enough to let a small result stay small.
+    private var listHeight: CGFloat {
+        let content = groups.reduce(CGFloat(0)) { $0 + 14 + CGFloat($1.members.count) * 23 } +
+            CGFloat(max(0, groups.count - 1)) * 10 + 20
+        return min(260, max(40, content)) * scale
+    }
+
+    private var deleteHint: String {
+        #if os(macOS)
+        return "Delete moves a copy to the Trash."
+        #else
+        return "Delete removes a copy for good."
+        #endif
+    }
+
+    private func bankName(_ bank: Int) -> String { bank < model.banks.count ? model.banks[bank].name : "?" }
+    private func patchName(_ member: DuplicateGroup.Member) -> String {
+        guard member.bank < model.banks.count,
+              member.slot < model.banks[member.bank].slots.count else { return "" }
+        return model.banks[member.bank].slots[member.slot]
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.3).contentShape(Rectangle()).onTapGesture { model.duplicateGroups = nil }
+            VStack(spacing: 0) {
+                HStack(spacing: 6) {
+                    Text("Duplicate patches").oxoFont(11, .semibold).foregroundColor(Dlg.text)
+                    Spacer(minLength: 4)
+                    if !groups.isEmpty {
+                        Text("\(copies) copies in \(groups.count) set\(groups.count == 1 ? "" : "s")")
+                            .oxoFont(10).foregroundColor(Dlg.dim)
+                    }
+                }
+                .padding(.horizontal, 8 * scale)
+                .frame(maxWidth: .infinity).frame(height: 22 * scale).background(Dlg.bar)
+                if groups.isEmpty {
+                    Text("No two patches share their file bytes.")
+                        .oxoFont(11).foregroundColor(Dlg.text)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(14 * scale)
+                } else {
+                    ScrollView(showsIndicators: true) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(Array(groups.enumerated()), id: \.offset) { index, group in
+                                groupBlock(index: index, group: group)
+                            }
+                        }
+                        .padding(10 * scale)
+                    }
+                    .frame(height: listHeight)
+                }
+                HStack(spacing: 8) {
+                    Text(deleteHint)
+                        .oxoFont(10).foregroundColor(Dlg.dim)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    button("Close", fill: Dlg.bar) { model.duplicateGroups = nil }
+                }
+                .padding(10 * scale)
+            }
+            .frame(width: 400 * scale)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Dlg.bg))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .shadow(color: .black.opacity(0.5), radius: 10, y: 4)
+            #if os(macOS)
+            .background(WheelShield())
+            #endif
+        }
+    }
+
+    private func groupBlock(index: Int, group: DuplicateGroup) -> some View {
+        VStack(alignment: .leading, spacing: 3 * scale) {
+            Text("Set \(index + 1) · \(group.members.count) identical files")
+                .oxoFont(10, .semibold).foregroundColor(Dlg.dim)
+            ForEach(group.members, id: \.self) { member in
+                HStack(spacing: 6) {
+                    Text(String(format: "%03d", member.slot + 1))
+                        .oxoFont(10, design: .monospaced).foregroundColor(Dlg.dim)
+                        .frame(width: 24 * scale, alignment: .leading)
+                    Text(patchName(member)).oxoFont(11).foregroundColor(Dlg.text)
+                        .lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: 4)
+                    Text(bankName(member.bank)).oxoFont(10).foregroundColor(Dlg.dim)
+                        .lineLimit(1).truncationMode(.head).frame(maxWidth: 110, alignment: .trailing)
+                    button("Load", fill: Dlg.field, width: 44) {
+                        model.duplicateGroups = nil
+                        model.load(bank: member.bank, slot: member.slot)
+                    }
+                    button("Delete", fill: Dlg.field, width: 52) {
+                        model.deleteDuplicate(bank: member.bank, slot: member.slot)
+                    }
+                }
+                .padding(.horizontal, 6 * scale).frame(height: 20 * scale)
+                .background(RoundedRectangle(cornerRadius: 3).fill(Dlg.field.opacity(0.6)))
+            }
+        }
+    }
+
+    private func button(_ title: String, fill: Color, width: CGFloat = 64,
+                        action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).oxoFont(11).foregroundColor(Dlg.text)
+                .padding(.horizontal, 10 * scale).frame(minWidth: width).frame(height: 20 * scale)
+                .background(RoundedRectangle(cornerRadius: 3).fill(fill))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Browser > Edit tags…: the category directly (a picker over the 22 type
+/// names, "Auto" = back on the name rule), the star, and the portable tag
+/// list. Drawn inside the browser like DeleteBankDialog; the fields sit at
+/// the TOP so the iPad keyboard never covers them. A tag is free text: the
+/// list offers the tags already in use, nothing is required.
+struct TagDialog: View {
+    @ObservedObject var model: SynthModel
+    let bank: Int
+    let slot: Int
+
+    @State private var newTag = ""
+    @FocusState private var adding: Bool
+    @Environment(\.scale) private var scale
+
+    private var info: PatchBankInfo? { bank < model.banks.count ? model.banks[bank] : nil }
+    private var title: String {
+        guard let info else { return "" }
+        return String(format: "%@ %03d: ", info.name, slot + 1) + info.slots[slot]
+    }
+    private var tags: [String] { info?.tags(slot) ?? [] }
+    private var mark: (category: Int, favourite: Bool, tags: [String])? { model.patchMark(bank: bank, slot: slot) }
+    /// "Auto" = the name rule decides, so the TYPE is not ours to show as a
+    /// choice; picking one overrides it.
+    private var typeLabel: String { mark.map { model.categoryName($0.category) } ?? "Auto" }
+    /// Tags already in use elsewhere, minus the ones this slot has.
+    private var suggestions: [String] {
+        model.tagVocabulary.filter { tag in !tags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame } }
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.black.opacity(0.3).contentShape(Rectangle()).onTapGesture { model.tagEdit = nil }
+            VStack(spacing: 0) {
+                Text("Category and tags").oxoFont(11, .semibold).foregroundColor(Dlg.text)
+                    .frame(maxWidth: .infinity).frame(height: 22 * scale).background(Dlg.bar)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(title).oxoFont(10, design: .monospaced).foregroundColor(Dlg.dim)
+                        .lineLimit(1).oxoTruncationTooltip(title, size: 10, monospaced: true, optional: false)
+
+                    // the add field first: at the top of the dialog, clear of
+                    // the keyboard
+                    HStack(spacing: 6) {
+                        TextField("add a tag", text: $newTag)
+                            .textFieldStyle(.plain).focused($adding)
+                            .oxoFont(11)
+                            .foregroundColor(Dlg.text)
+                            .onSubmit { commitTag() }
+                            .padding(.horizontal, 6 * scale).frame(height: 20 * scale)
+                            .background(RoundedRectangle(cornerRadius: 3).fill(Dlg.field))
+                        button("Add", fill: Dlg.accent, width: 44) { commitTag() }
+                            .disabled(tags.count >= 12)
+                    }
+
+                    if !suggestions.isEmpty, tags.count < 12 {
+                        suggestionRow
+                    }
+                    if !tags.isEmpty {
+                        tagList
+                    }
+
+                    picker("Type", value: typeLabel, options: ["Auto"] + model.categoryNames) { choice in
+                        // "Auto" = the name rule; a name = the override
+                        let index = model.categoryNames.firstIndex(of: choice)
+                        model.setCategory(bank: bank, slot: slot, choice == "Auto" ? -1 : (index ?? -1))
+                    }
+
+                    Toggle(isOn: Binding(get: { mark?.favourite ?? false },
+                                         set: { _ in model.toggleFavourite(bank: bank, slot: slot) })) {
+                        Text("Starred").oxoFont(11).foregroundColor(Dlg.text)
+                    }
+                    .toggleStyle(.switch)
+
+                    HStack(spacing: 8) {
+                        Spacer()
+                        button("Done", fill: Dlg.bar) { model.tagEdit = nil }
+                    }
+                }
+                .padding(14 * scale)
+            }
+            .frame(width: 380 * scale)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Dlg.bg))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .shadow(color: .black.opacity(0.5), radius: 10, y: 4)
+            .padding(.top, 24 * scale)
+            #if os(macOS)
+            .background(WheelShield())
+            #endif
+        }
+    }
+
+    /// Tags in use elsewhere: one tap adds one (and keeps the vocabulary
+    /// consistent, which is what makes them portable between setups).
+    private var suggestionRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 3 * scale) {
+                ForEach(Array(suggestions.prefix(32)), id: \.self) { tag in
+                    Button { model.addTag(tag, bank: bank, slot: slot) } label: {
+                        Text(tag).oxoFont(10).foregroundColor(Dlg.dim)
+                            .padding(.horizontal, 5 * scale).frame(height: 18 * scale)
+                            .background(RoundedRectangle(cornerRadius: 3).fill(Dlg.field))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(maxWidth: 350)
+    }
+
+    private var tagList: some View {
+        VStack(alignment: .leading, spacing: 3 * scale) {
+            ForEach(tags, id: \.self) { tag in
+                HStack(spacing: 6) {
+                    Text(tag).oxoFont(11).foregroundColor(Dlg.text)
+                    Spacer(minLength: 4)
+                    Button { model.removeTag(tag, bank: bank, slot: slot) } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .oxoFont(10).foregroundColor(Dlg.dim)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 6 * scale).frame(height: 20 * scale)
+                .background(RoundedRectangle(cornerRadius: 3).fill(Dlg.field))
+            }
+        }
+    }
+
+    /// A small pop-up over `options` in Dlg colours (the system picker's
+    /// menu is the only native one that fits inside the panel).
+    private func picker(_ label: String, value: String, options: [String],
+                        choose: @escaping (String) -> Void) -> some View {
+        HStack(spacing: 8) {
+            Text(label).oxoFont(11).foregroundColor(Dlg.text)
+            Menu {
+                ForEach(options, id: \.self) { option in
+                    Button(option) { choose(option) }
+                }
+            } label: {
+                // Inline fonts, not .oxoFont: see MenuDisplay.
+                HStack(spacing: 4 * scale) {
+                    Text(value).font(.system(size: 11 * scale)).foregroundColor(Dlg.text)
+                    Image(systemName: "chevron.down").font(.system(size: 7 * scale, weight: .bold))
+                        .foregroundColor(Dlg.dim)
+                }
+                .padding(.horizontal, 6 * scale).frame(height: 20 * scale)
+                .background(RoundedRectangle(cornerRadius: 3).fill(Dlg.field))
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        }
+    }
+
+    private func commitTag() {
+        let tag = newTag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tag.isEmpty, tags.count < 12 else { return }
+        model.addTag(tag, bank: bank, slot: slot)
+        newTag = ""
+    }
+
+    private func button(_ title: String, fill: Color, width: CGFloat = 64,
+                        action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).oxoFont(11).foregroundColor(Dlg.text)
+                .padding(.horizontal, 10 * scale).frame(minWidth: width).frame(height: 20 * scale)
                 .background(RoundedRectangle(cornerRadius: 3).fill(fill))
                 .contentShape(Rectangle())
         }
@@ -761,6 +1266,10 @@ struct FileActions: ViewModifier {
                     if scoped { url.stopAccessingSecurityScopedResource() }
                 } else if case let .exportBank(id) = importAction {
                     if let dir = urls.first { model.exportBank(id: id, to: dir) }
+                } else if importAction == .importTags, let url = urls.first {
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    model.importTags(url.path)
+                    if scoped { url.stopAccessingSecurityScopedResource() }
                 } else {
                     model.importItems(urls)
                 }
@@ -773,12 +1282,23 @@ struct FileActions: ViewModifier {
     #if os(macOS)
     private func run(_ action: FileAction) {
         switch action {
-        case .importBanks, .importFolder:
+        case .importFolder:
+            // Folders only: a panel that takes folders AND files makes
+            // NSOpenPanel show a package's contents instead of picking it.
             let panel = NSOpenPanel()
-            panel.message = "Import: bank folders, zip banks or .sy1 patches — copied into the library"
+            panel.message = "Import: bank folders (a Synth1 bankfolder works as is) — copied into the library"
+            panel.canChooseFiles = false
             panel.canChooseDirectories = true
             panel.allowsMultipleSelection = true
-            panel.allowedContentTypes = [.zip, sy1Type, .folder]
+            panel.allowedContentTypes = [.folder]
+            if panel.runModal() == .OK { model.importItems(panel.urls) }
+        case .importBanks:
+            let panel = NSOpenPanel()
+            panel.message = "Import: zip banks or .sy1 patches — copied into the library"
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = false
+            panel.allowsMultipleSelection = true
+            panel.allowedContentTypes = [.zip, sy1Type]
             if panel.runModal() == .OK { model.importItems(panel.urls) }
         case .loadPatch:
             let panel = NSOpenPanel()
@@ -793,6 +1313,18 @@ struct FileActions: ViewModifier {
                 _ = model.saveFile(url.path)
                 model.loadLibrary(rescan: true)
             }
+        case .exportTags:
+            let panel = NSSavePanel()
+            panel.message = "Categories, stars and tags of the whole library — one file, importable on a new setup"
+            panel.allowedContentTypes = [.json]
+            panel.directoryURL = URL(fileURLWithPath: model.host.libraryRoot)
+            panel.nameFieldStringValue = "categories.json"
+            if panel.runModal() == .OK, let url = panel.url { _ = model.exportTags(url.path) }
+        case .importTags:
+            let panel = NSOpenPanel()
+            panel.message = "Categories, stars and tags saved by another setup — merged, nothing here is overwritten"
+            panel.allowedContentTypes = [.json]
+            if panel.runModal() == .OK, let url = panel.url { model.importTags(url.path) }
         case .exportBank(let id):
             guard let bank = model.banks.first(where: { $0.id == id }) else { return }
             let panel = NSOpenPanel()
@@ -808,6 +1340,7 @@ struct FileActions: ViewModifier {
     private var importTypes: [UTType] {
         switch importAction {
         case .loadPatch: return [sy1Type, .data]
+        case .importTags: return [.json, .data]
         case .importFolder, .exportBank: return [.folder]
         default: return [.zip, sy1Type, .data]
         }
@@ -815,12 +1348,22 @@ struct FileActions: ViewModifier {
 
     private func present(_ action: FileAction) {
         switch action {
-        case .importBanks, .importFolder, .loadPatch, .exportBank:
+        case .importBanks, .importFolder, .loadPatch, .importTags:
+            importAction = action
+            importing = true
+        case .exportBank:
             importAction = action
             importing = true
         case .savePatch:
             exportDoc = DataDocument(data: Data(model.host.patchText.utf8))
             exportName = (model.patchName.isEmpty ? "patch" : model.patchName) + ".sy1"
+            exporting = true
+        case .exportTags:
+            // the engine's own writer, then hand its bytes to the exporter
+            let tmp = NSTemporaryDirectory() + "categories.json"
+            guard model.exportTags(tmp), let data = FileManager.default.contents(atPath: tmp) else { return }
+            exportDoc = DataDocument(data: data)
+            exportName = "categories"
             exporting = true
         }
     }
