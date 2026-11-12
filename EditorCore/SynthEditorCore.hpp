@@ -126,6 +126,17 @@ public:
     const std::string &Theme() const { return theme_; }
     void RestoredTheme(const std::string &theme) { theme_ = theme; }
 
+    // The library rewrote a patch's colour (which lives in its .sy1). When
+    // it was the LOADED one, CurrentPatch() must follow: a controller-side
+    // save would otherwise write the colour the instance loaded.
+    void PatchColorEdited(int bank, int slot, const std::string &color) {
+        const auto &banks = library_.Library().Banks();
+        if (bank < 0 || size_t(bank) >= banks.size() || program_.slot != slot) return;
+        const std::string token = s2::ProgramBank(library_.Library(), library_.Root(), size_t(bank));
+        if (token != program_.bank) return;
+        patchColor_ = color.empty() ? "default" : color;
+    }
+
     // A fresh instance (no session state): the first patch of the library
     // (Synth1 starts on program 001 of its first bank). False = empty library.
     bool StartupProgram(s2::Sy1Patch &patch, s2::LibraryProgram &where) const {
@@ -270,6 +281,9 @@ public:
             return int32_t(editor->library_.Revision());
         };
         h.libraryScanning = [](void *c) { return int32_t(C(c)->library_.Scanning()); };
+        h.libraryScanProgress = [](void *c, int32_t *b, int32_t *p, int32_t *t) {
+            C(c)->library_.ScanProgress(*b, *p, *t);
+        };
         h.libraryNotice = [](void *c) { return C(c)->Keep(C(c)->library_.TakeNotice()); };
         h.libraryRoot = [](void *c) { return C(c)->Keep(C(c)->library_.Root().string()); };
         h.loadLibraryPatch = [](void *c, int32_t b, int32_t s) { return int32_t(C(c)->LoadLibraryPatch(b, s)); };
@@ -285,6 +299,35 @@ public:
             return C(c)->Keep(d ? C(c)->library_.ExportBank(b, d) : std::string());
         };
         h.importItems = [](void *c, const char *p) { return C(c)->Keep(C(c)->library_.Import(p ? p : "")); };
+        // libraryJSON() re-reads the scan every call, so an edit needs no
+        // notification: the editor re-reads it and sees the new marks.
+        h.setPatchCategory = [](void *c, int32_t b, int32_t s, int32_t cat) {
+            C(c)->library_.SetCategory(b, s, cat);
+        };
+        h.setPatchFavourite = [](void *c, int32_t b, int32_t s, int32_t on) {
+            C(c)->library_.SetFavourite(b, s, on != 0);
+        };
+        h.addPatchTag = [](void *c, int32_t b, int32_t s, const char *t) {
+            C(c)->library_.AddPatchTag(b, s, t ? t : "");
+        };
+        h.removePatchTag = [](void *c, int32_t b, int32_t s, const char *t) {
+            C(c)->library_.RemovePatchTag(b, s, t ? t : "");
+        };
+        h.setPatchColor = [](void *c, int32_t b, int32_t s, const char *color) {
+            auto *self = C(c);
+            const std::string value = color != nullptr ? color : "";
+            if (!self->library_.SetPatchColor(b, s, value)) return int32_t(0);
+            self->PatchColorEdited(b, s, value);
+            return int32_t(1);
+        };
+        h.exportTags = [](void *c, const char *p) { return int32_t(p != nullptr && C(c)->library_.ExportTags(p)); };
+        h.importTags = [](void *c, const char *p) { return int32_t(C(c)->library_.ImportTags(p ? p : "")); };
+        h.tagVocabulary = [](void *c) {
+            std::string text;
+            for (const std::string &tag : C(c)->library_.TagVocabulary()) text += tag + '\n';
+            return C(c)->Keep(std::move(text));
+        };
+        h.findDuplicates = [](void *c) { return C(c)->Keep(C(c)->library_.FindDuplicates()); };
         h.midiCC = [](void *c, int32_t id) { return C(c)->MidiCC(id); };
         h.setMidiCC = [](void *c, int32_t id, int32_t cc) { C(c)->SetMidiCC(id, cc); };
         h.lastCC = [](void *c) { return C(c)->LastCC(); };

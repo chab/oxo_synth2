@@ -37,6 +37,10 @@ typedef struct OxoSynth2Hooks {
     void (*startLibraryScan)(void *ctx);
     int32_t (*libraryRevision)(void *ctx); // bumps whenever the list changes, 0 = never scanned
     int32_t (*libraryScanning)(void *ctx); // a background scan is running
+    // Progress of the running (or last finished) scan: banks that have
+    // streamed into the browser, patches they hold, banks expected (an
+    // estimate while scanning).
+    void (*libraryScanProgress)(void *ctx, int32_t *banks, int32_t *patches, int32_t *total);
     const char *(*libraryNotice)(void *ctx); // "X.zip imported and moved to Trash", "" = none; clears
     const char *(*libraryRoot)(void *ctx);
     int32_t (*loadLibraryPatch)(void *ctx, int32_t bank, int32_t slot);
@@ -52,6 +56,32 @@ typedef struct OxoSynth2Hooks {
     // Copies folders / extracts zips / loose .sy1 into the library and
     // rescans; paths newline-separated in, new top-level folders out.
     const char *(*importItems)(void *ctx, const char *paths);
+    // Categories, favourites, tags (EngineCore/PatchCategories.hpp): a
+    // sidecar at the library root, keyed by the patch bytes, so a patch
+    // keeps its marks through renames, imports and a fresh setup.
+    // `category` = index into libraryJSON's "catNames", -1 = drop the
+    // override and derive from the name again.
+    void (*setPatchCategory)(void *ctx, int32_t bank, int32_t slot, int32_t category);
+    void (*setPatchFavourite)(void *ctx, int32_t bank, int32_t slot, int32_t on);
+    void (*addPatchTag)(void *ctx, int32_t bank, int32_t slot, const char *tag);
+    void (*removePatchTag)(void *ctx, int32_t bank, int32_t slot, const char *tag);
+    // A patch's colour, from the .sy1's own `color=` line ("default" =
+    // untinted). Rewrites the file; its star / tags / category follow the
+    // new bytes. false = refused (factory bank) or failed.
+    int32_t (*setPatchColor)(void *ctx, int32_t bank, int32_t slot, const char *color);
+    // The whole store as JSON text -> written to `path`, false = failed.
+    int32_t (*exportTags)(void *ctx, const char *path);
+    // Merges a store into ours (records we already have win) and rescans;
+    // -> records added, -1 = unreadable.
+    int32_t (*importTags)(void *ctx, const char *path);
+    // The tags in use, one per line ("" = none yet).
+    const char *(*tagVocabulary)(void *ctx);
+
+    // Patches with identical file bytes, as "groups=N" + one line per
+    // group of "bank,slot" tokens (PatchManager::FindDuplicates).
+    // "" = library still loading; nothing is deleted, the browser
+    // offers the choice.
+    const char *(*findDuplicates)(void *ctx);
     // MIDI learn (plugin-global table, persisted by the wrapper).
     int32_t (*midiCC)(void *ctx, int32_t id);                  // 0 = not learned
     void (*setMidiCC)(void *ctx, int32_t id, int32_t cc);      // 0 = unlearn
