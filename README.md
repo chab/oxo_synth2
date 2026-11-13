@@ -265,6 +265,13 @@ Internal names (`OxoSynth2` targets and files, `Oxo…` message IDs) are not
 visible to users and need no renaming. Keep the state tag `'OXS2'` and the
 `.sy1` format as they are, so projects and patches stay compatible.
 
+## Contributions to this repository
+
+The scope here is Synth1 and nothing more: the goal is a faithful clone for modern computers, the next best thing to Daichi's own code. Fixes, ports and differences from how the original sounds are welcome. New features belong in forks.
+
+If you have a suggestion for this repository, open an issue first, so that we agree on something
+before you spend time on it.
+
 ## License
 
 The code is under the [MIT License](LICENSE).
