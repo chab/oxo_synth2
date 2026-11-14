@@ -2063,9 +2063,7 @@ void WindowsEditor::wheel(int direction,float x,float y) {
         if(c.kind==Kind::Radio && c.id!=71 && c.id!=97) return;
         const int id=c.id;
         const int current=value(id);
-        int low=0,high=127,def=0;
-        if(hooks_.paramInfo) hooks_.paramInfo(hooks_.ctx,id,&low,&high,&def);
-        const int next=std::clamp(current+(direction>0?1:-1),low,high);
+        const int next=s2::OfferedStep(id,current,direction>0?1:-1); // skips chorus type 3
         if(next!=current) setValueOnce(id,next);
         return;
     }
@@ -2253,10 +2251,17 @@ void WindowsEditor::showParameterMenu(int id,int x,int y) {
         values.push_back(v);
     };
     if(id==42 || id==47 || id==64 || id==78 || id==82) { // type / LFO shape pick lists
-        int low=0,high=9,def=0;
-        if(hooks_.paramInfo)hooks_.paramInfo(hooks_.ctx,id,&low,&high,&def);
-        for(int v=low;v<=high;v++) // effect type: Synth1's 2 x 5
-            add(menu,toWide(hooks_.formatValue ? hooks_.formatValue(hooks_.ctx,id,v):""),v,id==78 && v-low==5);
+        // offered values only (chorus type 1 / 2 / 4); a loaded 3 checks 2
+        const int shown=s2::OfferedStep(id,current,0);
+        const auto& info=s2::Info(id);
+        for(int v=info.min;v<=info.max;v++) {
+            if(!s2::Offered(id,v)) continue;
+            const UINT flags=MF_STRING|(id==78 && v-info.min==5 ? MF_MENUBREAK : 0)| // effect type: Synth1's 2 x 5
+                             (shown==v ? MF_CHECKED : 0);
+            AppendMenuW(menu,flags,UINT_PTR(2000+values.size()),
+                        toWide(hooks_.formatValue ? hooks_.formatValue(hooks_.ctx,id,v):"").c_str());
+            values.push_back(v);
+        }
     } else if(id==86 || id==88) {
         add(menu,L"pitch bend",0xE000);add(menu,L"ch pressure",0xD000);
         for(int base=0;base<128;base+=32) {

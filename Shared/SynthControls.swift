@@ -529,7 +529,7 @@ struct ValueDisplay: View {
                     }
                     let steps = Int((-g.translation.height / WheelFeel.displayTravelPerStep).rounded())
                     if steps != 0 { moved = true }
-                    if moved { model.set(id, (dragStart ?? v) + steps) }
+                    if moved { model.set(id, model.stepped(id, from: dragStart ?? v, by: steps)) }
                 }
                 .onEnded { _ in
                     if !moved, let onTap { onTap() }

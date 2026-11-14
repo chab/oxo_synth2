@@ -115,7 +115,7 @@ struct SynthPanelView: View {
     private static let typeMenus: [Int: (origin: CGPoint, rows: Int, cell: CGSize)] = [
         78: (CGPoint(x: 548 + 66 - 23, y: 34 + 40 + 9), 5, CGSize(width: 46, height: 17)),
         82: (CGPoint(x: 548 + 48 - 14, y: 180 + 32 + 9), 3, CGSize(width: 28, height: 17)),
-        64: (CGPoint(x: 548 + 48 - 14, y: 242 + 32 + 9), 4, CGSize(width: 36, height: 17)),
+        64: (CGPoint(x: 548 + 48 - 14, y: 242 + 32 + 9), 3, CGSize(width: 28, height: 17)),
         42: (CGPoint(x: 6 + 42 - 13, y: 278 + 30 + 9), 6, CGSize(width: 26, height: 17)),
         47: (CGPoint(x: 6 + 270 - 13, y: 278 + 30 + 9), 6, CGSize(width: 26, height: 17)),
     ]
@@ -556,6 +556,8 @@ extension View {
 /// Type pick list under its display (effect type: Synth1's 2 columns of 5;
 /// delay / chorus type and the LFO shapes: one column): a direct pick
 /// instead of cycling. Display colours; `icons` = wave icons for the values.
+/// Only offered values are listed (`SynthModel.offered`: chorus type 1 / 2
+/// / 4); a loaded unoffered value marks the item it plays as.
 struct TypeMenu: View {
     @ObservedObject var model: SynthModel
     let id: Int
@@ -567,13 +569,15 @@ struct TypeMenu: View {
 
     var body: some View {
         let r = model.host.range(id)
-        let columns = (r.max - r.min + rows) / rows
+        let list = (r.min...r.max).filter { SynthModel.offered(id, $0) }
+        let current = model.stepped(id, from: model.values[id], by: 0)
+        let columns = (list.count + rows - 1) / rows
         HStack(spacing: 0) {
             ForEach(0..<columns, id: \.self) { col in
                 VStack(spacing: 0) {
                     ForEach(0..<rows, id: \.self) { row in
-                        let v = r.min + col * rows + row
-                        if v <= r.max { item(v, r.min) }
+                        let k = col * rows + row
+                        if k < list.count { item(list[k], r.min, on: list[k] == current) }
                     }
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
@@ -588,8 +592,7 @@ struct TypeMenu: View {
         #endif
     }
 
-    private func item(_ v: Int, _ min: Int) -> some View {
-        let on = model.values[id] == v
+    private func item(_ v: Int, _ min: Int, on: Bool) -> some View {
         let ink = on ? theme.lcdBottom : theme.displayText
         return Group {
             if let icons, v - min < icons.count {

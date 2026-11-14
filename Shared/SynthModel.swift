@@ -341,10 +341,32 @@ final class SynthModel: ObservableObject {
 
     /// Next / previous choice, wrapping (Synth1's type / dst buttons).
     func cycle(_ id: Int, _ delta: Int, gesture: Bool = true) {
+        guard delta != 0 else { return }
         let r = host.range(id)
         let n = r.max - r.min + 1
-        let v = r.min + ((values[id] - r.min + delta) % n + n) % n
+        var v = values[id]
+        repeat { v = r.min + ((v - r.min + delta) % n + n) % n } while !Self.offered(id, v)
         if gesture { setOnce(id, v) } else { set(id, v) }
+    }
+
+    /// Values no control offers (Params.hpp `Offered`): chorus type 3, a
+    /// duplicate of 2 that Synth1's panel never shows.
+    static func offered(_ id: Int, _ v: Int) -> Bool { !(id == 64 && v == 3) }
+
+    /// Params.hpp `OfferedStep`: `steps` offered values away from `v`,
+    /// clamped; an unoffered `v` counts as the offered value below it.
+    func stepped(_ id: Int, from v: Int, by steps: Int) -> Int {
+        let r = host.range(id)
+        var x = min(max(v, r.min), r.max)
+        while x > r.min && !Self.offered(id, x) { x -= 1 }
+        let dir = steps > 0 ? 1 : -1
+        for _ in 0..<abs(steps) {
+            var y = x + dir
+            while y >= r.min && y <= r.max && !Self.offered(id, y) { y += dir }
+            guard y >= r.min && y <= r.max else { break }
+            x = y
+        }
+        return x
     }
 
     /// Mouse wheel: one host gesture per burst (ends 0.4 s after the last
@@ -353,7 +375,7 @@ final class SynthModel: ObservableObject {
         guard steps != 0 else { return }
         if wheelEnds[id] == nil { host.beginEdit(id) }
         wheelEnds[id] = Date().addingTimeInterval(0.4)
-        set(id, values[id] + steps)
+        set(id, stepped(id, from: values[id], by: steps))
     }
 
     func show(_ id: Int) { flash("\(host.displayName(id)): \(host.format(id, values[id]))") }

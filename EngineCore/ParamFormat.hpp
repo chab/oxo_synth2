@@ -91,7 +91,7 @@ inline std::string FormatParam(int id, int v, bool tempoSync = false, int effect
     case kDelayTime: return v == 0 ? "min" : DivisionLabel(kDelayBeats[std::clamp(v, 0, 19)]);
     case kDelayType: return pick({"ST", "X", "PP"});
     case kPlayMode: return pick({"poly", "mono", "legato"});
-    case kChorusType: return pick({"1 ph", "2 ph", "3 ph", "4 ph"}, 1);
+    case kChorusType: return pick({"x1", "x2", "x2", "x4"}, 1); // Synth1's labels; 3 plays as 2
     case kEffectType: return pick({"AD1", "AD2", "DD", "DECI", "RM", "COMP", "PH1", "PH2", "PH3", "PH4"});
     case kEffectLevel:
         if (effectType < 6) return std::to_string(v);

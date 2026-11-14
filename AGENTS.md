@@ -1049,7 +1049,11 @@ original AU; keeps both renders for listening).
   D·sin(ωt − θ)), D = (100^(depth/127) − 1)/99, one sine LFO free-running
   from creation, 2.94 Hz·2^((rate−64)/8.89), rate 0 = 0.01 Hz; types 1–3
   L→L / R→R (R θ 0° type 1, 90° types 2 = 3), type 4 L→L 0°, R→L 90°, L→R
-  180°, R→R 270°; comb feedback 0.99·(fb−64)/64; wet = level/127, dry
+  180°, R→R 270°; Synth1's panel offers 1 / 2 / 4 only ("x1 / x2 / x4",
+  its AU 3 steps): ours too (`Offered` / `OfferedStep` in Params.hpp,
+  Swift mirror `SynthModel.offered` / `stepped`: lists, wheel, drag skip
+  3, a loaded 3 reads "x2"; the parameter keeps 1..4 for automation), no
+  factory patch uses 3; comb feedback 0.99·(fb−64)/64; wet = level/127, dry
   unity. Base delay = WHOLE samples (`Chorus::TimeSamples`, measured
   table at 44.1 kHz, 30 ms at 127; 96 kHz = the same delays rounded).
   The comb adds the CURRENT tap (echoes every base delay exactly).
