@@ -2134,20 +2134,29 @@ void WindowsEditor::showThemeEditor() {
                                 []()->themes::Store&{return sharedThemes().store;},
                                 []{return sharedThemes().fileThemes();}});
 }
+// UI sizes: commands 120.. (the logo menu, menu > Select size).
+static constexpr int kSizeLevels[]={75,100,125,150,200,250,300};
+constexpr int kSizeCommand=120,kSizeCount=int(sizeof(kSizeLevels)/sizeof(kSizeLevels[0]));
+void WindowsEditor::appendSizes(HMENU menu,const wchar_t* suffix) const {
+    const int current=int(std::lround(100.f*float(rect.getWidth())/kDesignWidth));
+    for(int i=0;i<kSizeCount;i++)
+        AppendMenuW(menu,MF_STRING|(current==kSizeLevels[i] ? MF_CHECKED : 0),UINT_PTR(kSizeCommand+i),
+                    (std::to_wstring(kSizeLevels[i])+L"%"+suffix).c_str());
+}
+bool WindowsEditor::pickSize(int command) {
+    if(command<kSizeCommand || command>=kSizeCommand+kSizeCount) return false;
+    requestWidth(int(std::lround(kDesignWidth*kSizeLevels[command-kSizeCommand]/100.f)));
+    return true;
+}
 void WindowsEditor::showThemeMenu(int x,int y) {
     HMENU m=CreatePopupMenu();
-    static constexpr int levels[]={75,100,125,150,200,250,300};
-    const int current=int(std::lround(100.f*float(rect.getWidth())/kDesignWidth));
-    for(int i=0;i<7;i++)
-        AppendMenuW(m,MF_STRING|(current==levels[i] ? MF_CHECKED : 0),UINT_PTR(120+i),
-                    (std::to_wstring(levels[i])+L"% size").c_str());
+    appendSizes(m,L" size");
     AppendMenuW(m,MF_SEPARATOR,0,nullptr);
     std::vector<themes::Palette> picks;
     appendThemes(m,picks);
     int choice=int(TrackPopupMenu(m,TPM_RETURNCMD|TPM_NONOTIFY,x,y,0,window_,nullptr));
     DestroyMenu(m);
-    if(pickTheme(choice,picks)) return;
-    if(choice>=120&&choice<=126) requestWidth(int(std::lround(kDesignWidth*levels[choice-120]/100.f)));
+    if(!pickTheme(choice,picks)) pickSize(choice);
 }
 void WindowsEditor::requestWidth(int width) {
     if(!plugFrame)return;
@@ -2169,10 +2178,12 @@ void WindowsEditor::showMainMenu(int x,int y) {
     const bool programChange=hooks_.programChange && hooks_.programChange(hooks_.ctx)!=0;
     AppendMenuW(menu,MF_STRING|(programChange?MF_CHECKED:0),17,L"Program change");
     AppendMenuW(menu,MF_STRING,14,L"All notes off");
-    HMENU themeMenu=CreatePopupMenu();
+    HMENU sizeMenu=CreatePopupMenu(),themeMenu=CreatePopupMenu();
+    appendSizes(sizeMenu,L"");
     std::vector<themes::Palette> picks;
     appendThemes(themeMenu,picks);
     AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
+    AppendMenuW(menu,MF_POPUP,UINT_PTR(sizeMenu),L"Select size");
     AppendMenuW(menu,MF_POPUP,UINT_PTR(themeMenu),L"Select theme");
     AppendMenuW(menu,MF_STRING,15,L"Themes...");
     // UpdateCheck.enabled: no product slug (forks) = no entry
@@ -2198,7 +2209,7 @@ void WindowsEditor::showMainMenu(int x,int y) {
             break;
         case 15: showThemeEditor();break;
         case 16: checkForUpdates();break;
-        default: pickTheme(selected,picks);break;
+        default: if(!pickTheme(selected,picks)) pickSize(selected);break;
     }
     repaint();
 }

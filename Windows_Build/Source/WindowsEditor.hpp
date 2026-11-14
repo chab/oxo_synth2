@@ -88,6 +88,8 @@ private:
     void checkForUpdates();
     void updateArrived(); // kUpdateMessage: releases.json came (or not)
     void appendThemes(HMENU menu, std::vector<themes::Palette>& picks) const;
+    void appendSizes(HMENU menu, const wchar_t* suffix) const;
+    bool pickSize(int command);
     bool pickTheme(int command, const std::vector<themes::Palette>& picks);
     void setTheme(const themes::Palette& palette, bool fromThemeEditor = false);
     void syncTheme();

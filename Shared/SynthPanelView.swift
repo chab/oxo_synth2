@@ -77,6 +77,7 @@ struct SynthPanelView: View {
                 canvas
                 if model.showBrowser { PatchBrowserView(model: model).place(6, 34, 758, 444) }
             }
+            .environment(\.editorScale, scale)
             // tips over everything at the canvas' scale (SynthTooltip.swift)
             .oxoTooltipHost()
             if model.showThemes {

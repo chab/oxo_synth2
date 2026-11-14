@@ -47,10 +47,20 @@ private struct ThemeKey: EnvironmentKey {
     static let defaultValue = Theme(.synth2)
 }
 
+/// The panel's live scale (window width / design width), for menus
+/// that mark the current UI size.
+private struct EditorScaleKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 1
+}
+
 extension EnvironmentValues {
     var theme: Theme {
         get { self[ThemeKey.self] }
         set { self[ThemeKey.self] = newValue }
+    }
+    var editorScale: CGFloat {
+        get { self[EditorScaleKey.self] }
+        set { self[EditorScaleKey.self] = newValue }
     }
 }
 

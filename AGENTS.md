@@ -583,8 +583,10 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   delete, export, import, all notes off, the library notice 10 s, worded
   "Recycle Bin"). write = write
   dialog; menu = Initialize patch | Load / Save patch file… | MIDI Learn |
-  Program change (checkmark) | All notes off | Themes… | Check for
-  updates… (mac). The version box in the title band
+  Program change (checkmark) | All notes off | Select size ▸ (mac /
+  Windows, = the logo menu's sizes) | Select theme ▸ | Themes… | Check
+  for updates… (mac / Windows). Windows' sizes are 75..300 % of its 770
+  px canvas (`kSizeLevels`), the mac's 75..200 % of 700 pt. The version box in the title band
   opens the GitHub project (`SynthPanelView.projectURL`).
 - BROWSER KEYS (mac, `SynthModel.browserKey`): arrows load at once (up /
   down = ◀ ▶, left / right = next column, nearest non-empty slot), Return /

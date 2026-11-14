@@ -463,19 +463,28 @@ struct LogoMenu: View {
     let scale: CGFloat
     @State private var hovered: String?
 
-    var body: some View {
-        // The window is freely resizable: the active row is the nearest step.
+    /// The window is freely resizable: the active size is the nearest step.
+    static func activeSize(scale: CGFloat) -> Int {
         let unit = scale * SynthPanelView.designSize.width / SynthPanelView.unitWidth
-        let size = Self.sizes.min { abs(CGFloat($0) / 100 - unit) < abs(CGFloat($1) / 100 - unit) }
-        let theme = ThemePalette.factory.first { $0.palette == model.palette }.map { "f:" + $0.name }
+        return sizes.min { abs(CGFloat($0) / 100 - unit) < abs(CGFloat($1) / 100 - unit) } ?? 100
+    }
+
+    static func width(_ percent: Int) -> Double { Double(SynthPanelView.unitWidth) * Double(percent) / 100 }
+
+    /// The palette in use as "f:<factory name>" / "u:<user name>", nil = unlisted.
+    static func activeTheme(_ model: SynthModel, _ store: ThemeStore) -> String? {
+        ThemePalette.factory.first { $0.palette == model.palette }.map { "f:" + $0.name }
             ?? store.userThemes.first { $0.palette == model.palette }.map { "u:" + $0.name }
+    }
+
+    var body: some View {
+        let size = Self.activeSize(scale: scale)
+        let theme = Self.activeTheme(model, store)
         HStack(alignment: .top, spacing: 0) {
             if let resize = model.requestEditorWidth {
                 column("UI size") {
                     ForEach(Self.sizes, id: \.self) { p in
-                        row("s:\(p)", "\(p)%", active: p == size) {
-                            resize(Double(SynthPanelView.unitWidth) * Double(p) / 100)
-                        }
+                        row("s:\(p)", "\(p)%", active: p == size) { resize(Self.width(p)) }
                     }
                 }
                 Rectangle().fill(Color.white.opacity(0.12)).frame(width: 1).padding(.vertical, 6)
