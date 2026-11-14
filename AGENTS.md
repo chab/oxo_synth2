@@ -160,7 +160,11 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   `WindowsTrash.cpp` (Recycle Bin; false where Windows cannot recycle),
   `WindowsStorage.hpp` / `StorageSelection.hpp` (folders, portable mode),
   `WindowsPresetIndex.hpp` (bank index cache, rescanned in the background
-  on every editor / browser open), zoom, `WindowsPrompt.hpp`. The browser
+  on every editor / browser open), zoom (settings.json
+  `windowsEditorWidth`: menu sizes / the panel's corner grip saved at once,
+  the HOST's frame resizes only after the editor's first second (hosts
+  send their own default on open) and once they stop, 400 ms or on close),
+  `WindowsPrompt.hpp`. The browser
   is the mac's (no favourites: removed), incl. drag and drop.
   Windows-only code in shared files stays under `#if defined(_WIN32)` /
   `SMTG_OS_WINDOWS`.

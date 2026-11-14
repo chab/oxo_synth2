@@ -210,7 +210,15 @@ private:
     bool resizeDragging_ = false;
     POINT resizeStartScreen_{};
     int resizeStartWidth_ = 0;
-    int requestedZoomWidth_ = -1; // accept/persist only editor-initiated resizes
+    int requestedZoomWidth_ = -1; // an editor-initiated resize (menu): saved at once
+    // Host resizes (its window frame dragged, e.g. FL Studio) count only once
+    // the editor has settled (attach + kSizeSettleMs: the opening onSize
+    // calls are the host's own default, not the user's) and are saved once
+    // they stop (kSizeSaveDelayMs, or on close).
+    uint64_t sizeSettledAt_ = 0;
+    int pendingSizeSave_ = -1;
+    uint64_t pendingSizeSaveAt_ = 0;
+    void savePendingSize(bool now);
     std::vector<Bank> banks_;
     std::vector<int> bankOrder_;
     std::string libraryRoot_;

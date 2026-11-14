@@ -33,6 +33,7 @@ namespace {
 constexpr float kDesignWidth = 770.f, kDesignHeight = 560.f;
 constexpr int kMinWidth = 578;  // 75% of the 770-pixel design width, rounded up
 constexpr int kMaxWidth = 2310; // 300% of the design width
+constexpr uint64_t kSizeSettleMs = 1000, kSizeSaveDelayMs = 400; // host resizes (WindowsEditor.hpp)
 constexpr float kPi = 3.14159265358979323846f;
 constexpr int kPanel=themes::kPanel, kHeader=themes::kHeader, kHeaderText=themes::kHeaderText,
               kLabel=themes::kLabel, kKnob=themes::kKnobBody, kKnobHighlight=themes::kKnobGradient,
@@ -337,14 +338,25 @@ tresult PLUGIN_API WindowsEditor::onSize(ViewRect* r) {
     if(!r) return kInvalidArgument;
     rect=*r;
     layoutChild();
-    // Only a zoom explicitly requested in this editor is stored. Some hosts
-    // send an initial onSize at their own default; do not overwrite the user's
-    // previous preference with that initial host notification.
+    // A zoom requested in this editor is stored at once. Some hosts send an
+    // initial onSize at their own default: host resizes count only once the
+    // editor has settled (the user dragging the host's frame), saved when
+    // they stop.
     if(!resizeDragging_ && requestedZoomWidth_==rect.getWidth()) {
         requestedZoomWidth_=-1;
+        pendingSizeSave_=-1;
         winzoom::SaveWidth(storage::Root(),rect.getWidth(),kMinWidth,kMaxWidth);
+    } else if(!resizeDragging_ && window_ && GetTickCount64()>=sizeSettledAt_) {
+        // the host's frame resized us: remember it once the drag stops
+        pendingSizeSave_=rect.getWidth();
+        pendingSizeSaveAt_=GetTickCount64()+kSizeSaveDelayMs;
     }
     return kResultTrue;
+}
+void WindowsEditor::savePendingSize(bool now) {
+    if(pendingSizeSave_<0 || (!now && GetTickCount64()<pendingSizeSaveAt_)) return;
+    winzoom::SaveWidth(storage::Root(),pendingSizeSave_,kMinWidth,kMaxWidth);
+    pendingSizeSave_=-1;
 }
 win::WindowClass& WindowsEditor::windowClass() {
     static win::WindowClass c(L"OxoSynth2WindowsEditorView",&WindowsEditor::wndProc,CS_DBLCLKS);
@@ -357,6 +369,8 @@ void WindowsEditor::attachedToParent() {
                           reinterpret_cast<HWND>(systemWindow),nullptr,win::ModuleInstance(),this);
     if(!window_) {windowClass().Release();return;}
     for(size_t id=0;id<knownValues_.size();++id) knownValues_[id]=value(int(id));
+    sizeSettledAt_=GetTickCount64()+kSizeSettleMs;
+    pendingSizeSave_=-1;
     SetTimer(window_,1,50,nullptr);
     // Critical: Json() and loadedProgram() call EnsureScanned(), which
     // scans all banks synchronously. Never call them before a background
@@ -370,6 +384,7 @@ void WindowsEditor::attachedToParent() {
 }
 void WindowsEditor::removedFromParent() {
     updateCheck_.Cancel(); // no answer for a closed editor, no thread left behind
+    savePendingSize(true); // closed right after a host resize
     flash({});
     if(editName_) {DestroyWindow(editName_);editName_=nullptr;}
     if(window_) {KillTimer(window_,1);DestroyWindow(window_);window_=nullptr;windowClass().Release();}
@@ -2019,6 +2034,7 @@ void WindowsEditor::mouseUp() {
     if(resizeDragging_) {
         resizeDragging_=false;
         requestedZoomWidth_=-1;
+        pendingSizeSave_=-1;
         // Save just once on mouse-up rather than writing on every drag frame.
         winzoom::SaveWidth(storage::Root(),rect.getWidth(),kMinWidth,kMaxWidth);
         if(GetCapture()==window_)ReleaseCapture();
@@ -2288,6 +2304,7 @@ void WindowsEditor::showParameterMenu(int id,int x,int y) {
 }
 void WindowsEditor::tick() {
     sharedThemes().flush(false);
+    savePendingSize(false);
     if(flashUntil_ && GetTickCount64()>=flashUntil_) flash({});
     bool dirty=false;
     if(hooks_.patchSerial) {
