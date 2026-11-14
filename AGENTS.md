@@ -565,7 +565,9 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   LED lists (filter / arp type / range, LFO dst, voice mode); horizontal
   LEDs (sub oct, m.env dest), wave grids and every display step. Type /
   dst / range buttons: click = next, Shift-click = back. ctrl src /
-  assign = pop-up menus. Effect / delay / chorus type and the LFO shapes:
+  assign = pop-up menus (src: pitch bend, ch pressure + 4 sub-menus "CC
+  0–31".. of "#n:name" items; assign: none + Synth1's list in one column;
+  Windows: the same items as native popups, + check marks). Effect / delay / chorus type and the LFO shapes:
   a click opens a pick list under the display (`TypeMenu`, effect = 2 x 5
   grid, `SynthModel.typeMenu` = the open id; Windows: native popup);
   phaser level reads feedback %. First click acts in

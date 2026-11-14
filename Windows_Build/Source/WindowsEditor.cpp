@@ -385,17 +385,39 @@ void WindowsEditor::repaint() const {
 int WindowsEditor::value(int id) const {
     return hooks_.getValue ? int(hooks_.getValue(hooks_.ctx,id)) : 0;
 }
-std::wstring WindowsEditor::formatted(int id) const {
-    if(id==86 || id==88) {
-        const int v=value(id);
-        if((v>>8)==0xE0) return L"pitch bend";
-        if((v>>8)==0xD0) return L"ch pressure";
-        if((v>>8)==0xB0) return L"#"+std::to_wstring(v&0xFF)+L":cc";
-        return L"none";
+// SynthPanelView.ctrlSrcLabel: a MIDI ctrl source word as the mac shows it.
+static std::wstring ctrlSrcLabel(int v) {
+    switch(v>>8) {
+    case 0xB0: {
+        const int cc=v&0xFF;
+        const wchar_t* name=L"cc";
+        switch(cc) {
+        case 1:name=L"mod wheel";break; case 2:name=L"breath";break; case 4:name=L"foot";break;
+        case 5:name=L"porta time";break; case 7:name=L"volume";break; case 8:name=L"balance";break;
+        case 10:name=L"pan";break; case 11:name=L"expression";break; case 64:name=L"sustain";break;
+        case 65:name=L"portamento";break; case 66:name=L"sostenuto";break; case 67:name=L"soft";break;
+        case 71:name=L"resonance";break; case 72:name=L"release";break; case 73:name=L"attack";break;
+        case 74:name=L"cutoff";break; case 91:name=L"reverb";break; case 93:name=L"chorus";break;
+        default:break;
+        }
+        return L"#"+std::to_wstring(cc)+L":"+name;
     }
+    case 0xE0: return L"pitch bend";
+    case 0xD0: return L"ch pressure";
+    default: {
+        if(v<=0) return L"none";
+        wchar_t hex[16];
+        swprintf(hex,16,L"0x%04X",unsigned(v));
+        return hex;
+    }
+    }
+}
+std::wstring WindowsEditor::formatted(int id) const {
+    if(id==86 || id==88) return ctrlSrcLabel(value(id));
     if(id==87 || id==89) {
         const int v=value(id);
         if(v<0) return L"none";
+        if(v>=s2::kParamCount) return std::to_wstring(v);
         return toWide(hooks_.paramName ? hooks_.paramName(hooks_.ctx,v) : "");
     }
     if(!hooks_.formatValue) return std::to_wstring(value(id));
@@ -2210,40 +2232,37 @@ void WindowsEditor::updateArrived() {
 void WindowsEditor::showParameterMenu(int id,int x,int y) {
     HMENU menu=CreatePopupMenu();
     std::vector<int> values;
-    // Use a compact multi-column box of choices, rather than a single
-    // long menu that runs off screen. Native popup menus preserve reliable
-    // keyboard and mouse operation inside VST3 hosts.
-    auto add=[&](const std::wstring& name,int value) {
-        const int index=int(values.size());
-        const int command=2000+index;
-        values.push_back(value);
-        const bool source=(id==86 || id==88);
-        // The source grid contains the three special sources followed by
-        // eight columns of MIDI CC choices (16 per column).
-        const bool newColumn=source ? (index>=19 && (index-3)%16==0)
-                                    : id==78 ? index==5 // Synth1's 2 x 5
-                                    : (id==87 || id==89) && index>0 && index%12==0;
-        const UINT flags=MF_STRING | (newColumn ? MF_MENUBREAK : 0) |
-                         ((this->value(id)==value) ? MF_CHECKED : 0);
-        AppendMenuW(menu,flags,UINT_PTR(command),name.c_str());
+    const int current=value(id);
+    // Native popup menus (reliable keyboard and mouse operation inside VST3
+    // hosts) with the mac's items: SynthPanelView.ctrlSrc / ctrlAssign /
+    // TypeMenu. A check marks the current value (and its CC sub-menu).
+    auto add=[&](HMENU target,const std::wstring& name,int v,bool newColumn=false) {
+        const UINT flags=MF_STRING|(newColumn ? MF_MENUBREAK : 0)|(current==v ? MF_CHECKED : 0);
+        AppendMenuW(target,flags,UINT_PTR(2000+values.size()),name.c_str());
+        values.push_back(v);
     };
     if(id==42 || id==47 || id==64 || id==78 || id==82) { // type / LFO shape pick lists
         int low=0,high=9,def=0;
         if(hooks_.paramInfo)hooks_.paramInfo(hooks_.ctx,id,&low,&high,&def);
-        for(int v=low;v<=high;v++) {
-            add(toWide(hooks_.formatValue ? hooks_.formatValue(hooks_.ctx,id,v):""),v);
-        }
+        for(int v=low;v<=high;v++) // effect type: Synth1's 2 x 5
+            add(menu,toWide(hooks_.formatValue ? hooks_.formatValue(hooks_.ctx,id,v):""),v,id==78 && v-low==5);
     } else if(id==86 || id==88) {
-        add(L"None",0);add(L"Pitch bend",0xE000);add(L"Channel pressure",0xD000);
-        for(int cc=0;cc<128;cc++) add(L"CC "+std::to_wstring(cc),0xB000|cc);
+        add(menu,L"pitch bend",0xE000);add(menu,L"ch pressure",0xD000);
+        for(int base=0;base<128;base+=32) {
+            HMENU sub=CreatePopupMenu();
+            for(int cc=base;cc<base+32;cc++) add(sub,ctrlSrcLabel(0xB000|cc),0xB000|cc);
+            const bool inside=(current>>8)==0xB0 && (current&0xFF)>=base && (current&0xFF)<base+32;
+            const std::wstring title=L"CC "+std::to_wstring(base)+L"\u2013"+std::to_wstring(base+31);
+            AppendMenuW(menu,MF_POPUP|(inside ? MF_CHECKED : 0),UINT_PTR(sub),title.c_str());
+        }
     } else if(id==87 || id==89) {
-        add(L"None",-1);
+        add(menu,L"none",-1);
         static const int assigns[]={76,45,95,2,12,13,11,5,8,91,15,16,17,18,19,20,21,23,22,25,26,27,28,29,
             79,80,81,61,62,63,60,90,35,36,37,83,98,52,53,54,55,56,39,75,92,84,85,34,43,44,48,49};
-        for(int item:assigns) add(toWide(hooks_.paramName?hooks_.paramName(hooks_.ctx,item):""),item);
+        for(int item:assigns) add(menu,toWide(hooks_.paramName?hooks_.paramName(hooks_.ctx,item):""),item);
     }
     int selected=int(TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,x,y,0,window_,nullptr));
-    DestroyMenu(menu);
+    DestroyMenu(menu); // and its sub-menus
     if(selected>=2000&&selected<2000+int(values.size()))setValueOnce(id,values[size_t(selected-2000)]);
 }
 void WindowsEditor::tick() {
