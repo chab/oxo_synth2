@@ -569,7 +569,8 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   0–31".. of "#n:name" items; assign: none + Synth1's list in one column;
   Windows: the same items as native popups, + check marks). Effect / delay / chorus type and the LFO shapes:
   a click opens a pick list under the display (`TypeMenu`, effect = 2 x 5
-  grid, `SynthModel.typeMenu` = the open id; Windows: native popup);
+  grid, LFO shapes Synth1's 2 x 3 (saw / tri / sine | square / S&H /
+  smooth, `lfoShapeOrder`), `SynthModel.typeMenu` = the open id; Windows: native popup);
   phaser level reads feedback %. First click acts in
   an unfocused window (`acceptsFirstMouse`).
 - INIT = `EngineCore/InitPatch.hpp` (`kInitPatchValues`, name INIT):

@@ -95,7 +95,8 @@ struct SynthPanelView: View {
                     .frame(width: Self.designSize.width, height: Self.designSize.height)
                     .onTapGesture { model.typeMenu = nil }
                 TypeMenu(model: model, id: id, rows: spot.rows, cell: spot.cell,
-                         icons: id == 42 || id == 47 ? Self.lfoShapes : nil)
+                         icons: id == 42 || id == 47 ? Self.lfoShapes : nil,
+                         order: id == 42 || id == 47 ? Self.lfoShapeOrder : nil)
                     .offset(x: spot.origin.x, y: spot.origin.y)
             }
             if let state = model.update {
@@ -109,6 +110,9 @@ struct SynthPanelView: View {
     }
 
     static let lfoShapes: [WaveIcon] = [.sawDown, .tri, .square, .sampleHold, .smooth, .sine]
+    /// Synth1's LFO shape grid, column by column: saw / tri / sine, then
+    /// square / S&H / smooth (values 0..5 = `lfoShapes`).
+    static let lfoShapeOrder = [0, 1, 5, 2, 3, 4]
 
     /// The type pick lists: canvas top-left = under their display's left
     /// edge (section origin + display centre - half width, centre y + 9).
@@ -116,8 +120,8 @@ struct SynthPanelView: View {
         78: (CGPoint(x: 548 + 66 - 23, y: 34 + 40 + 9), 5, CGSize(width: 46, height: 17)),
         82: (CGPoint(x: 548 + 48 - 14, y: 180 + 32 + 9), 3, CGSize(width: 28, height: 17)),
         64: (CGPoint(x: 548 + 48 - 14, y: 242 + 32 + 9), 3, CGSize(width: 28, height: 17)),
-        42: (CGPoint(x: 6 + 42 - 13, y: 278 + 30 + 9), 6, CGSize(width: 26, height: 17)),
-        47: (CGPoint(x: 6 + 270 - 13, y: 278 + 30 + 9), 6, CGSize(width: 26, height: 17)),
+        42: (CGPoint(x: 6 + 42 - 13, y: 278 + 30 + 9), 3, CGSize(width: 26, height: 17)),
+        47: (CGPoint(x: 6 + 270 - 13, y: 278 + 30 + 9), 3, CGSize(width: 26, height: 17)),
     ]
 
     private var canvas: some View {
@@ -553,9 +557,10 @@ extension View {
     }
 }
 
-/// Type pick list under its display (effect type: Synth1's 2 columns of 5;
-/// delay / chorus type and the LFO shapes: one column): a direct pick
-/// instead of cycling. Display colours; `icons` = wave icons for the values.
+/// Type pick list under its display (effect type: Synth1's 2 columns of 5,
+/// LFO shapes 2 of 3; delay / chorus type: one column): a direct pick
+/// instead of cycling. Display colours; `icons` = wave icons for the values,
+/// `order` = the values column by column (default: the range in order).
 /// Only offered values are listed (`SynthModel.offered`: chorus type 1 / 2
 /// / 4); a loaded unoffered value marks the item it plays as.
 struct TypeMenu: View {
@@ -564,12 +569,13 @@ struct TypeMenu: View {
     let rows: Int
     let cell: CGSize
     var icons: [WaveIcon]?
+    var order: [Int]?
     @Environment(\.theme) private var theme
     @State private var hovered: Int?
 
     var body: some View {
         let r = model.host.range(id)
-        let list = (r.min...r.max).filter { SynthModel.offered(id, $0) }
+        let list = order ?? (r.min...r.max).filter { SynthModel.offered(id, $0) }
         let current = model.stepped(id, from: model.values[id], by: 0)
         let columns = (list.count + rows - 1) / rows
         HStack(spacing: 0) {

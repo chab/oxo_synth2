@@ -2254,10 +2254,15 @@ void WindowsEditor::showParameterMenu(int id,int x,int y) {
         // offered values only (chorus type 1 / 2 / 4); a loaded 3 checks 2
         const int shown=s2::OfferedStep(id,current,0);
         const auto& info=s2::Info(id);
-        for(int v=info.min;v<=info.max;v++) {
+        // Synth1's grids, column by column: effect type 2 x 5, LFO shapes
+        // 2 x 3 (saw / tri / sine, square / S&H / smooth = SynthPanelView.lfoShapeOrder)
+        static constexpr int lfoOrder[]={0,1,5,2,3,4};
+        const bool lfo=id==42 || id==47;
+        for(int k=0;k<=info.max-info.min;k++) {
+            const int v=lfo ? lfoOrder[k] : info.min+k;
             if(!s2::Offered(id,v)) continue;
-            const UINT flags=MF_STRING|(id==78 && v-info.min==5 ? MF_MENUBREAK : 0)| // effect type: Synth1's 2 x 5
-                             (shown==v ? MF_CHECKED : 0);
+            const bool newColumn=(id==78 && k==5) || (lfo && k==3);
+            const UINT flags=MF_STRING|(newColumn ? MF_MENUBREAK : 0)|(shown==v ? MF_CHECKED : 0);
             AppendMenuW(menu,flags,UINT_PTR(2000+values.size()),
                         toWide(hooks_.formatValue ? hooks_.formatValue(hooks_.ctx,id,v):"").c_str());
             values.push_back(v);
