@@ -102,13 +102,14 @@ private struct Learnable: ViewModifier {
 extension View {
     func learnable(_ model: SynthModel, _ id: Int) -> some View { modifier(Learnable(model: model, id: id)) }
 
-    /// Wheel over a stepped control (displays, radios): 33 pt per step.
-    func displayWheel(_ model: SynthModel, _ id: Int, remainder: Binding<Double>) -> some View {
+    /// Wheel over a stepped control (displays, radios): 33 pt per step, up =
+    /// value up. `enabled` false = the wheel passes through (vertical LEDs).
+    func displayWheel(_ model: SynthModel, _ id: Int, remainder: Binding<Double>, enabled: Bool = true) -> some View {
         #if os(macOS)
         return onMouseWheel { event in
-            guard !model.showBrowser, !model.learnActive else { return false }
+            guard enabled, !model.showBrowser, !model.learnActive else { return false }
             var r = remainder.wrappedValue
-            let steps = WheelFeel.displaySteps(deltaY: Double(event.scrollingDeltaY), remainder: &r)
+            let steps = WheelFeel.displaySteps(deltaY: Double(event.deviceDeltaY), remainder: &r)
             remainder.wrappedValue = r
             model.wheel(id, steps: steps)
             return true
@@ -194,7 +195,7 @@ struct KnobView: View {
             #if os(macOS)
             .onMouseWheel { event in
                 guard !model.showBrowser, !model.learnActive else { return false }
-                let steps = WheelFeel.knobSteps(deltaY: Double(event.scrollingDeltaY), span: r.max - r.min,
+                let steps = WheelFeel.knobSteps(deltaY: Double(event.deviceDeltaY), span: r.max - r.min,
                                                 shift: event.modifierFlags.contains(.shift), remainder: &wheelRemainder)
                 model.wheel(id, steps: steps)
                 return true
@@ -340,7 +341,9 @@ struct LedRadio: View {
                 .onTapGesture { model.setOnce(id, option.value) }
             }
         }
-        .displayWheel(model, id, remainder: $wheelRemainder)
+        // a vertical list ignores the wheel (it read as moving the LED the
+        // wrong way); a horizontal pair / trio steps like a display
+        .displayWheel(model, id, remainder: $wheelRemainder, enabled: horizontal)
         .learnable(model, id)
     }
 
@@ -458,18 +461,21 @@ struct WaveRadio: View {
     }
 }
 
-/// One button showing the current wave, click steps to the next (LFO wave).
-struct WaveCycle: View {
+/// One button showing the current wave (LFO shape): a click opens its pick
+/// list (`TypeMenu`), the wheel steps.
+struct WaveDisplay: View {
     @ObservedObject var model: SynthModel
     let id: Int
     let icons: [WaveIcon] // index = value - min
+    @State private var wheelRemainder: Double = 0
 
     var body: some View {
         let r = model.host.range(id)
         let i = min(max(model.values[id] - r.min, 0), icons.count - 1)
         WaveCell(icon: icons[i], on: true, width: 26, height: 17)
             .contentShape(Rectangle())
-            .onTapGesture { model.cycle(id, shiftHeld() ? -1 : 1) }
+            .onTapGesture { model.typeMenu = id }
+            .displayWheel(model, id, remainder: $wheelRemainder)
             .learnable(model, id)
     }
 }

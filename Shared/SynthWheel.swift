@@ -105,6 +105,13 @@ extension View {
     }
 }
 
+extension NSEvent {
+    /// The vertical wheel delta in the DEVICE's direction: value wheels
+    /// ignore natural scrolling (wheel away / fingers up = positive = value
+    /// up, Live's rule); scrolled lists keep `scrollingDeltaY`.
+    var deviceDeltaY: CGFloat { isDirectionInvertedFromDevice ? -scrollingDeltaY : scrollingDeltaY }
+}
+
 /// Scroll dead zone: a gesture moves nothing until it has travelled
 /// `threshold` points (the browser's lists scrolled at the slightest touch).
 /// A gesture = trackpad phases began..momentum end; for a plain wheel, a run

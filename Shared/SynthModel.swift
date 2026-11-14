@@ -166,8 +166,9 @@ final class SynthModel: ObservableObject {
     @Published private(set) var themeRevision = 0
     /// The "Synth2" logo's menu (UI sizes + themes), mac VST3 / AUv2 only.
     @Published var showLogoMenu = false
-    /// Effect type pick list (a click on its display; Synth1's 2 x 5 menu).
-    @Published var showEffectMenu = false
+    /// The open type pick list (a click on its display): the parameter id,
+    /// effect / delay / chorus type or an LFO shape (`TypeMenu`).
+    @Published var typeMenu: Int?
     /// Menu > Program change (checkmark): MIDI program changes played.
     @Published var programChange = false {
         didSet {
@@ -515,15 +516,15 @@ final class SynthModel: ObservableObject {
     /// arrows move through the browsed bank's grid and load at once (up /
     /// down = previous / next patch like ◀ ▶, left / right = the neighbouring
     /// column, nearest non-empty slot), Return / Enter / Esc close. Esc also
-    /// closes the logo / effect type menus. False = not ours: the host keeps the key.
+    /// closes the logo / type menus. False = not ours: the host keeps the key.
     func browserKey(_ key: BrowserKey) -> Bool {
         if update != nil, key == .escape || key == .confirm {
             update = nil
             return true
         }
-        if showLogoMenu || showEffectMenu, key == .escape {
+        if showLogoMenu || typeMenu != nil, key == .escape {
             showLogoMenu = false
-            showEffectMenu = false
+            typeMenu = nil
             return true
         }
         guard showBrowser else { return false }

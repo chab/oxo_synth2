@@ -1951,7 +1951,7 @@ void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
         switch(c.kind) {
         case Kind::Knob:
         case Kind::Display:
-            if(c.kind==Kind::Display && (c.id==78 || c.id==86 || c.id==87 || c.id==88 || c.id==89)) {
+            if(c.kind==Kind::Display && (c.id==64 || c.id==78 || c.id==82 || (c.id>=86 && c.id<=89))) {
                 POINT screen;GetCursorPos(&screen);
                 showParameterMenu(c.id,screen.x,screen.y);return;
             }
@@ -1962,8 +1962,10 @@ void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
         case Kind::Badge: setValueOnce(c.id,value(c.id)?0:1);return;
         case Kind::Cycle: cycle(c.id,1);return;
         case Kind::Wave:
-            if(c.id==42 || c.id==47) cycle(c.id,1);
-            else setValueOnce(c.id,c.value);
+            if(c.id==42 || c.id==47) {
+                POINT screen;GetCursorPos(&screen);
+                showParameterMenu(c.id,screen.x,screen.y);
+            } else setValueOnce(c.id,c.value);
             return;
         case Kind::Radio: setValueOnce(c.id,c.value);return;
         default:return;
@@ -2033,71 +2035,16 @@ void WindowsEditor::wheel(int direction,float x,float y) {
         if(c.kind==Kind::Toggle || c.kind==Kind::Cycle ||
            c.kind==Kind::Badge || c.kind==Kind::Label) return;
 
+        // The MIDI source / assign menus and the vertical LED lists ignore
+        // the wheel; everything else steps by one, up = value up, clamped.
+        if(c.kind==Kind::Display && c.id>=86 && c.id<=89) return;
+        if(c.kind==Kind::Radio && c.id!=71 && c.id!=97) return;
         const int id=c.id;
         const int current=value(id);
-        const int listStep=direction>0?-1:1; // Down = next item as displayed in menus.
-        const int numericStep=direction>0?1:-1; // Up = increase on continuous values.
-
-        if(c.kind==Kind::Radio || c.kind==Kind::Wave) {
-            // LED groups and waveform selectors intentionally wrap around.
-            cycle(id,listStep);
-            return;
-        }
-
-        if(c.kind==Kind::Knob) {
-            // Knobs stop at their end points rather than wrapping to the other end.
-            int low=0,high=127,def=0;
-            if(hooks_.paramInfo) hooks_.paramInfo(hooks_.ctx,id,&low,&high,&def);
-            const int next=std::clamp(current+numericStep,low,high);
-            if(next!=current) setValueOnce(id,next);
-            return;
-        }
-
-        if(c.kind==Kind::Display) {
-            if(id==86 || id==88) {
-                // MIDI source display order is: None, Pitch Bend, Channel
-                // Pressure, CC0 ... CC127. Packed MIDI values are not consecutive.
-                int index=-1;
-                if(current==0 || current==-1) index=0;
-                else if(current==0xE000) index=1;
-                else if(current==0xD000) index=2;
-                else if((current&0xFF80)==0xB000) index=3+(current&0x7F);
-                if(index<0) return; // Preserve an unknown legacy source value.
-                const int next=std::clamp(index+listStep,0,130);
-                if(next==index) return;
-                const int v=next==0?0:next==1?0xE000:next==2?0xD000:0xB000|(next-3);
-                setValueOnce(id,v);
-                return;
-            }
-            if(id==87 || id==89) {
-                // Keep this order identical to the popup in showParameterMenu.
-                static constexpr int assignments[]={
-                    -1,76,45,95,2,12,13,11,5,8,91,15,16,17,18,19,20,21,23,22,
-                    25,26,27,28,29,79,80,81,61,62,63,60,90,35,36,37,83,98,
-                    52,53,54,55,56,39,75,92,84,85,34,43,44,48,49
-                };
-                constexpr int count=int(sizeof(assignments)/sizeof(assignments[0]));
-                int index=-1;
-                for(int k=0;k<count;k++) {
-                    if(assignments[k]==current) {index=k;break;}
-                }
-                if(index<0) return; // Preserve an unlisted existing assignment.
-                const int next=std::clamp(index+listStep,0,count-1);
-                if(next!=index) setValueOnce(id,assignments[next]);
-                return;
-            }
-            if(id==64 || id==78 || id==82) {
-                // Chorus, Effect and Delay type displays advance down their lists.
-                cycle(id,listStep);
-                return;
-            }
-            // Numeric displays (pitch, key shift, polyphony, etc.) do not wrap.
-            int low=0,high=127,def=0;
-            if(hooks_.paramInfo) hooks_.paramInfo(hooks_.ctx,id,&low,&high,&def);
-            const int next=std::clamp(current+numericStep,low,high);
-            if(next!=current) setValueOnce(id,next);
-            return;
-        }
+        int low=0,high=127,def=0;
+        if(hooks_.paramInfo) hooks_.paramInfo(hooks_.ctx,id,&low,&high,&def);
+        const int next=std::clamp(current+(direction>0?1:-1),low,high);
+        if(next!=current) setValueOnce(id,next);
         return;
     }
 }
@@ -2274,12 +2221,13 @@ void WindowsEditor::showParameterMenu(int id,int x,int y) {
         // The source grid contains the three special sources followed by
         // eight columns of MIDI CC choices (16 per column).
         const bool newColumn=source ? (index>=19 && (index-3)%16==0)
+                                    : id==78 ? index==5 // Synth1's 2 x 5
                                     : (id==87 || id==89) && index>0 && index%12==0;
         const UINT flags=MF_STRING | (newColumn ? MF_MENUBREAK : 0) |
                          ((this->value(id)==value) ? MF_CHECKED : 0);
         AppendMenuW(menu,flags,UINT_PTR(command),name.c_str());
     };
-    if(id==78) {
+    if(id==42 || id==47 || id==64 || id==78 || id==82) { // type / LFO shape pick lists
         int low=0,high=9,def=0;
         if(hooks_.paramInfo)hooks_.paramInfo(hooks_.ctx,id,&low,&high,&def);
         for(int v=low;v<=high;v++) {

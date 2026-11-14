@@ -558,9 +558,17 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   / EQ / Delay / Chorus / Voice right). Knobs: vertical drag (Shift fine),
   double-click = INIT value, wheel (full range = 1440 pt, Shift 6x finer;
   displays / radios 33 pt per step; one host gesture per burst, ends after
-  0.4 s idle). Type / dst / range buttons: click = next, Shift-click =
-  back. ctrl src / assign = pop-up menus. Effect type = in-panel 2 x 5 grid
-  (`EffectTypeMenu`); phaser level reads feedback %. First click acts in
+  0.4 s idle). WHEEL RULES (mac + Windows; the iPad has no wheel): up =
+  value up, clamped, in the DEVICE's direction (mac `deviceDeltaY`:
+  natural scrolling ignored, browser lists keep it); ignored on toggles,
+  type / dst / range buttons, the ctrl src / assign menus and the VERTICAL
+  LED lists (filter / arp type / range, LFO dst, voice mode); horizontal
+  LEDs (sub oct, m.env dest), wave grids and every display step. Type /
+  dst / range buttons: click = next, Shift-click = back. ctrl src /
+  assign = pop-up menus. Effect / delay / chorus type and the LFO shapes:
+  a click opens a pick list under the display (`TypeMenu`, effect = 2 x 5
+  grid, `SynthModel.typeMenu` = the open id; Windows: native popup);
+  phaser level reads feedback %. First click acts in
   an unfocused window (`acceptsFirstMouse`).
 - INIT = `EngineCore/InitPatch.hpp` (`kInitPatchValues`, name INIT):
   Initialize patch and the double-click value. Params.hpp defaults stay the
