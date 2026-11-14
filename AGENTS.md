@@ -574,7 +574,9 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   Windows: the same items as native popups, + check marks). Effect / delay / chorus type and the LFO shapes:
   a click opens a pick list under the display (`TypeMenu`, effect = 2 x 5
   grid, LFO shapes Synth1's 2 x 3 (saw / tri / sine | square / S&H /
-  smooth, `lfoShapeOrder`), `SynthModel.typeMenu` = the open id; Windows: native popup);
+  smooth, `lfoShapeOrder`), `SynthModel.typeMenu` = the open id; Windows: the same in-panel
+  list drawn in GDI+, `WindowsEditor::typeMenu_` / `drawTypeMenu`, wave
+  icons through `drawWaveShape`, theme display colours);
   phaser level reads feedback %. First click acts in
   an unfocused window (`acceptsFirstMouse`).
 - INIT = `EngineCore/InitPatch.hpp` (`kInitPatchValues`, name INIT):

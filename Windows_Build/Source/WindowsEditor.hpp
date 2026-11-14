@@ -77,6 +77,22 @@ private:
     void drawControlStatic(Gdiplus::Graphics& g, const Control& c);
     void drawControlDynamic(Gdiplus::Graphics& g, const Control& c, bool hovered);
     void drawWave(Gdiplus::Graphics& g, const Control& c);
+    // The in-panel type pick list (SynthPanelView's TypeMenu): effect /
+    // delay / chorus type, LFO shapes; typeMenu_ = its parameter, -1 = closed.
+    struct TypeMenu {
+        float x = 0, y = 0, cellW = 0, cellH = 17;
+        int rows = 1, columns = 0;
+        std::vector<int> values; // column by column
+        Gdiplus::RectF rect() const { return Gdiplus::RectF(x, y, cellW * float(columns), cellH * float(rows)); }
+    };
+    int typeMenu_ = -1;
+    int typeMenuHover_ = -1; // the value under the mouse
+    TypeMenu typeMenu() const;
+    int typeMenuHit(float x, float y) const;
+    void openTypeMenu(int id);
+    void closeTypeMenu();
+    void invalidateTypeMenu() const;
+    void drawTypeMenu(Gdiplus::Graphics& g);
     void drawChrome(Gdiplus::Graphics& g, int id, bool hovered);
     void drawBrowser(Gdiplus::Graphics& g);
     void paint(HDC screen, const RECT& dirty);

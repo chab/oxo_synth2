@@ -384,6 +384,7 @@ void WindowsEditor::attachedToParent() {
 }
 void WindowsEditor::removedFromParent() {
     updateCheck_.Cancel(); // no answer for a closed editor, no thread left behind
+    typeMenu_=typeMenuHover_=-1;
     savePendingSize(true); // closed right after a host resize
     flash({});
     if(editName_) {DestroyWindow(editName_);editName_=nullptr;}
@@ -718,6 +719,7 @@ void WindowsEditor::invalidateParam(int id) const {
 void WindowsEditor::valueChanged(int id) {
     if(id>=0 && id<int(knownValues_.size())) knownValues_[size_t(id)]=value(id);
     invalidateParam(id);
+    if(id==typeMenu_) invalidateTypeMenu();
 }
 // Hover is visual only: redraw the old and the new target, nothing else.
 void WindowsEditor::hoverChanged(int control,int chrome) {
@@ -951,31 +953,9 @@ void WindowsEditor::drawControlDynamic(Graphics& g,const Control& c,bool hovered
     }
 }
 
-void WindowsEditor::drawWave(Graphics& g,const Control& c) {
-    const auto& p=colors_;
-    const bool on=(value(c.id)==c.value) || (c.id==42||c.id==47);
-    // Original WaveCell: FLAT fill (no gradient), 2 px corner radius.
-    const Color waveFace=on?p[kDisplayText]:p[kButton];
-    // Original WaveCell glows only while selected. Three thin, low-alpha
-    // rings add a soft 2px aura without changing button dimensions.
-    if(on) {
-        const BYTE r=waveFace.GetR(),green=waveFace.GetG(),b=waveFace.GetB();
-        roundedOutline(g,Color(20,r,green,b),c.x-2.5f,c.y-2.5f,c.w+5.f,c.h+5.f,4.5f,1.5f);
-        roundedOutline(g,Color(35,r,green,b),c.x-1.5f,c.y-1.5f,c.w+3.f,c.h+3.f,3.5f,1.2f);
-        roundedOutline(g,Color(55,r,green,b),c.x-.5f,c.y-.5f,c.w+1.f,c.h+1.f,2.5f,1.f);
-    }
-    roundedFill(g,waveFace,c.x,c.y,c.w,c.h,2.f);
-    roundedOutline(g,Color(170,0,0,0),c.x,c.y,c.w,c.h,2.f);
-    // Slightly stronger strokes, while preserving the original shape paths.
-    Pen pen(on ? rgb(0x101719) : rgb(0xDDDDDD),1.7f);
-    pen.SetStartCap(LineCapRound);pen.SetEndCap(LineCapRound);
-    pen.SetLineJoin(LineJoinRound);
-    const float x=c.x+4,y=c.y+3.5f,w=c.w-8,h=c.h-7;
-    int shape=c.symbol;
-    if(c.id==42 || c.id==47) {
-        constexpr int cycleShapes[]={6,3,5,7,8,0};
-        shape=cycleShapes[std::clamp(value(c.id),0,5)];
-    }
+// WaveIcon.path: one shape stroked into (x, y, w, h). Shapes: 0 sine, 1 / 6
+// (falling) saw, 2 pulse, 5 square, 3 triangle, 4 noise, 7 S&H, 8 smooth.
+static void drawWaveShape(Graphics& g,Pen& pen,int shape,float x,float y,float w,float h) {
     switch(shape) {
         case 0: { // sine
             PointF pts[25];
@@ -1024,6 +1004,121 @@ void WindowsEditor::drawWave(Graphics& g,const Control& c) {
         }
         default:break;
     }
+}
+void WindowsEditor::drawWave(Graphics& g,const Control& c) {
+    const auto& p=colors_;
+    const bool on=(value(c.id)==c.value) || (c.id==42||c.id==47);
+    // Original WaveCell: FLAT fill (no gradient), 2 px corner radius.
+    const Color waveFace=on?p[kDisplayText]:p[kButton];
+    // Original WaveCell glows only while selected. Three thin, low-alpha
+    // rings add a soft 2px aura without changing button dimensions.
+    if(on) {
+        const BYTE r=waveFace.GetR(),green=waveFace.GetG(),b=waveFace.GetB();
+        roundedOutline(g,Color(20,r,green,b),c.x-2.5f,c.y-2.5f,c.w+5.f,c.h+5.f,4.5f,1.5f);
+        roundedOutline(g,Color(35,r,green,b),c.x-1.5f,c.y-1.5f,c.w+3.f,c.h+3.f,3.5f,1.2f);
+        roundedOutline(g,Color(55,r,green,b),c.x-.5f,c.y-.5f,c.w+1.f,c.h+1.f,2.5f,1.f);
+    }
+    roundedFill(g,waveFace,c.x,c.y,c.w,c.h,2.f);
+    roundedOutline(g,Color(170,0,0,0),c.x,c.y,c.w,c.h,2.f);
+    // Slightly stronger strokes, while preserving the original shape paths.
+    Pen pen(on ? rgb(0x101719) : rgb(0xDDDDDD),1.7f);
+    pen.SetStartCap(LineCapRound);pen.SetEndCap(LineCapRound);
+    pen.SetLineJoin(LineJoinRound);
+    const float x=c.x+4,y=c.y+3.5f,w=c.w-8,h=c.h-7;
+    int shape=c.symbol;
+    if(c.id==42 || c.id==47) {
+        constexpr int cycleShapes[]={6,3,5,7,8,0};
+        shape=cycleShapes[std::clamp(value(c.id),0,5)];
+    }
+    drawWaveShape(g,pen,shape,x,y,w,h);
+}
+
+// Type pick lists (SynthPanelView's TypeMenu): under the display / wave
+// button, cells of its width x 17, display colours, Synth1's grids
+// (effect type 2 x 5, LFO shapes 2 x 3; delay / chorus type one column),
+// offered values only (chorus type 1 / 2 / 4).
+static constexpr int kLfoShapeOrder[]={0,1,5,2,3,4}; // SynthPanelView.lfoShapeOrder
+static constexpr int kLfoShapeIcon[]={6,3,5,7,8,0};  // value -> drawWaveShape's shape
+WindowsEditor::TypeMenu WindowsEditor::typeMenu() const {
+    TypeMenu m;
+    if(typeMenu_<0) return m;
+    const auto c=std::find_if(controls_.begin(),controls_.end(),[&](const Control& k) {
+        return k.id==typeMenu_ && (k.kind==Kind::Display || k.kind==Kind::Wave);
+    });
+    if(c==controls_.end()) return m;
+    const bool lfo=typeMenu_==42 || typeMenu_==47;
+    const auto& info=s2::Info(typeMenu_);
+    for(int k=0;k<=info.max-info.min;k++) {
+        const int v=lfo ? kLfoShapeOrder[k] : info.min+k;
+        if(s2::Offered(typeMenu_,v)) m.values.push_back(v);
+    }
+    m.rows=typeMenu_==78 ? 5 : 3;
+    m.columns=(int(m.values.size())+m.rows-1)/m.rows;
+    m.cellW=c->w;
+    m.x=c->x;m.y=c->y+c->h+.5f;
+    return m;
+}
+int WindowsEditor::typeMenuHit(float x,float y) const {
+    const TypeMenu m=typeMenu();
+    if(m.values.empty() || x<m.x || y<m.y) return -1;
+    const int column=int((x-m.x)/m.cellW), row=int((y-m.y)/m.cellH);
+    const size_t k=size_t(column*m.rows+row);
+    return column<m.columns && row<m.rows && k<m.values.size() ? m.values[k] : -1;
+}
+void WindowsEditor::invalidateTypeMenu() const {
+    const TypeMenu m=typeMenu();
+    if(m.values.empty()) return;
+    const RectF r=m.rect();
+    invalidate(RectF(r.X-8.f,r.Y-6.f,r.Width+16.f,r.Height+16.f)); // + the shadow
+}
+void WindowsEditor::openTypeMenu(int id) {
+    closeTypeMenu();
+    typeMenu_=id;
+    typeMenuHover_=-1;
+    hoverChanged(-1,0);
+    invalidateTypeMenu();
+}
+void WindowsEditor::closeTypeMenu() {
+    if(typeMenu_<0) return;
+    invalidateTypeMenu();
+    typeMenu_=typeMenuHover_=-1;
+}
+void WindowsEditor::drawTypeMenu(Graphics& g) {
+    const TypeMenu m=typeMenu();
+    if(m.values.empty()) return;
+    const RectF r=m.rect();
+    if(!visible(RectF(r.X-8.f,r.Y-6.f,r.Width+16.f,r.Height+16.f))) return;
+    const auto& p=colors_;
+    // the mac's shadow (black 50 %, radius 6, 3 down): stacked soft rings
+    for(int i=6;i>=1;--i) {
+        SolidBrush shade(Color(BYTE(10),0,0,0));
+        g.FillRectangle(&shade,r.X-float(i),r.Y+3.f-float(i),r.Width+2.f*float(i),r.Height+2.f*float(i));
+    }
+    LinearGradientBrush face(PointF(r.X,r.Y),PointF(r.X,r.Y+r.Height),p[kDisplayTop],p[kDisplayBottom]);
+    g.FillRectangle(&face,r);
+    const Color ink=p[kDisplayText];
+    const int shown=s2::OfferedStep(typeMenu_,value(typeMenu_),0); // a loaded chorus 3 marks x2
+    const bool lfo=typeMenu_==42 || typeMenu_==47;
+    Pen cell(Color(89,0,0,0),.5f);
+    for(size_t k=0;k<m.values.size();++k) {
+        const int v=m.values[k];
+        const float x=m.x+float(int(k)/m.rows)*m.cellW, y=m.y+float(int(k)%m.rows)*m.cellH;
+        const bool on=v==shown;
+        if(on) fill(g,ink,x,y,m.cellW,m.cellH);
+        else if(v==typeMenuHover_) fill(g,Color(51,ink.GetR(),ink.GetG(),ink.GetB()),x,y,m.cellW,m.cellH);
+        const Color itemInk=on ? p[kDisplayBottom] : ink;
+        if(lfo) {
+            Pen pen(itemInk,1.5f);
+            pen.SetStartCap(LineCapRound);pen.SetEndCap(LineCapRound);pen.SetLineJoin(LineJoinRound);
+            drawWaveShape(g,pen,kLfoShapeIcon[std::clamp(v,0,5)],x+5.f,y+4.f,m.cellW-10.f,m.cellH-8.f);
+        } else {
+            text(g,toWide(hooks_.formatValue ? hooks_.formatValue(hooks_.ctx,typeMenu_,v) : ""),
+                 x,y,m.cellW,m.cellH,11,itemInk,true,true,true);
+        }
+        g.DrawRectangle(&cell,x+.25f,y+.25f,m.cellW-.5f,m.cellH-.5f);
+    }
+    Pen border(Color(179,0,0,0),1.f);
+    g.DrawRectangle(&border,r.X+.5f,r.Y+.5f,r.Width-1.f,r.Height-1.f);
 }
 
 void WindowsEditor::drawStatic(Graphics& g) {
@@ -1147,6 +1242,7 @@ void WindowsEditor::drawDynamic(Graphics& g) {
         text(g,L"Select a control, then move a MIDI CC",548,518,206,20,9,p[kLabel],true,true);
     }
     if(browser_ && visible(kBrowserRect)) drawBrowser(g);
+    drawTypeMenu(g);
     if(press_.active && press_.dragging && visible(dragLabelRect())) {
         // slotDraggable's preview: the label on the display colour
         const RectF r=dragLabelRect();
@@ -1643,7 +1739,8 @@ void WindowsEditor::commitWrite() {
 bool WindowsEditor::keyDown(UINT key) {
     if((GetKeyState(VK_CONTROL)|GetKeyState(VK_MENU)|GetKeyState(VK_LWIN)|GetKeyState(VK_RWIN))&0x8000) return false;
     if(key==VK_ESCAPE) {
-        if(press_.active) dragEnd(false);
+        if(typeMenu_>=0) closeTypeMenu();
+        else if(press_.active) dragEnd(false);
         else if(browser_) closeBrowser();
         else if(midiLearn_) setLearn(false);
         else return false;
@@ -1877,6 +1974,12 @@ HCURSOR WindowsEditor::dragCursor() {
 // Hover uses the same design-space hit rectangles as clicks. It only
 // invalidates the window when the hovered target changes; idle redraws remain off.
 void WindowsEditor::updateHover(float x,float y) {
+    if(typeMenu_>=0) { // the open pick list covers the panel (the mac's overlay)
+        const int v=typeMenuHit(x,y);
+        if(v!=typeMenuHover_) {typeMenuHover_=v;invalidateTypeMenu();}
+        hoverChanged(-1,0);
+        return;
+    }
     int nextControl=-1;
     int nextChrome=0;
     // The browser covers only the central panel. Keep the chrome underneath
@@ -1918,6 +2021,12 @@ void WindowsEditor::updateHover(float x,float y) {
 }
 
 void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
+    if(typeMenu_>=0) { // a pick, or a click anywhere else closes it
+        const int id=typeMenu_, v=typeMenuHit(x,y);
+        closeTypeMenu();
+        if(v>=0) {setValueOnce(id,v);show(id);}
+        return;
+    }
     if(x>=kDesignWidth-22.f && y>=kDesignHeight-22.f && !doubleClick) {
         if(!plugFrame)return;
         GetCursorPos(&resizeStartScreen_);
@@ -1988,7 +2097,8 @@ void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
         switch(c.kind) {
         case Kind::Knob:
         case Kind::Display:
-            if(c.kind==Kind::Display && (c.id==64 || c.id==78 || c.id==82 || (c.id>=86 && c.id<=89))) {
+            if(c.kind==Kind::Display && (c.id==64 || c.id==78 || c.id==82)) {openTypeMenu(c.id);return;}
+            if(c.kind==Kind::Display && c.id>=86 && c.id<=89) {
                 POINT screen;GetCursorPos(&screen);
                 showParameterMenu(c.id,screen.x,screen.y);return;
             }
@@ -1999,10 +2109,8 @@ void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
         case Kind::Badge: setValueOnce(c.id,value(c.id)?0:1);return;
         case Kind::Cycle: cycle(c.id,1);return;
         case Kind::Wave:
-            if(c.id==42 || c.id==47) {
-                POINT screen;GetCursorPos(&screen);
-                showParameterMenu(c.id,screen.x,screen.y);
-            } else setValueOnce(c.id,c.value);
+            if(c.id==42 || c.id==47) openTypeMenu(c.id);
+            else setValueOnce(c.id,c.value);
             return;
         case Kind::Radio: setValueOnce(c.id,c.value);return;
         default:return;
@@ -2064,6 +2172,7 @@ void WindowsEditor::wheel(int direction,float x,float y) {
         return;
     }
     if(direction==0 || midiLearn_) return;
+    if(typeMenu_>=0 && typeMenu().rect().Contains(x,y)) return; // the mac's WheelShield
     for(auto it=controls_.rbegin();it!=controls_.rend();++it) {
         const auto& c=*it;
         if(c.id<0 || x<c.x || x>c.x+c.w || y<c.y || y>c.y+c.h) continue;
@@ -2258,32 +2367,16 @@ void WindowsEditor::showParameterMenu(int id,int x,int y) {
     HMENU menu=CreatePopupMenu();
     std::vector<int> values;
     const int current=value(id);
-    // Native popup menus (reliable keyboard and mouse operation inside VST3
-    // hosts) with the mac's items: SynthPanelView.ctrlSrc / ctrlAssign /
-    // TypeMenu. A check marks the current value (and its CC sub-menu).
-    auto add=[&](HMENU target,const std::wstring& name,int v,bool newColumn=false) {
-        const UINT flags=MF_STRING|(newColumn ? MF_MENUBREAK : 0)|(current==v ? MF_CHECKED : 0);
+    // MIDI ctrl source / assign: native popup menus (reliable keyboard and
+    // mouse operation inside VST3 hosts) with the mac's items
+    // (SynthPanelView.ctrlSrc / ctrlAssign). A check marks the current value
+    // (and its CC sub-menu).
+    auto add=[&](HMENU target,const std::wstring& name,int v) {
+        const UINT flags=MF_STRING|(current==v ? MF_CHECKED : 0);
         AppendMenuW(target,flags,UINT_PTR(2000+values.size()),name.c_str());
         values.push_back(v);
     };
-    if(id==42 || id==47 || id==64 || id==78 || id==82) { // type / LFO shape pick lists
-        // offered values only (chorus type 1 / 2 / 4); a loaded 3 checks 2
-        const int shown=s2::OfferedStep(id,current,0);
-        const auto& info=s2::Info(id);
-        // Synth1's grids, column by column: effect type 2 x 5, LFO shapes
-        // 2 x 3 (saw / tri / sine, square / S&H / smooth = SynthPanelView.lfoShapeOrder)
-        static constexpr int lfoOrder[]={0,1,5,2,3,4};
-        const bool lfo=id==42 || id==47;
-        for(int k=0;k<=info.max-info.min;k++) {
-            const int v=lfo ? lfoOrder[k] : info.min+k;
-            if(!s2::Offered(id,v)) continue;
-            const bool newColumn=(id==78 && k==5) || (lfo && k==3);
-            const UINT flags=MF_STRING|(newColumn ? MF_MENUBREAK : 0)|(shown==v ? MF_CHECKED : 0);
-            AppendMenuW(menu,flags,UINT_PTR(2000+values.size()),
-                        toWide(hooks_.formatValue ? hooks_.formatValue(hooks_.ctx,id,v):"").c_str());
-            values.push_back(v);
-        }
-    } else if(id==86 || id==88) {
+    if(id==86 || id==88) {
         add(menu,L"pitch bend",0xE000);add(menu,L"ch pressure",0xD000);
         for(int base=0;base<128;base+=32) {
             HMENU sub=CreatePopupMenu();
@@ -2474,6 +2567,7 @@ LRESULT WindowsEditor::windowMessage(UINT msg,WPARAM wp,LPARAM lp) {
     case WM_MOUSELEAVE:
         trackingMouseLeave_=false;
         hoverChanged(-1,0);
+        if(typeMenuHover_>=0) {typeMenuHover_=-1;invalidateTypeMenu();}
         return 0;
     case WM_LBUTTONUP:mouseUp();return 0;
     case WM_CAPTURECHANGED: // lost the capture (another window, a menu): a drag is cancelled
@@ -2497,6 +2591,7 @@ LRESULT WindowsEditor::windowMessage(UINT msg,WPARAM wp,LPARAM lp) {
         return DefWindowProcW(window_,msg,wp,lp);
     case kFieldKeyMessage:keyDown(UINT(wp));return 0;
     case WM_CONTEXTMENU: {
+        if(typeMenu_>=0) {closeTypeMenu();return 0;} // like a click outside it
         POINT p{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};
         if(p.x!=-1 || p.y!=-1) { // -1, -1 = from the keyboard
             POINT client=p;ScreenToClient(window_,&client);
