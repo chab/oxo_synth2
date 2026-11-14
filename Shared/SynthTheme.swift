@@ -130,6 +130,21 @@ struct ThemePalette: Equatable {
             "knobBody": "#171717", "knobGradient": "#212121", "knobDial": "#FF2D2D", "button": "#363630",
             "led": "#5CF266", "radio": "#FF331A", "displayText": "#73F2FF", "displayTop": "#123D40",
             "displayBottom": "#05171A"])),
+        ("Artvera - Blues", ThemePalette(hexMap: [
+            "panel": "#0D415F", "header": "#A0A0A0", "headerText": "#112E40", "label": "#B7D8EC",
+            "knobBody": "#112E40", "knobGradient": "#112E40", "knobDial": "#FEA307", "button": "#0B3046",
+            "led": "#5CF266", "radio": "#FEA307", "displayText": "#FEA307", "displayTop": "#092637",
+            "displayBottom": "#114564"])),
+        ("Artvera - FL1", ThemePalette(hexMap: [
+            "panel": "#3A4145", "header": "#242D32", "headerText": "#727D83", "label": "#939EA4",
+            "knobBody": "#1B1F21", "knobGradient": "#1B1F21", "knobDial": "#FEA307", "button": "#232B30",
+            "led": "#5CF266", "radio": "#FEA307", "displayText": "#FEA307", "displayTop": "#2E393F",
+            "displayBottom": "#1E2528"])),
+        ("Artvera - Pastel", ThemePalette(hexMap: [
+            "panel": "#6C8D93", "header": "#354548", "headerText": "#85A0A5", "label": "#DCE6E7",
+            "knobBody": "#242F31", "knobGradient": "#242F31", "knobDial": "#FF9E3E", "button": "#293638",
+            "led": "#FF9E3E", "radio": "#F23741", "displayText": "#FF9E3E", "displayTop": "#354548",
+            "displayBottom": "#242F31"])),
     ]
 
     subscript(_ c: ThemeColor) -> RGB { colors[c] ?? RGB(hex: c.defaultHex)! }
