@@ -613,8 +613,8 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   windows), dragged by its title bar, own colour editor (no system panel),
   `WheelShield` keeps wheel events off the knobs below. 13 colours
   (`ThemeColor`); the rest derives (`Theme` struct, `@Environment(\.theme)`).
-  Factory themes `ThemePalette.factory` (Synth2 = default, Blue, Gray Dark,
-  Gray Light, Red, Warm, JP-8000, JP-8000 Dark, Synth1, Artvera - Blues / FL1 / Pastel), then user themes (Save / Delete). The
+  Factory themes `ThemePalette.factory` (Synth2 = default, Synth1, Blue, Gray Dark,
+  Gray Light, Red, Warm, JP-8000, JP-8000 Dark, Artvera - Blues / FL1 / Pastel), then user themes (Save / Delete). The
   palette is PER INSTANCE, stored in the host session (state chunk v4,
   hooks `themeText` / `setThemeText`, VST3 message "OxoTheme"), never in a
   .sy1; changing it also becomes the per-user default for new instances

@@ -90,6 +90,11 @@ struct ThemePalette: Equatable {
     /// "Synth2" is the default, "Synth1" is the closest to the original.
     static let factory: [(name: String, palette: ThemePalette)] = [
         ("Synth2", .synth2),
+        ("Synth1", ThemePalette(hexMap: [
+            "panel": "#C7C786", "header": "#3B3B38", "headerText": "#E6E0B8", "label": "#1A1A0F",
+            "knobBody": "#171717", "knobGradient": "#212121", "knobDial": "#FF2D2D", "button": "#363630",
+            "led": "#5CF266", "radio": "#FF331A", "displayText": "#73F2FF", "displayTop": "#123D40",
+            "displayBottom": "#05171A"])),
         ("Blue", ThemePalette(hexMap: [
             "panel": "#8AA7B8", "header": "#1A1D26", "headerText": "#9DA198", "label": "#181A19",
             "knobBody": "#171717", "knobGradient": "#212121", "knobDial": "#FFFFFF", "button": "#363630",
@@ -125,11 +130,6 @@ struct ThemePalette: Equatable {
             "knobBody": "#050505", "knobGradient": "#050505", "knobDial": "#919191", "button": "#363630",
             "led": "#FAFFF2", "radio": "#F5FBF3", "displayText": "#D1D6D0", "displayTop": "#161A1A",
             "displayBottom": "#0D100C"])),
-        ("Synth1", ThemePalette(hexMap: [
-            "panel": "#C7C786", "header": "#3B3B38", "headerText": "#E6E0B8", "label": "#1A1A0F",
-            "knobBody": "#171717", "knobGradient": "#212121", "knobDial": "#FF2D2D", "button": "#363630",
-            "led": "#5CF266", "radio": "#FF331A", "displayText": "#73F2FF", "displayTop": "#123D40",
-            "displayBottom": "#05171A"])),
         ("Artvera - Blues", ThemePalette(hexMap: [
             "panel": "#0D415F", "header": "#A0A0A0", "headerText": "#112E40", "label": "#B7D8EC",
             "knobBody": "#112E40", "knobGradient": "#112E40", "knobDial": "#FEA307", "button": "#0B3046",
