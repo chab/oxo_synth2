@@ -10,7 +10,9 @@ private let sy1Type = UTType(filenameExtension: "sy1") ?? .data
 /// transient value / MIDI learn messages over the bank), write / menu.
 struct BottomBar: View {
     @ObservedObject var model: SynthModel
+    @ObservedObject private var store = ThemeStore.shared
     @Environment(\.theme) private var theme
+    @Environment(\.editorScale) private var scale
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -111,6 +113,26 @@ struct BottomBar: View {
             Toggle("Program change", isOn: $model.programChange)
             Button("All notes off") { model.allNotesOff() }
             Divider()
+            // = the logo menu's two columns (sizes: only where the editor
+            // resizes its window, not the iPad AUv3)
+            if let resize = model.requestEditorWidth {
+                let size = LogoMenu.activeSize(scale: scale)
+                Menu("Select size") {
+                    ForEach(LogoMenu.sizes, id: \.self) { p in
+                        Toggle("\(p)%", isOn: Binding(get: { p == size }, set: { _ in resize(LogoMenu.width(p)) }))
+                    }
+                }
+            }
+            let active = LogoMenu.activeTheme(model, store)
+            Menu("Select theme") {
+                ForEach(ThemePalette.factory, id: \.name) { t in
+                    Toggle(t.name, isOn: Binding(get: { active == "f:" + t.name }, set: { _ in model.applyTheme(t.palette) }))
+                }
+                if !store.userThemes.isEmpty { Divider() }
+                ForEach(store.userThemes, id: \.name) { t in
+                    Toggle(t.name, isOn: Binding(get: { active == "u:" + t.name }, set: { _ in model.applyTheme(t.palette) }))
+                }
+            }
             Button("Themes…") { model.showThemes = true }
             #if os(macOS)
             if UpdateCheck.enabled {
@@ -129,6 +151,7 @@ struct BottomBar: View {
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
+        .menuOrder(.fixed)
         .frame(width: 50, height: 26)
     }
 }

@@ -160,7 +160,11 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   `WindowsTrash.cpp` (Recycle Bin; false where Windows cannot recycle),
   `WindowsStorage.hpp` / `StorageSelection.hpp` (folders, portable mode),
   `WindowsPresetIndex.hpp` (bank index cache, rescanned in the background
-  on every editor / browser open), zoom, `WindowsPrompt.hpp`. The browser
+  on every editor / browser open), zoom (settings.json
+  `windowsEditorWidth`: menu sizes / the panel's corner grip saved at once,
+  the HOST's frame resizes only after the editor's first second (hosts
+  send their own default on open) and once they stop, 400 ms or on close),
+  `WindowsPrompt.hpp`. The browser
   is the mac's (no favourites: removed), incl. drag and drop.
   Windows-only code in shared files stays under `#if defined(_WIN32)` /
   `SMTG_OS_WINDOWS`.
@@ -558,9 +562,27 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   / EQ / Delay / Chorus / Voice right). Knobs: vertical drag (Shift fine),
   double-click = INIT value, wheel (full range = 1440 pt, Shift 6x finer;
   displays / radios 33 pt per step; one host gesture per burst, ends after
-  0.4 s idle). Type / dst / range buttons: click = next, Shift-click =
-  back. ctrl src / assign = pop-up menus. Effect type = in-panel 2 x 5 grid
-  (`EffectTypeMenu`); phaser level reads feedback %. First click acts in
+  0.4 s idle). WHEEL RULES (mac + Windows; the iPad has no wheel): up =
+  value up, clamped, in the DEVICE's direction (mac `deviceDeltaY`:
+  natural scrolling ignored, browser lists keep it); ignored on toggles,
+  type / dst / range buttons, the ctrl src / assign menus and the VERTICAL
+  LED lists (filter / arp type / range, LFO dst, voice mode); horizontal
+  LEDs (sub oct, m.env dest), wave grids and every display step.
+  INERTIA never jumps controls: mac = the last direct gesture's control
+  owns the momentum tail (`WheelMonitor.momentumOwner`); Windows (no
+  momentum flag) = a run of events < 300 ms apart belongs to the target
+  under its first event, events over anything else are dropped
+  (`WindowsEditor::wheel` / `wheelTarget`). Type /
+  dst / range buttons: click = next, Shift-click = back. ctrl src /
+  assign = pop-up menus (src: pitch bend, ch pressure + 4 sub-menus "CC
+  0–31".. of "#n:name" items; assign: none + Synth1's list in one column;
+  Windows: the same items as native popups, + check marks). Effect / delay / chorus type and the LFO shapes:
+  a click opens a pick list under the display (`TypeMenu`, effect = 2 x 5
+  grid, LFO shapes Synth1's 2 x 3 (saw / tri / sine | square / S&H /
+  smooth, `lfoShapeOrder`), `SynthModel.typeMenu` = the open id; Windows: the same in-panel
+  list drawn in GDI+, `WindowsEditor::typeMenu_` / `drawTypeMenu`, wave
+  icons through `drawWaveShape`, theme display colours);
+  phaser level reads feedback %. First click acts in
   an unfocused window (`acceptsFirstMouse`).
 - INIT = `EngineCore/InitPatch.hpp` (`kInitPatchValues`, name INIT):
   Initialize patch and the double-click value. Params.hpp defaults stay the
@@ -573,8 +595,10 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   delete, export, import, all notes off, the library notice 10 s, worded
   "Recycle Bin"). write = write
   dialog; menu = Initialize patch | Load / Save patch file… | MIDI Learn |
-  Program change (checkmark) | All notes off | Themes… | Check for
-  updates… (mac). The version box in the title band
+  Program change (checkmark) | All notes off | Select size ▸ (mac /
+  Windows, = the logo menu's sizes) | Select theme ▸ | Themes… | Check
+  for updates… (mac / Windows). Windows' sizes are 75..300 % of its 770
+  px canvas (`kSizeLevels`), the mac's 75..200 % of 700 pt. The version box in the title band
   opens the GitHub project (`SynthPanelView.projectURL`).
 - BROWSER KEYS (mac, `SynthModel.browserKey`): arrows load at once (up /
   down = ◀ ▶, left / right = next column, nearest non-empty slot), Return /
@@ -601,8 +625,8 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   windows), dragged by its title bar, own colour editor (no system panel),
   `WheelShield` keeps wheel events off the knobs below. 13 colours
   (`ThemeColor`); the rest derives (`Theme` struct, `@Environment(\.theme)`).
-  Factory themes `ThemePalette.factory` (Synth2 = default, Blue, Gray Dark,
-  Gray Light, Red, Warm, JP-8000, JP-8000 Dark, Synth1), then user themes (Save / Delete). The
+  Factory themes `ThemePalette.factory` (Synth2 = default, Synth1, Blue, Gray Dark,
+  Gray Light, Red, Warm, JP-8000, JP-8000 Dark, Artvera - Blues / FL1 / Pastel), then user themes (Save / Delete). The
   palette is PER INSTANCE, stored in the host session (state chunk v4,
   hooks `themeText` / `setThemeText`, VST3 message "OxoTheme"), never in a
   .sy1; changing it also becomes the per-user default for new instances
@@ -1037,7 +1061,11 @@ original AU; keeps both renders for listening).
   D·sin(ωt − θ)), D = (100^(depth/127) − 1)/99, one sine LFO free-running
   from creation, 2.94 Hz·2^((rate−64)/8.89), rate 0 = 0.01 Hz; types 1–3
   L→L / R→R (R θ 0° type 1, 90° types 2 = 3), type 4 L→L 0°, R→L 90°, L→R
-  180°, R→R 270°; comb feedback 0.99·(fb−64)/64; wet = level/127, dry
+  180°, R→R 270°; Synth1's panel offers 1 / 2 / 4 only ("x1 / x2 / x4",
+  its AU 3 steps): ours too (`Offered` / `OfferedStep` in Params.hpp,
+  Swift mirror `SynthModel.offered` / `stepped`: lists, wheel, drag skip
+  3, a loaded 3 reads "x2"; the parameter keeps 1..4 for automation), no
+  factory patch uses 3; comb feedback 0.99·(fb−64)/64; wet = level/127, dry
   unity. Base delay = WHOLE samples (`Chorus::TimeSamples`, measured
   table at 44.1 kHz, 30 ms at 127; 96 kHz = the same delays rounded).
   The comb adds the CURRENT tap (echoes every base delay exactly).

@@ -90,6 +90,11 @@ struct ThemePalette: Equatable {
     /// "Synth2" is the default, "Synth1" is the closest to the original.
     static let factory: [(name: String, palette: ThemePalette)] = [
         ("Synth2", .synth2),
+        ("Synth1", ThemePalette(hexMap: [
+            "panel": "#C7C786", "header": "#3B3B38", "headerText": "#E6E0B8", "label": "#1A1A0F",
+            "knobBody": "#171717", "knobGradient": "#212121", "knobDial": "#FF2D2D", "button": "#363630",
+            "led": "#5CF266", "radio": "#FF331A", "displayText": "#73F2FF", "displayTop": "#123D40",
+            "displayBottom": "#05171A"])),
         ("Blue", ThemePalette(hexMap: [
             "panel": "#8AA7B8", "header": "#1A1D26", "headerText": "#9DA198", "label": "#181A19",
             "knobBody": "#171717", "knobGradient": "#212121", "knobDial": "#FFFFFF", "button": "#363630",
@@ -121,15 +126,25 @@ struct ThemePalette: Equatable {
             "led": "#FAFFF2", "radio": "#F5FBF3", "displayText": "#C2D3E1", "displayTop": "#161A1A",
             "displayBottom": "#0D100C"])),
         ("JP-8000 Dark", ThemePalette(hexMap: [
-            "panel": "#191D25", "header": "#24262C", "headerText": "#C6772D", "label": "#E4E7EC",
-            "knobBody": "#1B1B1B", "knobGradient": "#181818", "knobDial": "#B5B6B9", "button": "#363630",
-            "led": "#FAFFF2", "radio": "#F5FBF3", "displayText": "#C2D3E1", "displayTop": "#161A1A",
+            "panel": "#191D25", "header": "#24262C", "headerText": "#C6772D", "label": "#B6B6B6",
+            "knobBody": "#050505", "knobGradient": "#050505", "knobDial": "#919191", "button": "#363630",
+            "led": "#FAFFF2", "radio": "#F5FBF3", "displayText": "#D1D6D0", "displayTop": "#161A1A",
             "displayBottom": "#0D100C"])),
-        ("Synth1", ThemePalette(hexMap: [
-            "panel": "#C7C786", "header": "#3B3B38", "headerText": "#E6E0B8", "label": "#1A1A0F",
-            "knobBody": "#171717", "knobGradient": "#212121", "knobDial": "#FF2D2D", "button": "#363630",
-            "led": "#5CF266", "radio": "#FF331A", "displayText": "#73F2FF", "displayTop": "#123D40",
-            "displayBottom": "#05171A"])),
+        ("Artvera - Blues", ThemePalette(hexMap: [
+            "panel": "#0D415F", "header": "#A0A0A0", "headerText": "#112E40", "label": "#B7D8EC",
+            "knobBody": "#112E40", "knobGradient": "#112E40", "knobDial": "#FEA307", "button": "#0B3046",
+            "led": "#5CF266", "radio": "#FEA307", "displayText": "#FEA307", "displayTop": "#092637",
+            "displayBottom": "#114564"])),
+        ("Artvera - FL1", ThemePalette(hexMap: [
+            "panel": "#3A4145", "header": "#242D32", "headerText": "#727D83", "label": "#939EA4",
+            "knobBody": "#1B1F21", "knobGradient": "#1B1F21", "knobDial": "#FEA307", "button": "#232B30",
+            "led": "#5CF266", "radio": "#FEA307", "displayText": "#FEA307", "displayTop": "#2E393F",
+            "displayBottom": "#1E2528"])),
+        ("Artvera - Pastel", ThemePalette(hexMap: [
+            "panel": "#6C8D93", "header": "#354548", "headerText": "#85A0A5", "label": "#DCE6E7",
+            "knobBody": "#242F31", "knobGradient": "#242F31", "knobDial": "#FF9E3E", "button": "#293638",
+            "led": "#FF9E3E", "radio": "#F23741", "displayText": "#FF9E3E", "displayTop": "#354548",
+            "displayBottom": "#242F31"])),
     ]
 
     subscript(_ c: ThemeColor) -> RGB { colors[c] ?? RGB(hex: c.defaultHex)! }
@@ -430,6 +445,7 @@ struct ThemeDialog: View {
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
+        .menuOrder(.fixed)
         .fixedSize()
     }
 }
@@ -448,19 +464,28 @@ struct LogoMenu: View {
     let scale: CGFloat
     @State private var hovered: String?
 
-    var body: some View {
-        // The window is freely resizable: the active row is the nearest step.
+    /// The window is freely resizable: the active size is the nearest step.
+    static func activeSize(scale: CGFloat) -> Int {
         let unit = scale * SynthPanelView.designSize.width / SynthPanelView.unitWidth
-        let size = Self.sizes.min { abs(CGFloat($0) / 100 - unit) < abs(CGFloat($1) / 100 - unit) }
-        let theme = ThemePalette.factory.first { $0.palette == model.palette }.map { "f:" + $0.name }
+        return sizes.min { abs(CGFloat($0) / 100 - unit) < abs(CGFloat($1) / 100 - unit) } ?? 100
+    }
+
+    static func width(_ percent: Int) -> Double { Double(SynthPanelView.unitWidth) * Double(percent) / 100 }
+
+    /// The palette in use as "f:<factory name>" / "u:<user name>", nil = unlisted.
+    static func activeTheme(_ model: SynthModel, _ store: ThemeStore) -> String? {
+        ThemePalette.factory.first { $0.palette == model.palette }.map { "f:" + $0.name }
             ?? store.userThemes.first { $0.palette == model.palette }.map { "u:" + $0.name }
+    }
+
+    var body: some View {
+        let size = Self.activeSize(scale: scale)
+        let theme = Self.activeTheme(model, store)
         HStack(alignment: .top, spacing: 0) {
             if let resize = model.requestEditorWidth {
                 column("UI size") {
                     ForEach(Self.sizes, id: \.self) { p in
-                        row("s:\(p)", "\(p)%", active: p == size) {
-                            resize(Double(SynthPanelView.unitWidth) * Double(p) / 100)
-                        }
+                        row("s:\(p)", "\(p)%", active: p == size) { resize(Self.width(p)) }
                     }
                 }
                 Rectangle().fill(Color.white.opacity(0.12)).frame(width: 1).padding(.vertical, 6)

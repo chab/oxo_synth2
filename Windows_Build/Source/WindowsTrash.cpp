@@ -14,13 +14,17 @@
 #include <string>
 
 namespace oxo {
-bool MoveToTrash(const std::filesystem::path &path) {
+bool CanRecycle(const std::filesystem::path &path) {
     if (path.empty() || !path.is_absolute()) return false;
     const std::wstring root = path.root_path().wstring();
     if (GetDriveTypeW(root.c_str()) != DRIVE_FIXED) return false;
     SHQUERYRBINFO bin{};
     bin.cbSize = sizeof(bin);
-    if (FAILED(SHQueryRecycleBinW(root.c_str(), &bin))) return false;
+    return SUCCEEDED(SHQueryRecycleBinW(root.c_str(), &bin));
+}
+
+bool MoveToTrash(const std::filesystem::path &path) {
+    if (!CanRecycle(path)) return false;
     std::wstring from = path.wstring();
     from.push_back(L'\0');
     from.push_back(L'\0'); // SHFileOperation needs a double-NUL list

@@ -77,6 +77,22 @@ private:
     void drawControlStatic(Gdiplus::Graphics& g, const Control& c);
     void drawControlDynamic(Gdiplus::Graphics& g, const Control& c, bool hovered);
     void drawWave(Gdiplus::Graphics& g, const Control& c);
+    // The in-panel type pick list (SynthPanelView's TypeMenu): effect /
+    // delay / chorus type, LFO shapes; typeMenu_ = its parameter, -1 = closed.
+    struct TypeMenu {
+        float x = 0, y = 0, cellW = 0, cellH = 17;
+        int rows = 1, columns = 0;
+        std::vector<int> values; // column by column
+        Gdiplus::RectF rect() const { return Gdiplus::RectF(x, y, cellW * float(columns), cellH * float(rows)); }
+    };
+    int typeMenu_ = -1;
+    int typeMenuHover_ = -1; // the value under the mouse
+    TypeMenu typeMenu() const;
+    int typeMenuHit(float x, float y) const;
+    void openTypeMenu(int id);
+    void closeTypeMenu();
+    void invalidateTypeMenu() const;
+    void drawTypeMenu(Gdiplus::Graphics& g);
     void drawChrome(Gdiplus::Graphics& g, int id, bool hovered);
     void drawBrowser(Gdiplus::Graphics& g);
     void paint(HDC screen, const RECT& dirty);
@@ -88,6 +104,8 @@ private:
     void checkForUpdates();
     void updateArrived(); // kUpdateMessage: releases.json came (or not)
     void appendThemes(HMENU menu, std::vector<themes::Palette>& picks) const;
+    void appendSizes(HMENU menu, const wchar_t* suffix) const;
+    bool pickSize(int command);
     bool pickTheme(int command, const std::vector<themes::Palette>& picks);
     void setTheme(const themes::Palette& palette, bool fromThemeEditor = false);
     void syncTheme();
@@ -112,6 +130,11 @@ private:
     void updateHover(float x, float y);
     void mouseUp();
     void wheel(int direction, float x, float y);
+    int wheelTarget(float x, float y) const;
+    // The current wheel run's owner (wheelTarget at its first event) and its
+    // last event's time: see wheel().
+    int wheelOwner_ = -1;
+    uint64_t wheelLastAt_ = 0;
     void browserClick(float x, float y, bool doubleClick);
     void slotClick(int index, bool doubleClick);
     void commitWrite();
@@ -208,7 +231,15 @@ private:
     bool resizeDragging_ = false;
     POINT resizeStartScreen_{};
     int resizeStartWidth_ = 0;
-    int requestedZoomWidth_ = -1; // accept/persist only editor-initiated resizes
+    int requestedZoomWidth_ = -1; // an editor-initiated resize (menu): saved at once
+    // Host resizes (its window frame dragged, e.g. FL Studio) count only once
+    // the editor has settled (attach + kSizeSettleMs: the opening onSize
+    // calls are the host's own default, not the user's) and are saved once
+    // they stop (kSizeSaveDelayMs, or on close).
+    uint64_t sizeSettledAt_ = 0;
+    int pendingSizeSave_ = -1;
+    uint64_t pendingSizeSaveAt_ = 0;
+    void savePendingSize(bool now);
     std::vector<Bank> banks_;
     std::vector<int> bankOrder_;
     std::string libraryRoot_;

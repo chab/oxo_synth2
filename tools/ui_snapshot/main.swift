@@ -1,6 +1,6 @@
 // Renders the editor with a mock host to PNG (layout eye-check without a DAW).
 //   swiftc Shared/*.swift tools/ui_snapshot/main.swift -o build/ui/snap
-//   ./build/ui/snap out.png [browser|browser-loading|loading|write|write-factory|write-new-user|learn|themes|logo|logo-ipad|ipad|ipad-wide|effect|update|delete-bank]
+//   ./build/ui/snap out.png [browser|browser-loading|loading|write|write-factory|write-new-user|learn|themes|logo|logo-ipad|ipad|ipad-wide|effect|delay|chorus|lfo1|lfo2|update|delete-bank]
 import AppKit
 import SwiftUI
 
@@ -58,7 +58,7 @@ final class MockHost: SynthHost {
     func newBank(_ name: String) -> Int { 0 }
     func movePatch(bank: Int, from: Int, to: Int) -> Bool { true }
     func copyPatch(bank: Int, slot: Int, to: Int) -> Int { 0 }
-    func deleteBank(_ bank: Int) -> Bool { true }
+    func deleteBank(_ bank: Int) -> Int { 1 }
     func exportBank(_ bank: Int, to dir: String) -> String { "" }
     func importItems(_ paths: String) -> [String] { [] }
     func name(_ id: Int) -> String { "param \(id)" }
@@ -100,8 +100,8 @@ if args.count > 2 {
         // window (the panel scrolls, side strips)
         var wide = args[2] == "ipad-wide"
         model.uiWidthModeStorage = (get: { wide }, set: { wide = $0 })
-    } else if args[2] == "effect" {
-        model.showEffectMenu = true
+    } else if let id = ["effect": 78, "delay": 82, "chorus": 64, "lfo1": 42, "lfo2": 47][args[2]] {
+        model.typeMenu = id
     } else if args[2] == "update" {
         model.update = .available(latest: "V1.1", installed: "V1.0",
                                   page: URL(string: "https://oxo-music.com/products/oxo_synth2")!)

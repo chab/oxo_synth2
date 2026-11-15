@@ -179,6 +179,28 @@ inline constexpr double ToNormalized(int id, int32_t v) {
     return p.max == p.min ? 0.0 : double(ClampValue(id, v) - p.min) / double(p.max - p.min);
 }
 
+// Values the editors never offer (pick lists, wheel, drag): chorus type 3,
+// a duplicate of 2 (the engine plays it as 2) that Synth1's panel never
+// shows (its x1 / x2 / x4 = 1 / 2 / 4). Patches and automation may still
+// carry it. Swift mirror: SynthModel.offered / stepped.
+inline constexpr bool Offered(int id, int32_t v) { return !(id == kChorusType && v == 3); }
+
+// `steps` offered values away from v, clamped to the range; an unoffered v
+// counts as the offered value below it (steps 0 = that value).
+inline constexpr int32_t OfferedStep(int id, int32_t v, int steps) {
+    const ParamInfo &p = Info(id);
+    int32_t x = ClampValue(id, v);
+    while (x > p.min && !Offered(id, x)) --x;
+    const int dir = steps > 0 ? 1 : -1;
+    for (int n = steps < 0 ? -steps : steps; n > 0; --n) {
+        int32_t y = x + dir;
+        while (y >= p.min && y <= p.max && !Offered(id, y)) y += dir;
+        if (y < p.min || y > p.max) break;
+        x = y;
+    }
+    return x;
+}
+
 // VST3 discrete-parameter convention (RangeParameter::toPlain with stepCount
 // = max - min), so processor and controller agree on every step.
 inline constexpr int32_t FromNormalized(int id, double n) {

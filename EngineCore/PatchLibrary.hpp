@@ -751,6 +751,9 @@ inline std::string ImportItemsText(const std::filesystem::path &root, const std:
 
 // ---- the user's library: one root folder + operations -------------------------
 
+// PatchManager::DeleteBank's result (= the deleteBank hook's).
+enum DeleteResult : int { kDeleteFailed = 0, kDeleteTrashed = 1, kDeleteRemoved = 2 };
+
 class PatchManager {
 public:
     PatchManager() = default;
@@ -912,26 +915,31 @@ public:
     // Browser > Delete bank: its folder goes to the Trash (deleted where there
     // is none), or only its .sy1 files when the folder also holds sub-folders
     // (other banks) or is the root itself. Never the factory bank, never
-    // anything outside the root. Rescans.
-    bool DeleteBank(int bank) {
+    // anything outside the root. Rescans. kDeleteRemoved = deleted for good
+    // (no Trash there: iOS, a Windows USB / network drive).
+    DeleteResult DeleteBank(int bank) {
         EnsureScanned();
         const auto &banks = lib_.Banks();
-        if (bank < 0 || size_t(bank) >= banks.size() || banks[size_t(bank)].readOnly) return false;
+        if (bank < 0 || size_t(bank) >= banks.size() || banks[size_t(bank)].readOnly) return kDeleteFailed;
         const std::filesystem::path dir = banks[size_t(bank)].source;
         const std::filesystem::path rel = dir.lexically_normal().lexically_relative(root_.lexically_normal());
-        if (root_.empty() || rel.empty() || *rel.begin() == "..") return false;
+        if (root_.empty() || rel.empty() || *rel.begin() == "..") return kDeleteFailed;
         std::error_code ec;
         const auto items = FolderChildren(dir);
         const bool wholeFolder = rel != "." && std::none_of(items.begin(), items.end(), [&](auto &p) {
             return std::filesystem::is_directory(p, ec);
         });
-        bool ok = true;
-        if (wholeFolder) ok = Remove(dir);
+        bool failed = false, removed = false;
+        const auto remove = [&](const std::filesystem::path &p) {
+            const DeleteResult r = Remove(p);
+            failed |= r == kDeleteFailed, removed |= r == kDeleteRemoved;
+        };
+        if (wholeFolder) remove(dir);
         else
             for (const auto &p : items)
-                if (IsSy1(p.filename().string()) && !std::filesystem::is_directory(p, ec)) ok = Remove(p) && ok;
+                if (IsSy1(p.filename().string()) && !std::filesystem::is_directory(p, ec)) remove(p);
         Rescan();
-        return ok;
+        return failed ? kDeleteFailed : removed ? kDeleteRemoved : kDeleteTrashed;
     }
 
     // Browser > Export bank: a folder named after the bank's (" 2" when
@@ -1023,11 +1031,11 @@ private:
     }
 
     // To the Trash, else deleted (iOS: no Trash).
-    bool Remove(const std::filesystem::path &p) {
-        if (trash_ && trash_(p)) return true;
+    DeleteResult Remove(const std::filesystem::path &p) {
+        if (trash_ && trash_(p)) return kDeleteTrashed;
         std::error_code ec;
         std::filesystem::remove_all(p, ec);
-        return !std::filesystem::exists(p, ec);
+        return std::filesystem::exists(p, ec) ? kDeleteFailed : kDeleteRemoved;
     }
 
     void EnsureRoot() const {

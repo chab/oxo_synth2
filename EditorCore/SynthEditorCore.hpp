@@ -193,11 +193,11 @@ public:
 
     // Browser > Delete bank (PatchManager::DeleteBank); the sound playing
     // stays, but no longer points into the deleted bank.
-    bool DeleteBank(int bank) {
+    s2::DeleteResult DeleteBank(int bank) {
         library_.EnsureScanned();
-        if (bank < 0 || size_t(bank) >= library_.Library().Banks().size()) return false;
+        if (bank < 0 || size_t(bank) >= library_.Library().Banks().size()) return s2::kDeleteFailed;
         const std::string rel = ProgramBank(size_t(bank));
-        const bool ok = library_.DeleteBank(bank);
+        const s2::DeleteResult ok = library_.DeleteBank(bank);
         if (program_.slot >= 0 && program_.bank == rel) SetProgram({});
         return ok;
     }

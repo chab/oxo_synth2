@@ -38,6 +38,21 @@ OXO_TEST(FactoryInitFileMatchesInitPatch) {
     OXO_EXPECT_EQ(p.name, std::string("INIT"));
 }
 
+// Chorus type 3 (= 2) is never offered: steps skip it, a loaded 3 acts as 2.
+OXO_TEST(OfferedStepSkipsChorusType3) {
+    using namespace oxo::s2;
+    OXO_EXPECT(!Offered(kChorusType, 3) && Offered(kChorusType, 2) && Offered(kEffectType, 3));
+    OXO_EXPECT_EQ(OfferedStep(kChorusType, 2, 1), 4);
+    OXO_EXPECT_EQ(OfferedStep(kChorusType, 4, -1), 2);
+    OXO_EXPECT_EQ(OfferedStep(kChorusType, 3, 0), 2);
+    OXO_EXPECT_EQ(OfferedStep(kChorusType, 3, 1), 4);
+    OXO_EXPECT_EQ(OfferedStep(kChorusType, 3, -1), 1);
+    OXO_EXPECT_EQ(OfferedStep(kChorusType, 4, 5), 4);
+    OXO_EXPECT_EQ(OfferedStep(kChorusType, 1, -1), 1);
+    OXO_EXPECT_EQ(OfferedStep(kOscKeyShift, 10, 3), 13);
+    OXO_EXPECT_EQ(OfferedStep(kOscKeyShift, 127, 3), Info(kOscKeyShift).max);
+}
+
 OXO_TEST(ParamsNormalizedRoundTrip) {
     for (int i = 0; i < kParamCount; ++i)
         for (int32_t v = kParams[i].min; v <= kParams[i].max; v += std::max(1, (kParams[i].max - kParams[i].min) / 300))
