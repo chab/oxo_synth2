@@ -1,3 +1,7 @@
+// The panel of the Windows and Linux editors (DesktopEditor.hpp): written
+// against Win32 + GDI+; on Linux, LinuxPlatform.hpp / LinuxGdiplus.hpp
+// provide the names it uses. Each platform's window: WindowsEditor.cpp /
+// LinuxEditor.cpp.
 #include "DesktopEditor/DesktopEditor.hpp"
 #include "OxoSynth2VST3/source/OxoSynth2Controller.h"
 #include "pluginterfaces/gui/iplugview.h"
@@ -6,14 +10,11 @@
 #include "EditorCore/Storage.hpp"
 #include "EditorCore/Trash.hpp"
 #include "EditorCore/UpdateCheck.hpp"
-#include "WindowsZoomSettings.hpp"
-#include "WindowsThemeEditor.hpp"
-#include "WindowsPrompt.hpp"
+#include "Windows_Build/Source/WindowsZoomSettings.hpp"
+#if defined(_WIN32)
 #include <shellapi.h>
-#include <shlobj.h>
-#include <commdlg.h>
+#endif
 #include <cstring>
-#include <windowsx.h>
 
 #include <algorithm>
 #include <numeric>
@@ -30,10 +31,6 @@ using namespace Gdiplus;
 
 namespace oxo {
 namespace {
-constexpr float kDesignWidth = 770.f, kDesignHeight = 560.f;
-constexpr int kMinWidth = 578;  // 75% of the 770-pixel design width, rounded up
-constexpr int kMaxWidth = 2310; // 300% of the design width
-constexpr uint64_t kSizeSettleMs = 1000, kSizeSaveDelayMs = 400; // host resizes (WindowsEditor.hpp)
 constexpr uint64_t kWheelRunMs = 300; // wheel events closer than this = one run (wheel())
 constexpr float kPi = 3.14159265358979323846f;
 constexpr int kPanel=themes::kPanel, kHeader=themes::kHeader, kHeaderText=themes::kHeaderText,
@@ -43,6 +40,14 @@ constexpr int kPanel=themes::kPanel, kHeader=themes::kHeader, kHeaderText=themes
               kDisplayBottom=themes::kDisplayBottom;
 constexpr int kThemeCommand=1000; // theme menu items: kThemeCommand + index into the picks
 constexpr const wchar_t* kProjectURL=L"https://github.com/chab/oxo_synth2"; // SynthPanelView.projectURL
+// What the desktop calls these.
+#if defined(_WIN32)
+constexpr const wchar_t* kShowInFiles=L"Show in Explorer";
+constexpr const wchar_t* kTrash=L"Recycle Bin";
+#else
+constexpr const wchar_t* kShowInFiles=L"Show in file manager";
+constexpr const wchar_t* kTrash=L"Trash";
+#endif
 // Theme.lcdText (Shared/SynthControls.swift): fixed browser / LCD text.
 constexpr int kLcdText=0xE0FFFF;
 // Regions redrawn on their own (design coordinates).
@@ -57,45 +62,6 @@ void fill(Graphics& g, const Color& c, float x,float y,float w,float h) {
 }
 void stroke(Graphics& g, const Color& c, float x,float y,float w,float h,float width=1) {
     Pen p(c,width); g.DrawRectangle(&p,x,y,w,h);
-}
-// The drag cursor over a bank row: the arrow with a "+" box (the copy
-// cursor macOS shows for the mac's .copy drop proposal; Windows has no
-// stock one outside OLE drag and drop). 32x32 ARGB, hotspot = the tip.
-HCURSOR makeCopyCursor() {
-    constexpr int size=32;
-    BITMAPV5HEADER header{};
-    header.bV5Size=sizeof(header);
-    header.bV5Width=size;header.bV5Height=-size; // top-down
-    header.bV5Planes=1;header.bV5BitCount=32;header.bV5Compression=BI_BITFIELDS;
-    header.bV5RedMask=0x00FF0000;header.bV5GreenMask=0x0000FF00;header.bV5BlueMask=0x000000FF;header.bV5AlphaMask=0xFF000000;
-    void* bits=nullptr;
-    HDC screen=GetDC(nullptr);
-    HBITMAP color=CreateDIBSection(screen,reinterpret_cast<BITMAPINFO*>(&header),DIB_RGB_COLORS,&bits,nullptr,0);
-    ReleaseDC(nullptr,screen);
-    if(!color || !bits) {if(color) DeleteObject(color);return nullptr;}
-    {
-        Bitmap canvas(size,size,size*4,PixelFormat32bppPARGB,static_cast<BYTE*>(bits));
-        Graphics g(&canvas);
-        g.Clear(Color(0,0,0,0));
-        g.SetSmoothingMode(SmoothingModeAntiAlias);
-        const PointF arrow[]={{1.5f,1.5f},{1.5f,17.5f},{5.5f,13.5f},{8.5f,20.f},{11.f,19.f},{8.f,12.5f},{13.5f,12.5f}};
-        SolidBrush white(Color(255,255,255,255));
-        Pen black(Color(255,0,0,0),1.f);
-        g.FillPolygon(&white,arrow,7);
-        g.DrawPolygon(&black,arrow,7);
-        g.SetSmoothingMode(SmoothingModeNone);
-        g.FillRectangle(&white,14,18,10,10);
-        g.DrawRectangle(&black,14,18,10,10);
-        SolidBrush ink(Color(255,0,0,0)); // the "+"
-        g.FillRectangle(&ink,16,22,7,2);
-        g.FillRectangle(&ink,18,20,2,7);
-    }
-    const std::vector<BYTE> zeros(size*size/8,0);
-    HBITMAP mask=CreateBitmap(size,size,1,1,zeros.data());
-    ICONINFO info{FALSE,1,1,mask,color};
-    HCURSOR cursor=reinterpret_cast<HCURSOR>(CreateIconIndirect(&info));
-    DeleteObject(mask);DeleteObject(color);
-    return cursor;
 }
 // Bank list order (UI only: hook indices, slot numbers and host state are
 // untouched): digits compare as numbers ("Bank 2" < "Bank 10"), letters
@@ -280,34 +246,17 @@ SharedThemes& sharedThemes() {
 }
 
 } // namespace
+themes::Store& DesktopEditor::themeStore() { return sharedThemes().store; }
+std::vector<themes::Named> DesktopEditor::themeFiles() { return sharedThemes().fileThemes(); }
 
-std::wstring WindowsEditor::toWide(const char* str) {
-    if(!str || !*str) return {};
-    int n=MultiByteToWideChar(CP_UTF8,0,str,-1,nullptr,0);
-    if(n<=0) return L"?";
-    std::wstring out(size_t(n),L'\0');
-    MultiByteToWideChar(CP_UTF8,0,str,-1,out.data(),n);
-    out.pop_back();
-    return out;
-}
-std::string WindowsEditor::toUtf8(const std::wstring& s) {
-    if(s.empty()) return {};
-    int n=WideCharToMultiByte(CP_UTF8,0,s.data(),int(s.size()),nullptr,0,nullptr,nullptr);
-    if(n<=0) return {};
-    std::string out(size_t(n),'\0');
-    WideCharToMultiByte(CP_UTF8,0,s.data(),int(s.size()),out.data(),n,nullptr,nullptr);
-    return out;
-}
-
-WindowsEditor::WindowsEditor(OxoSynth2Controller* controller)
+DesktopEditor::DesktopEditor(OxoSynth2Controller* controller)
     : CPluginView(nullptr), controller_(controller) {
     // Prefer last accepted user zoom in the active standard/portable data folder.
     // Keep the original 700px (~91%) first-run default for compatibility.
     const int savedWidth=winzoom::LoadWidth(storage::Root(),700,kMinWidth,kMaxWidth);
     rect=ViewRect(0,0,savedWidth,int(std::lround(savedWidth*560.0/770.0)));
     if(controller_) hooks_=controller_->MakeHooks();
-    GdiplusStartupInput gdiplusInput;
-    if(GdiplusStartup(&gdiplusToken_,&gdiplusInput,nullptr)==Ok) textCache_=std::make_unique<TextCache>();
+    if(startGraphics()) textCache_=std::make_unique<TextCache>();
     constructLayout();
     buildLearnRects();
     // SynthModel.init: the session's palette, else the last one picked;
@@ -317,25 +266,21 @@ WindowsEditor::WindowsEditor(OxoSynth2Controller* controller)
     for(size_t i=0;i<colors_.size();++i) colors_[i]=rgb(int(theme_[i]));
     if(hooks_.setThemeText) hooks_.setThemeText(hooks_.ctx,themes::StateText(theme_).c_str());
 }
-WindowsEditor::~WindowsEditor() {
+DesktopEditor::~DesktopEditor() {
     sharedThemes().flush(true);
-    if(themeEditor_)themeEditor_->Close();
+    closeThemeEditor();
     removedFromParent();
-    if(copyCursor_) DestroyCursor(copyCursor_);
     textCache_.reset(); // before GDI+ goes
-    if(gdiplusToken_) GdiplusShutdown(gdiplusToken_);
+    endGraphics();
 }
-tresult PLUGIN_API WindowsEditor::isPlatformTypeSupported(FIDString type) {
-    return type && strcmp(type,kPlatformTypeHWND)==0 ? kResultTrue : kResultFalse;
-}
-tresult PLUGIN_API WindowsEditor::checkSizeConstraint(ViewRect* r) {
+tresult PLUGIN_API DesktopEditor::checkSizeConstraint(ViewRect* r) {
     if(!r) return kInvalidArgument;
     int width=std::clamp(int(r->getWidth()),kMinWidth,kMaxWidth);
     r->right=r->left+width;
     r->bottom=r->top+int(std::lround(width*560.0/770.0));
     return kResultTrue;
 }
-tresult PLUGIN_API WindowsEditor::onSize(ViewRect* r) {
+tresult PLUGIN_API DesktopEditor::onSize(ViewRect* r) {
     if(!r) return kInvalidArgument;
     rect=*r;
     layoutChild();
@@ -354,25 +299,16 @@ tresult PLUGIN_API WindowsEditor::onSize(ViewRect* r) {
     }
     return kResultTrue;
 }
-void WindowsEditor::savePendingSize(bool now) {
+void DesktopEditor::savePendingSize(bool now) {
     if(pendingSizeSave_<0 || (!now && GetTickCount64()<pendingSizeSaveAt_)) return;
     winzoom::SaveWidth(storage::Root(),pendingSizeSave_,kMinWidth,kMaxWidth);
     pendingSizeSave_=-1;
 }
-win::WindowClass& WindowsEditor::windowClass() {
-    static win::WindowClass c(L"OxoSynth2WindowsEditorView",&WindowsEditor::wndProc,CS_DBLCLKS);
-    return c;
-}
-void WindowsEditor::attachedToParent() {
-    if(window_ || !systemWindow || !windowClass().Acquire()) return;
-    window_=CreateWindowExW(0,windowClass().Name(),L"",WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS,
-                          0,0,rect.getWidth(),rect.getHeight(),
-                          reinterpret_cast<HWND>(systemWindow),nullptr,win::ModuleInstance(),this);
-    if(!window_) {windowClass().Release();return;}
+void DesktopEditor::attachedToParent() {
+    if(window_ || !systemWindow || !openWindow()) return; // the window + the 50 ms timer (tick)
     for(size_t id=0;id<knownValues_.size();++id) knownValues_[id]=value(int(id));
     sizeSettledAt_=GetTickCount64()+kSizeSettleMs;
     pendingSizeSave_=-1;
-    SetTimer(window_,1,50,nullptr);
     // Critical: Json() and loadedProgram() call EnsureScanned(), which
     // scans all banks synchronously. Never call them before a background
     // scan has produced a usable revision (large libraries took ~1 min).
@@ -382,24 +318,16 @@ void WindowsEditor::attachedToParent() {
     // changed in Explorer (or zips dropped in) show up by themselves; the
     // saved index keeps the list usable meanwhile, the poll swaps it in.
     if(hooks_.startLibraryScan) hooks_.startLibraryScan(hooks_.ctx);
+    repaint();
 }
-void WindowsEditor::removedFromParent() {
+void DesktopEditor::removedFromParent() {
     updateCheck_.Cancel(); // no answer for a closed editor, no thread left behind
     typeMenu_=typeMenuHover_=-1;
     savePendingSize(true); // closed right after a host resize
     flash({});
-    if(editName_) {DestroyWindow(editName_);editName_=nullptr;}
-    if(window_) {KillTimer(window_,1);DestroyWindow(window_);window_=nullptr;windowClass().Release();}
-    releaseBuffers(); // the editor object may outlive its window: no bitmaps while closed
+    closeWindow(); // the editor object may outlive its window: no bitmaps while closed
 }
-void WindowsEditor::layoutChild() {
-    if(window_) MoveWindow(window_,0,0,rect.getWidth(),rect.getHeight(),TRUE);
-    updateEditControl();
-}
-void WindowsEditor::repaint() const {
-    if(window_) InvalidateRect(window_,nullptr,FALSE);
-}
-int WindowsEditor::value(int id) const {
+int DesktopEditor::value(int id) const {
     return hooks_.getValue ? int(hooks_.getValue(hooks_.ctx,id)) : 0;
 }
 // SynthPanelView.ctrlSrcLabel: a MIDI ctrl source word as the mac shows it.
@@ -429,7 +357,7 @@ static std::wstring ctrlSrcLabel(int v) {
     }
     }
 }
-std::wstring WindowsEditor::formatted(int id) const {
+std::wstring DesktopEditor::formatted(int id) const {
     if(id==86 || id==88) return ctrlSrcLabel(value(id));
     if(id==87 || id==89) {
         const int v=value(id);
@@ -441,8 +369,8 @@ std::wstring WindowsEditor::formatted(int id) const {
     // formatValue uses a shared scratch buffer; consume immediately.
     return toWide(hooks_.formatValue(hooks_.ctx,id,value(id)));
 }
-std::wstring WindowsEditor::patchName() const { return toWide(hooks_.patchName ? hooks_.patchName(hooks_.ctx) : "Init"); }
-void WindowsEditor::flash(const std::wstring& text,unsigned milliseconds) {
+std::wstring DesktopEditor::patchName() const { return toWide(hooks_.patchName ? hooks_.patchName(hooks_.ctx) : "Init"); }
+void DesktopEditor::flash(const std::wstring& text,unsigned milliseconds) {
     if(text.empty() && flashText_.empty()) return;
     flashText_=text;
     flashUntil_=text.empty() ? 0 : GetTickCount64()+milliseconds;
@@ -450,22 +378,22 @@ void WindowsEditor::flash(const std::wstring& text,unsigned milliseconds) {
 }
 // SynthModel.show: an edit from the panel names the param and its value
 // for 1.5 s (host automation shows nothing).
-void WindowsEditor::show(int id) {
+void DesktopEditor::show(int id) {
     flash(toWide(hooks_.displayName ? hooks_.displayName(hooks_.ctx,id) : "")+L":  "+formatted(id));
 }
 
-void WindowsEditor::knob(int id,const wchar_t* name,float sx,float sy,float x,float y,float size) {
+void DesktopEditor::knob(int id,const wchar_t* name,float sx,float sy,float x,float y,float size) {
     // KnobView's SwiftUI stack is centred at y+6.5, but its circular knob
     // centre is y; the label sits underneath. Avoid an extra 6.5 px offset.
     controls_.push_back({Kind::Knob,id,0,sx+x-size*.65f,sy+y-size*.65f,size*1.3f,size*1.65f,name});
 }
-void WindowsEditor::button(int id,const wchar_t* name,Kind kind,float sx,float sy,float x,float y,float width) {
+void DesktopEditor::button(int id,const wchar_t* name,Kind kind,float sx,float sy,float x,float y,float width) {
     controls_.push_back({kind,id,0,sx+x-width/2,sy+y-8.5f,width,17,name});
 }
-void WindowsEditor::display(int id,float sx,float sy,float x,float y,float width) {
+void DesktopEditor::display(int id,float sx,float sy,float x,float y,float width) {
     controls_.push_back({Kind::Display,id,0,sx+x-width/2,sy+y-8.5f,width,17,L""});
 }
-void WindowsEditor::radio(int id,float sx,float sy,float x,float y,std::vector<std::wstring> choices,
+void DesktopEditor::radio(int id,float sx,float sy,float x,float y,std::vector<std::wstring> choices,
                           int first,bool horizontal,bool trailing) {
     const int n=int(choices.size());
     const float step=horizontal ? (id==71 ? 44.f : 38.f) :
@@ -498,7 +426,7 @@ void WindowsEditor::radio(int id,float sx,float sy,float x,float y,std::vector<s
         }
     }
 }
-void WindowsEditor::waves(int id,float sx,float sy,float x,float y,const std::vector<int>& values,
+void DesktopEditor::waves(int id,float sx,float sy,float x,float y,const std::vector<int>& values,
                           const std::vector<int>& shapes) {
     // Original WaveRadio is a two-by-two 22x14 grid with a 2px gap.
     // Slightly larger cells and a 3px gap, still centred on the original x/y.
@@ -509,14 +437,14 @@ void WindowsEditor::waves(int id,float sx,float sy,float x,float y,const std::ve
                              24.f,15.f,L"",shapes[i]});
     }
 }
-void WindowsEditor::label(float x,float y,const wchar_t* name) {
+void DesktopEditor::label(float x,float y,const wchar_t* name) {
     controls_.push_back({Kind::Label,-1,0,x-40,y-8,80,16,name});
 }
-void WindowsEditor::badge(float x,float y,const wchar_t* name,int id) {
+void DesktopEditor::badge(float x,float y,const wchar_t* name,int id) {
     controls_.push_back({Kind::Badge,id,0,x-8,y-8,16,16,name});
 }
 
-void WindowsEditor::constructLayout() {
+void DesktopEditor::constructLayout() {
     // Layout transcribed from Shared/SynthPanelView.swift, using each section's
     // original local coordinate system. Every visible Synth1 parameter keeps
     // its original ID and is driven by OxoSynth2Hooks.
@@ -623,18 +551,18 @@ void WindowsEditor::constructLayout() {
 
 // SynthModel.applyTheme / setThemeColor: this instance wears it (session),
 // and it becomes the palette the next new instance starts with.
-void WindowsEditor::setTheme(const themes::Palette& palette,bool fromThemeEditor) {
+void DesktopEditor::setTheme(const themes::Palette& palette,bool fromThemeEditor) {
     theme_=palette;
     for(size_t i=0;i<colors_.size();++i) colors_[i]=rgb(int(theme_[i]));
     if(hooks_.setThemeText) hooks_.setThemeText(hooks_.ctx,themes::StateText(theme_).c_str());
     sharedThemes().remember(theme_);
-    if(!fromThemeEditor && themeEditor_) themeEditor_->Refresh();
+    if(!fromThemeEditor) refreshThemeEditor();
     staticDirty_=true;
     repaint();
 }
 // SynthModel.syncTheme: a session restore may bring another palette; one
 // without (older session) keeps the current one, now pinned to the session.
-void WindowsEditor::syncTheme() {
+void DesktopEditor::syncTheme() {
     const auto restored=hooks_.themeText ? themes::FromStateText(hooks_.themeText(hooks_.ctx)) : std::nullopt;
     if(!restored) {
         if(hooks_.setThemeText) hooks_.setThemeText(hooks_.ctx,themes::StateText(theme_).c_str());
@@ -643,13 +571,13 @@ void WindowsEditor::syncTheme() {
     if(*restored==theme_) return;
     theme_=*restored;
     for(size_t i=0;i<colors_.size();++i) colors_[i]=rgb(int(theme_[i]));
-    if(themeEditor_) themeEditor_->Refresh();
+    refreshThemeEditor();
     staticDirty_=true;
     repaint();
 }
 // LogoMenu's theme column: factory themes, then the user's (saved, then
 // theme files); the active one checked.
-void WindowsEditor::appendThemes(HMENU menu,std::vector<themes::Palette>& picks) const {
+void DesktopEditor::appendThemes(HMENU menu,std::vector<themes::Palette>& picks) const {
     std::vector<themes::Named> list=themes::Factory();
     const auto user=sharedThemes().store.UserThemes();
     const auto files=sharedThemes().fileThemes();
@@ -666,7 +594,7 @@ void WindowsEditor::appendThemes(HMENU menu,std::vector<themes::Palette>& picks)
         picks.push_back(list[i].palette);
     }
 }
-bool WindowsEditor::pickTheme(int command,const std::vector<themes::Palette>& picks) {
+bool DesktopEditor::pickTheme(int command,const std::vector<themes::Palette>& picks) {
     const int index=command-kThemeCommand;
     if(index<0 || index>=int(picks.size())) return false;
     setTheme(picks[size_t(index)]);
@@ -678,7 +606,7 @@ bool WindowsEditor::pickTheme(int command,const std::vector<themes::Palette>& pi
 // size: it is rendered once into a bitmap. Every paint blits it, then draws
 // the DYNAMIC parts (knob pointers, LEDs, values, waves, badges, LCD texts,
 // voice grid, hover, browser), only where the window is invalid.
-void WindowsEditor::text(Graphics& g,const std::wstring& s,float x,float y,float w,float h,float size,
+void DesktopEditor::text(Graphics& g,const std::wstring& s,float x,float y,float w,float h,float size,
                          Color c,bool,bool centred,bool mono) {
     if(s.empty() || w<=2.f || h<=1.f || !textCache_ || !visible(RectF(x,y,w,h))) return;
     // Font size is chosen by the control, NEVER reduced to fit the string.
@@ -695,35 +623,34 @@ void WindowsEditor::text(Graphics& g,const std::wstring& s,float x,float y,float
     g.Restore(saved);
 }
 
-bool WindowsEditor::visible(const RectF& r) const {
+bool DesktopEditor::visible(const RectF& r) const {
     return r.X<paintClip_.X+paintClip_.Width && paintClip_.X<r.X+r.Width &&
            r.Y<paintClip_.Y+paintClip_.Height && paintClip_.Y<r.Y+r.Height;
 }
-RectF WindowsEditor::bounds(const Control& c) {
+RectF DesktopEditor::bounds(const Control& c) {
     // Room for the LED / wave glow and the learn frame around a knob.
     return RectF(c.x-5.f,c.y-5.f,c.w+10.f,c.h+10.f);
 }
-void WindowsEditor::invalidate(const RectF& r) const {
+void DesktopEditor::invalidate(const RectF& r) const {
     if(!window_) return;
     const float sx=float(std::max(1,rect.getWidth()))/kDesignWidth;
     const float sy=float(std::max(1,rect.getHeight()))/kDesignHeight;
-    RECT device{LONG(std::floor(r.X*sx))-2,LONG(std::floor(r.Y*sy))-2,
-                LONG(std::ceil((r.X+r.Width)*sx))+2,LONG(std::ceil((r.Y+r.Height)*sy))+2};
-    InvalidateRect(window_,&device,FALSE);
+    invalidateDevice(int(std::floor(r.X*sx))-2,int(std::floor(r.Y*sy))-2,
+                     int(std::ceil((r.X+r.Width)*sx))+2,int(std::ceil((r.Y+r.Height)*sy))+2);
 }
 // Everything showing parameter `id`: its controls, the LCD readout when it
 // is the selected one, the voice grid for voice mode / polyphony.
-void WindowsEditor::invalidateParam(int id) const {
+void DesktopEditor::invalidateParam(int id) const {
     for(const auto& c:controls_) if(c.id==id) invalidate(bounds(c));
     if(id==38 || id==94) invalidate(kGridRect);
 }
-void WindowsEditor::valueChanged(int id) {
+void DesktopEditor::valueChanged(int id) {
     if(id>=0 && id<int(knownValues_.size())) knownValues_[size_t(id)]=value(id);
     invalidateParam(id);
     if(id==typeMenu_) invalidateTypeMenu();
 }
 // Hover is visual only: redraw the old and the new target, nothing else.
-void WindowsEditor::hoverChanged(int control,int chrome) {
+void DesktopEditor::hoverChanged(int control,int chrome) {
     if(control==hoveredControl_ && chrome==hoveredChrome_) return;
     for(const int c:{hoveredControl_,control})
         if(c>=0 && c<int(controls_.size())) invalidate(bounds(controls_[size_t(c)]));
@@ -738,7 +665,7 @@ void WindowsEditor::hoverChanged(int control,int chrome) {
 // learned, bright 2 px border = armed, learn-colour fill + CC badge =
 // learned. Click arms, double click unlearns; an armed control stays armed
 // (the next CC replaces).
-void WindowsEditor::buildLearnRects() {
+void DesktopEditor::buildLearnRects() {
     learnRects_.fill(RectF(0,0,0,0));
     learnOrder_.clear();
     for(const auto& c:controls_) {
@@ -762,7 +689,7 @@ void WindowsEditor::buildLearnRects() {
         return ra.Width*ra.Height>rb.Width*rb.Height;
     });
 }
-void WindowsEditor::setLearn(bool on) {
+void DesktopEditor::setLearn(bool on) {
     if(on && browser_) closeBrowser(); // SynthModel.toggleLearn
     midiLearn_=on;
     learnTarget_=learnPrevTarget_=-1;
@@ -772,16 +699,16 @@ void WindowsEditor::setLearn(bool on) {
     }
     repaint();
 }
-void WindowsEditor::learnSelect(int id) {
+void DesktopEditor::learnSelect(int id) {
     for(const int r:{learnTarget_,id}) if(r>=0 && r<kLearnCount) invalidate(learnRects_[size_t(r)]);
     learnTarget_=id;
 }
-int WindowsEditor::learnHit(float x,float y) const {
+int DesktopEditor::learnHit(float x,float y) const {
     for(auto it=learnOrder_.rbegin();it!=learnOrder_.rend();++it)
         if(learnRects_[size_t(*it)].Contains(x,y)) return *it;
     return -1;
 }
-void WindowsEditor::drawLearn(Graphics& g) {
+void DesktopEditor::drawLearn(Graphics& g) {
     static const Color learn=rgb(0x59A6E8); // Theme.learn
     for(const int id:learnOrder_) {
         const RectF& r=learnRects_[size_t(id)];
@@ -808,7 +735,7 @@ void WindowsEditor::drawLearn(Graphics& g) {
         }
     }
 }
-RectF WindowsEditor::chromeRect(int id) {
+RectF DesktopEditor::chromeRect(int id) {
     switch(id) {
     case 3: return {420,495,24,20};  case 4: return {449,495,24,20};
     case 5: return {492,488,50,26};  case 6: return {492,522,50,26};
@@ -820,7 +747,7 @@ RectF WindowsEditor::chromeRect(int id) {
     }
 }
 // The panel's own chrome buttons (< >, write, menu).
-void WindowsEditor::drawChrome(Graphics& g,int id,bool hovered) {
+void DesktopEditor::drawChrome(Graphics& g,int id,bool hovered) {
     const auto& p=colors_;
     const RectF r=chromeRect(id);
     const Color face=id==5 ? rgb(0xB81715) : p[kButton];
@@ -832,7 +759,7 @@ void WindowsEditor::drawChrome(Graphics& g,int id,bool hovered) {
     }
 }
 
-void WindowsEditor::drawControlStatic(Graphics& g,const Control& c) {
+void DesktopEditor::drawControlStatic(Graphics& g,const Control& c) {
     const auto& p=colors_;
     switch(c.kind) {
     case Kind::Label:
@@ -891,7 +818,7 @@ void WindowsEditor::drawControlStatic(Graphics& g,const Control& c) {
     }
 }
 
-void WindowsEditor::drawControlDynamic(Graphics& g,const Control& c,bool hovered) {
+void DesktopEditor::drawControlDynamic(Graphics& g,const Control& c,bool hovered) {
     const auto& p=colors_;
     switch(c.kind) {
     case Kind::Label:
@@ -1006,7 +933,7 @@ static void drawWaveShape(Graphics& g,Pen& pen,int shape,float x,float y,float w
         default:break;
     }
 }
-void WindowsEditor::drawWave(Graphics& g,const Control& c) {
+void DesktopEditor::drawWave(Graphics& g,const Control& c) {
     const auto& p=colors_;
     const bool on=(value(c.id)==c.value) || (c.id==42||c.id==47);
     // Original WaveCell: FLAT fill (no gradient), 2 px corner radius.
@@ -1040,7 +967,7 @@ void WindowsEditor::drawWave(Graphics& g,const Control& c) {
 // offered values only (chorus type 1 / 2 / 4).
 static constexpr int kLfoShapeOrder[]={0,1,5,2,3,4}; // SynthPanelView.lfoShapeOrder
 static constexpr int kLfoShapeIcon[]={6,3,5,7,8,0};  // value -> drawWaveShape's shape
-WindowsEditor::TypeMenu WindowsEditor::typeMenu() const {
+DesktopEditor::TypeMenu DesktopEditor::typeMenu() const {
     TypeMenu m;
     if(typeMenu_<0) return m;
     const auto c=std::find_if(controls_.begin(),controls_.end(),[&](const Control& k) {
@@ -1059,32 +986,32 @@ WindowsEditor::TypeMenu WindowsEditor::typeMenu() const {
     m.x=c->x;m.y=c->y+c->h+.5f;
     return m;
 }
-int WindowsEditor::typeMenuHit(float x,float y) const {
+int DesktopEditor::typeMenuHit(float x,float y) const {
     const TypeMenu m=typeMenu();
     if(m.values.empty() || x<m.x || y<m.y) return -1;
     const int column=int((x-m.x)/m.cellW), row=int((y-m.y)/m.cellH);
     const size_t k=size_t(column*m.rows+row);
     return column<m.columns && row<m.rows && k<m.values.size() ? m.values[k] : -1;
 }
-void WindowsEditor::invalidateTypeMenu() const {
+void DesktopEditor::invalidateTypeMenu() const {
     const TypeMenu m=typeMenu();
     if(m.values.empty()) return;
     const RectF r=m.rect();
     invalidate(RectF(r.X-8.f,r.Y-6.f,r.Width+16.f,r.Height+16.f)); // + the shadow
 }
-void WindowsEditor::openTypeMenu(int id) {
+void DesktopEditor::openTypeMenu(int id) {
     closeTypeMenu();
     typeMenu_=id;
     typeMenuHover_=-1;
     hoverChanged(-1,0);
     invalidateTypeMenu();
 }
-void WindowsEditor::closeTypeMenu() {
+void DesktopEditor::closeTypeMenu() {
     if(typeMenu_<0) return;
     invalidateTypeMenu();
     typeMenu_=typeMenuHover_=-1;
 }
-void WindowsEditor::drawTypeMenu(Graphics& g) {
+void DesktopEditor::drawTypeMenu(Graphics& g) {
     const TypeMenu m=typeMenu();
     if(m.values.empty()) return;
     const RectF r=m.rect();
@@ -1122,7 +1049,7 @@ void WindowsEditor::drawTypeMenu(Graphics& g) {
     g.DrawRectangle(&border,r.X+.5f,r.Y+.5f,r.Width-1.f,r.Height-1.f);
 }
 
-void WindowsEditor::drawStatic(Graphics& g) {
+void DesktopEditor::drawStatic(Graphics& g) {
     const auto& p=colors_;
     fill(g,p[kPanel],0,0,kDesignWidth,kDesignHeight);
     text(g,L"Synth2",8,5,94,23,20,p[kLabel],true);
@@ -1173,7 +1100,7 @@ void WindowsEditor::drawStatic(Graphics& g) {
     }
 }
 
-void WindowsEditor::drawDynamic(Graphics& g) {
+void DesktopEditor::drawDynamic(Graphics& g) {
     const auto& p=colors_;
     // The browser covers the whole panel area: only the bottom bar shows.
     for(size_t i=0;i<controls_.size();++i) {
@@ -1254,7 +1181,7 @@ void WindowsEditor::drawDynamic(Graphics& g) {
     }
 }
 
-void WindowsEditor::refreshBanks() {
+void DesktopEditor::refreshBanks() {
     // Even a request to obtain Json() is a blocking scan before revision 1.
     if(knownRevision_<=0 || !hooks_.libraryJSON) return;
     const char* data=hooks_.libraryJSON(hooks_.ctx);
@@ -1329,48 +1256,48 @@ void WindowsEditor::refreshBanks() {
     bankScroll_=std::clamp(bankScroll_,0,std::max(0,bankRowCount()-20));
     repaint();
 }
-int WindowsEditor::userBank() const {
+int DesktopEditor::userBank() const {
     for(size_t b=0;b<banks_.size();b++)
         if(!banks_[b].readOnly && banks_[b].name==s2::kUserBankName) return int(b);
     return -1;
 }
-bool WindowsEditor::offersNewUserBank() const {
+bool DesktopEditor::offersNewUserBank() const {
     return writing_ && !banks_.empty() && userBank()<0;
 }
-int WindowsEditor::bankRowCount() const {
+int DesktopEditor::bankRowCount() const {
     return int(bankOrder_.size())+(offersNewUserBank()?1:0);
 }
-int WindowsEditor::bankRowOf(int bank) const {
+int DesktopEditor::bankRowOf(int bank) const {
     if(bank==kNewUserBank) return offersNewUserBank() ? int(bankOrder_.size()) : -1;
     const auto it=std::find(bankOrder_.begin(),bankOrder_.end(),bank);
     return it==bankOrder_.end() ? -1 : int(it-bankOrder_.begin());
 }
-void WindowsEditor::scrollBankIntoView(int bank) {
+void DesktopEditor::scrollBankIntoView(int bank) {
     const int row=bankRowOf(bank);
     if(row>=0 && (row<bankScroll_ || row>=bankScroll_+20)) bankScroll_=std::max(0,row-19);
 }
-int WindowsEditor::bankBySource(const std::string& source) const {
+int DesktopEditor::bankBySource(const std::string& source) const {
     for(size_t i=0;i<banks_.size();i++) if(banks_[i].source==source) return int(i);
     return -1;
 }
 // The library changed under us (a hook rescanned): take the new list.
-void WindowsEditor::adoptLibrary() {
+void DesktopEditor::adoptLibrary() {
     if(hooks_.libraryRevision) knownRevision_=hooks_.libraryRevision(hooks_.ctx);
     refreshBanks();
 }
 // A bank's index in the hooks' list as of NOW, -1 = gone: menus, message
 // boxes and drags are modal loops in which the timer runs, and a scan
 // landing meanwhile renumbers the banks.
-int WindowsEditor::bankNow(const std::string& source) {
+int DesktopEditor::bankNow(const std::string& source) {
     if(hooks_.libraryRevision && hooks_.libraryRevision(hooks_.ctx)!=knownRevision_) adoptLibrary();
     return bankBySource(source);
 }
 // "NNN:name" of a slot (LCD messages, drag label).
-std::wstring WindowsEditor::slotText(int bank,int slot) const {
+std::wstring DesktopEditor::slotText(int bank,int slot) const {
     wchar_t number[8];std::swprintf(number,8,L"%03d:",slot+1);
     return number+toWide(banks_[size_t(bank)].slots[size_t(slot)].c_str());
 }
-void WindowsEditor::openBrowser(bool writing) {
+void DesktopEditor::openBrowser(bool writing) {
     browser_=true;writing_=writing;
     bankScroll_=slotScroll_=0;selectedSlot_=-1;
     // SynthModel.openBrowser: opening selects the loaded program's bank (the
@@ -1387,19 +1314,19 @@ void WindowsEditor::openBrowser(bool writing) {
     updateEditControl();
     repaint();
 }
-void WindowsEditor::closeBrowser() {
+void DesktopEditor::closeBrowser() {
     browser_=writing_=false;
     if(selectedBank_==kNewUserBank) selectedBank_=-1; // the next refresh selects the loaded bank
     updateEditControl();
     repaint();
 }
-int WindowsEditor::bankRowAt(float x,float y) const {
+int DesktopEditor::bankRowAt(float x,float y) const {
     if(x<7 || x>=196 || y<64 || y>469) return -1;
     const int visual=bankScroll_+int((y-64)/20);
     if(visual>=0 && visual<int(bankOrder_.size())) return bankOrder_[size_t(visual)];
     return visual==int(bankOrder_.size()) && offersNewUserBank() ? kNewUserBank : -1;
 }
-int WindowsEditor::slotAt(float x,float y) const {
+int DesktopEditor::slotAt(float x,float y) const {
     if(x<204 || x>=760 || y<64 || y>469) return -1;
     int count=-1;
     if(writing_ && selectedBank_==kNewUserBank) count=s2::kBankSlots;
@@ -1416,7 +1343,7 @@ int WindowsEditor::slotAt(float x,float y) const {
 // Export bank... / Show in Explorer [/ Delete bank...], a patch = Show in
 // Explorer [/ Delete]; nothing on read-only banks' deletes, nothing on
 // banks the write dialog cannot pick. Elsewhere in the browser: no menu.
-bool WindowsEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
+bool DesktopEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
     if(!browser_ || !kBrowserRect.Contains(x,y)) return false;
     enum {kExport=1,kReveal,kDeleteBank,kDelete};
     // What the menu acts on, taken NOW: the menu and the message boxes are
@@ -1431,7 +1358,7 @@ bool WindowsEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
         if(!(writing_ && b.readOnly)) {
             source=b.source;
             AppendMenuW(menu,MF_STRING,kExport,L"Export bank...");
-            AppendMenuW(menu,MF_STRING,kReveal,L"Show in Explorer");
+            AppendMenuW(menu,MF_STRING,kReveal,kShowInFiles);
             if(!b.readOnly) {
                 AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
                 AppendMenuW(menu,MF_STRING,kDeleteBank,L"Delete bank...");
@@ -1442,7 +1369,7 @@ bool WindowsEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
         if(b>=0 && b<int(banks_.size()) && !banks_[size_t(b)].slots[size_t(s)].empty() && hooks_.slotPath) {
             slotFile=hooks_.slotPath(hooks_.ctx,b,s);
             slotLabel=slotText(b,s);
-            AppendMenuW(menu,MF_STRING,kReveal,L"Show in Explorer");
+            AppendMenuW(menu,MF_STRING,kReveal,kShowInFiles);
             if(!banks_[size_t(b)].readOnly) {
                 AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
                 AppendMenuW(menu,MF_STRING,kDelete,L"Delete");
@@ -1479,13 +1406,13 @@ bool WindowsEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
         const std::wstring name=toWide(b.name.c_str()); // b may not survive the box's modal loop
         const std::wstring detail=L"\u201C"+name+L"\u201D ("+std::to_wstring(count)+
             (count==1?L" patch":L" patches")+(CanRecycle(std::filesystem::path(toWide(b.source.c_str())))
-                ? L") will be moved to the Recycle Bin."
-                : L") will be deleted: this drive has no Recycle Bin. This can't be undone.");
+                ? L") will be moved to the "+std::wstring(kTrash)+L"."
+                : L") will be deleted: this drive has no "+std::wstring(kTrash)+L". This can't be undone.");
         if(MessageBoxW(window_,detail.c_str(),L"Delete bank?",MB_YESNO|MB_ICONWARNING|MB_DEFBUTTON2)!=IDYES) break;
         bank=bankNow();
         const int result=bank>=0 && hooks_.deleteBank ? hooks_.deleteBank(hooks_.ctx,bank) : 0;
         if(result==0) MessageBoxW(window_,L"Unable to delete this bank.",L"Synth2",MB_ICONWARNING);
-        else flash(L"bank "+name+(result==1 ? L" moved to the Recycle Bin" : L" deleted"));
+        else flash(L"bank "+name+(result==1 ? L" moved to the "+std::wstring(kTrash) : std::wstring(L" deleted")));
         adopt();
         break;
     }
@@ -1495,7 +1422,7 @@ bool WindowsEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
         if(slotFile.empty()) break;
         const std::filesystem::path file(toWide(slotFile.c_str()));
         std::error_code ec;
-        if(MoveToTrash(file)) flash(slotLabel+L" moved to the Recycle Bin");
+        if(MoveToTrash(file)) flash(slotLabel+L" moved to the "+kTrash);
         else flash(std::filesystem::remove(file,ec) ? slotLabel+L" deleted" : std::wstring(L"delete failed"));
         if(hooks_.rescanLibrary) hooks_.rescanLibrary(hooks_.ctx);
         adopt();
@@ -1506,65 +1433,16 @@ bool WindowsEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
     repaint();
     return true;
 }
-// Finder.reveal: the containing folder opens with the item selected.
-void WindowsEditor::revealInExplorer(const std::string& utf8Path) const {
-    if(utf8Path.empty()) return;
-    std::wstring path=toWide(utf8Path.c_str());
-    std::replace(path.begin(),path.end(),L'/',L'\\');
-    const HRESULT com=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
-    if(auto item=ILCreateFromPathW(path.c_str())) {
-        SHOpenFolderAndSelectItems(item,0,nullptr,0);
-        ILFree(item);
-    }
-    if(SUCCEEDED(com)) CoUninitialize();
-}
-bool WindowsEditor::pickFolder(const wchar_t* title,std::wstring& folder) const {
-    BROWSEINFOW browse{};
-    browse.hwndOwner=window_;
-    browse.lpszTitle=title;
-    browse.ulFlags=BIF_RETURNONLYFSDIRS|BIF_NEWDIALOGSTYLE;
-    PIDLIST_ABSOLUTE item=SHBrowseForFolderW(&browse);
-    if(!item) return false;
-    wchar_t path[MAX_PATH]={};
-    const BOOL gotPath=SHGetPathFromIDListW(item,path);
-    CoTaskMemFree(item);
-    if(!gotPath) return false;
-    folder=path;
-    return true;
-}
 // The bank's number in the list ("NN:"), as the browser shows it.
-int WindowsEditor::displayBankNumber(int bank) const {
+int DesktopEditor::displayBankNumber(int bank) const {
     const int row=bankRowOf(bank);
     return row>=0 ? row : bank;
 }
-bool WindowsEditor::isVersionBox(float x,float y) const {
+bool DesktopEditor::isVersionBox(float x,float y) const {
     return x>=versionLeft_ && x<762.f && y>=2.f && y<31.f;
 }
 
-void WindowsEditor::updateEditControl() {
-    if(!window_) return;
-    if(!browser_ || !writing_) {
-        if(editName_) {DestroyWindow(editName_);editName_=nullptr;}
-        return;
-    }
-    const float sx=float(std::max(1,rect.getWidth()))/kDesignWidth;
-    const float sy=float(std::max(1,rect.getHeight()))/kDesignHeight;
-    if(!editName_) {
-        editName_=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",patchName().c_str(),
-            WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL|WS_TABSTOP,
-            int(300*sx),int(38*sy),int(200*sx),int(19*sy),
-            window_,nullptr,win::ModuleInstance(),nullptr);
-        if(editName_) {
-            SendMessageW(editName_,WM_SETFONT,WPARAM(GetStockObject(DEFAULT_GUI_FONT)),TRUE);
-            // Return / Esc in the field: write / cancel (nameFieldProc); the
-            // previous procedure is kept first, before any message comes.
-            SetWindowLongPtrW(editName_,GWLP_USERDATA,GetWindowLongPtrW(editName_,GWLP_WNDPROC));
-            SetWindowLongPtrW(editName_,GWLP_WNDPROC,LONG_PTR(&WindowsEditor::nameFieldProc));
-        }
-    } else MoveWindow(editName_,int(300*sx),int(38*sy),int(200*sx),int(19*sy),TRUE);
-}
-
-void WindowsEditor::drawBrowser(Graphics& g) {
+void DesktopEditor::drawBrowser(Graphics& g) {
     const auto& p=colors_;
     // As the Mac browser: selected rows = display text colour behind
     // display-bottom ink; other names in Theme.lcdText (empty slots at 30%).
@@ -1661,7 +1539,7 @@ void WindowsEditor::drawBrowser(Graphics& g) {
         text(g,L"Factory bank is read-only. Choose a user bank.",213,445,490,19,10,rgb(0xE2A3A3));
 }
 
-void WindowsEditor::setValueOnce(int id,int v) {
+void DesktopEditor::setValueOnce(int id,int v) {
     if(!hooks_.paramInfo || !hooks_.beginEdit || !hooks_.setValue || !hooks_.endEdit) return;
     int low=0,high=127,def=0;
     hooks_.paramInfo(hooks_.ctx,id,&low,&high,&def);
@@ -1673,7 +1551,7 @@ void WindowsEditor::setValueOnce(int id,int v) {
     valueChanged(id);
     if(changed) show(id);
 }
-void WindowsEditor::cycle(int id,int step) {
+void DesktopEditor::cycle(int id,int step) {
     int low=0,high=127,def=0;
     if(hooks_.paramInfo) hooks_.paramInfo(hooks_.ctx,id,&low,&high,&def);
     const int v=value(id)+step;
@@ -1681,7 +1559,7 @@ void WindowsEditor::cycle(int id,int step) {
 }
 // < > (SynthModel.step): the next / previous non-empty slot, rolling into
 // the neighbouring banks (list order) at the ends.
-void WindowsEditor::stepPatch(int direction) {
+void DesktopEditor::stepPatch(int direction) {
     if(banks_.empty()) refreshBanks();
     const int n=int(bankOrder_.size());
     if(n==0) return;
@@ -1704,15 +1582,14 @@ void WindowsEditor::stepPatch(int direction) {
 
 // The write dialog's Write (its button, Return / Enter, or the bottom bar's
 // write clicked again: PatchBrowserView.commitWrite).
-void WindowsEditor::commitWrite() {
+void DesktopEditor::commitWrite() {
     if(!browser_ || !writing_) return;
     const bool newUser=selectedBank_==kNewUserBank;
     if(selectedSlot_<0)return;
     if(!newUser && (selectedBank_<0 || selectedBank_>=int(banks_.size()) ||
                     banks_[size_t(selectedBank_)].readOnly))return;
     std::wstring name=patchName();
-    if(editName_) {const int n=GetWindowTextLengthW(editName_);name.resize(size_t(n)+1);
-        GetWindowTextW(editName_,name.data(),n+1);name.resize(size_t(n));}
+    if(const auto typed=nameFieldText()) name=*typed;
     // The proposed User bank is made now, by the write (newBank
     // rescans: its index is valid for the write right away).
     int bank=selectedBank_;
@@ -1739,7 +1616,7 @@ void WindowsEditor::commitWrite() {
 // neighbouring banks, as < >), left / right = the neighbouring column
 // (nearest patch), Return / Enter close; in the write dialog Return /
 // Enter write. With Ctrl / Alt / Win held: the host's. False = not ours.
-bool WindowsEditor::keyDown(UINT key) {
+bool DesktopEditor::keyDown(UINT key) {
     if((GetKeyState(VK_CONTROL)|GetKeyState(VK_MENU)|GetKeyState(VK_LWIN)|GetKeyState(VK_RWIN))&0x8000) return false;
     if(key==VK_ESCAPE) {
         if(typeMenu_>=0) closeTypeMenu();
@@ -1780,8 +1657,8 @@ bool WindowsEditor::keyDown(UINT key) {
     if(best>=0) loadSlot(selectedBank_,best);
     return true;
 }
-tresult PLUGIN_API WindowsEditor::onKeyDown(char16 key,int16 keyCode,int16 modifiers) {
-    (void)key;
+tresult PLUGIN_API DesktopEditor::onKeyDown(char16 key,int16 keyCode,int16 modifiers) {
+    if(nameFieldKey(key,keyCode,modifiers)) return kResultTrue; // typing in the write dialog's name
     if(modifiers&(kAlternateKey|kCommandKey|kControlKey)) return kResultFalse;
     UINT vk=0;
     switch(keyCode) {
@@ -1793,19 +1670,8 @@ tresult PLUGIN_API WindowsEditor::onKeyDown(char16 key,int16 keyCode,int16 modif
     }
     return keyDown(vk) ? kResultTrue : kResultFalse;
 }
-// The write dialog's name field: Return / Enter and Esc go to keyDown (by
-// a posted message: Esc / a write destroy this field), no beep.
-LRESULT CALLBACK WindowsEditor::nameFieldProc(HWND field,UINT msg,WPARAM wp,LPARAM lp) {
-    const auto previous=reinterpret_cast<WNDPROC>(GetWindowLongPtrW(field,GWLP_USERDATA));
-    if(msg==WM_KEYDOWN && (wp==VK_RETURN || wp==VK_ESCAPE)) {
-        PostMessageW(GetParent(field),kFieldKeyMessage,wp,0);
-        return 0;
-    }
-    if(msg==WM_CHAR && (wp==L'\r' || wp==0x1B)) return 0;
-    return CallWindowProcW(previous,field,msg,wp,lp);
-}
 // SynthModel.load: the browser follows the loaded patch.
-void WindowsEditor::loadSlot(int bank,int slot) {
+void DesktopEditor::loadSlot(int bank,int slot) {
     if(!hooks_.loadLibraryPatch || !hooks_.loadLibraryPatch(hooks_.ctx,bank,slot)) return;
     if(bank!=selectedBank_) slotScroll_=0;
     selectedBank_=bank;selectedSlot_=slot;
@@ -1815,7 +1681,7 @@ void WindowsEditor::loadSlot(int bank,int slot) {
     repaint();
 }
 
-void WindowsEditor::browserClick(float x,float y,bool doubleClick) {
+void DesktopEditor::browserClick(float x,float y,bool doubleClick) {
     if(y>=37 && y<=61) {
         if(x>=690 && x<760) {closeBrowser();return;}
         if(writing_) {
@@ -1823,7 +1689,7 @@ void WindowsEditor::browserClick(float x,float y,bool doubleClick) {
             if(x>=604 && x<680) {
                 // SynthModel.newBank: a uniquely named folder, then write into it.
                 std::wstring name=L"New Bank";
-                if(!hooks_.newBank || !win::AskText(window_,L"New bank",L"Bank name:",name)) return;
+                if(!hooks_.newBank || !askText(L"New bank",L"Bank name:",name)) return;
                 const int bank=hooks_.newBank(hooks_.ctx,toUtf8(name).c_str());
                 if(bank<0) {
                     MessageBoxW(window_,L"Cannot create that bank. Check the library folder is writable.",
@@ -1882,7 +1748,7 @@ void WindowsEditor::browserClick(float x,float y,bool doubleClick) {
 }
 // A click on a slot of the shown bank: the write dialog picks it, the
 // browser loads it (a double click also closes).
-void WindowsEditor::slotClick(int index,bool doubleClick) {
+void DesktopEditor::slotClick(int index,bool doubleClick) {
     selectedSlot_=index;
     const bool valid=selectedBank_>=0 && selectedBank_<int(banks_.size()) &&
         index<int(banks_[size_t(selectedBank_)].slots.size()) && !banks_[size_t(selectedBank_)].slots[size_t(index)].empty();
@@ -1899,7 +1765,7 @@ void WindowsEditor::slotClick(int index,bool doubleClick) {
 // into that bank's first free slot ("+" cursor; the browser stays on the
 // bank shown). Never into the read-only factory bank (its patches can be
 // copied out); no bank drop in the write dialog.
-void WindowsEditor::dragMove(float x,float y) {
+void DesktopEditor::dragMove(float x,float y) {
     if(!press_.active) return;
     if(!press_.dragging) {
         POINT now{};GetCursorPos(&now);
@@ -1927,7 +1793,7 @@ void WindowsEditor::dragMove(float x,float y) {
     invalidate(dragLabelRect());
     SetCursor(dragCursor());
 }
-void WindowsEditor::dragEnd(bool drop) {
+void DesktopEditor::dragEnd(bool drop) {
     if(!press_.active) return;
     const SlotPress press=press_;
     const int toSlot=dropSlot_, toBank=dropBank_;
@@ -1963,20 +1829,17 @@ void WindowsEditor::dragEnd(bool drop) {
     }
 }
 // The dragged patch's label follows the pointer (the mac's drag preview).
-RectF WindowsEditor::dragLabelRect() const {
+RectF DesktopEditor::dragLabelRect() const {
     return RectF(press_.x+10.f,press_.y+6.f,140.f,18.f);
 }
-HCURSOR WindowsEditor::dragCursor() {
-    if(dropBank_>=0) {
-        if(!copyCursor_) copyCursor_=makeCopyCursor();
-        if(copyCursor_) return copyCursor_;
-    }
+HCURSOR DesktopEditor::dragCursor() {
+    if(dropBank_>=0) return copyCursor();
     return LoadCursorW(nullptr,dropSlot_>=0 || dropBank_>=0 ? IDC_ARROW : IDC_NO);
 }
 
 // Hover uses the same design-space hit rectangles as clicks. It only
 // invalidates the window when the hovered target changes; idle redraws remain off.
-void WindowsEditor::updateHover(float x,float y) {
+void DesktopEditor::updateHover(float x,float y) {
     if(typeMenu_>=0) { // the open pick list covers the panel (the mac's overlay)
         const int v=typeMenuHit(x,y);
         if(v!=typeMenuHover_) {typeMenuHover_=v;invalidateTypeMenu();}
@@ -2023,7 +1886,7 @@ void WindowsEditor::updateHover(float x,float y) {
     hoverChanged(nextControl,nextChrome);
 }
 
-void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
+void DesktopEditor::mouseDown(float x,float y,bool doubleClick) {
     if(typeMenu_>=0) { // a pick, or a click anywhere else closes it
         const int id=typeMenu_, v=typeMenuHit(x,y);
         closeTypeMenu();
@@ -2120,7 +1983,7 @@ void WindowsEditor::mouseDown(float x,float y,bool doubleClick) {
         }
     }
 }
-void WindowsEditor::mouseMove(float x, float y) {
+void DesktopEditor::mouseMove(float x, float y) {
     updateHover(x,y);
     if(press_.active) {dragMove(x,y);return;}
     if(resizeDragging_) {
@@ -2140,7 +2003,7 @@ void WindowsEditor::mouseMove(float x, float y) {
     valueChanged(dragId_);
     show(dragId_);
 }
-void WindowsEditor::mouseUp() {
+void DesktopEditor::mouseUp() {
     if(press_.active) {dragEnd(true);return;}
     if(resizeDragging_) {
         resizeDragging_=false;
@@ -2160,7 +2023,7 @@ void WindowsEditor::mouseUp() {
 // kWheelSlots (the browser's lists), or -1 (nothing: buttons, the ctrl src
 // / assign menus, the vertical LED lists, an open pick list, learn mode).
 constexpr int kWheelBanks=-2, kWheelSlots=-3;
-int WindowsEditor::wheelTarget(float x,float y) const {
+int DesktopEditor::wheelTarget(float x,float y) const {
     // Scrolling over the master volume must change volume, not the browser.
     if(browser_ && x>=6.f && x<764.f && y>=34.f && y<478.f) return x<196 ? kWheelBanks : kWheelSlots;
     if(midiLearn_) return -1;
@@ -2180,7 +2043,7 @@ int WindowsEditor::wheelTarget(float x,float y) const {
     }
     return -1;
 }
-void WindowsEditor::wheel(int direction,float x,float y) {
+void DesktopEditor::wheel(int direction,float x,float y) {
     if(direction==0) return;
     // A RUN of wheel events (< kWheelRunMs apart) belongs to what was under
     // the cursor at its first one (the mac's WheelMonitor momentum owner):
@@ -2211,7 +2074,7 @@ void WindowsEditor::wheel(int direction,float x,float y) {
     }
 }
 
-void WindowsEditor::showImportDialog(int screenX,int screenY) {
+void DesktopEditor::showImportDialog(int screenX,int screenY) {
     HMENU menu=CreatePopupMenu();
     AppendMenuW(menu,MF_STRING,1,L"Import .sy1 or ZIP bank...");
     AppendMenuW(menu,MF_STRING,2,L"Import folder...");
@@ -2220,16 +2083,7 @@ void WindowsEditor::showImportDialog(int screenX,int screenY) {
     if(!selected || !hooks_.importItems)return;
     std::wstring path;
     if(selected==1) {
-        wchar_t file[4096]={};
-        OPENFILENAMEW dialog{};
-        dialog.lStructSize=sizeof(dialog);
-        dialog.hwndOwner=window_;
-        dialog.lpstrFile=file;
-        dialog.nMaxFile=4096;
-        dialog.lpstrFilter=L"Synth1 presets / ZIP banks (*.sy1;*.zip)\0*.sy1;*.zip\0All files (*.*)\0*.*\0";
-        dialog.Flags=OFN_EXPLORER|OFN_PATHMUSTEXIST|OFN_FILEMUSTEXIST;
-        if(!GetOpenFileNameW(&dialog))return;
-        path=file;
+        if(!chooseFile(FileDialog::ImportFile,path)) return;
     } else if(!pickFolder(L"Choose a folder containing Synth1 .sy1 presets",path)) return;
     const std::string bytes=toUtf8(path);
     const char* imported=hooks_.importItems(hooks_.ctx,bytes.c_str());
@@ -2243,18 +2097,9 @@ void WindowsEditor::showImportDialog(int screenX,int screenY) {
         flash(L"imported "+std::to_wstring(std::count(added.begin(),added.end(),'\n')+(added.back()=='\n'?0:1))+L" item(s)");
 }
 
-void WindowsEditor::showFileDialog(bool save) {
-    wchar_t filename[4096]={};
-    OPENFILENAMEW dialog{};
-    dialog.lStructSize=sizeof(dialog);
-    dialog.hwndOwner=window_;
-    dialog.lpstrFile=filename;
-    dialog.nMaxFile=4096;
-    dialog.lpstrFilter=L"Synth1 presets (*.sy1)\0*.sy1\0All files (*.*)\0*.*\0";
-    dialog.lpstrDefExt=L"sy1";
-    dialog.Flags=OFN_EXPLORER|OFN_PATHMUSTEXIST|(save?OFN_OVERWRITEPROMPT:OFN_FILEMUSTEXIST);
-    BOOL chosen=save?GetSaveFileNameW(&dialog):GetOpenFileNameW(&dialog);
-    if(!chosen)return;
+void DesktopEditor::showFileDialog(bool save) {
+    std::wstring filename;
+    if(!chooseFile(save?FileDialog::SavePatch:FileDialog::OpenPatch,filename))return;
     const std::string path=toUtf8(filename);
     if(save) {
         if(hooks_.savePatchFile && !hooks_.savePatchFile(hooks_.ctx,path.c_str()))
@@ -2267,28 +2112,21 @@ void WindowsEditor::showFileDialog(bool save) {
     }
 }
 
-void WindowsEditor::showThemeEditor() {
-    if(!themeEditor_)themeEditor_=std::make_unique<ThemeEditorWindow>();
-    themeEditor_->Show(window_,{[this]{return theme_;},
-                                [this](const themes::Palette& p){setTheme(p,true);},
-                                []()->themes::Store&{return sharedThemes().store;},
-                                []{return sharedThemes().fileThemes();}});
-}
 // UI sizes: commands 120.. (the logo menu, menu > Select size).
 static constexpr int kSizeLevels[]={75,100,125,150,200,250,300};
 constexpr int kSizeCommand=120,kSizeCount=int(sizeof(kSizeLevels)/sizeof(kSizeLevels[0]));
-void WindowsEditor::appendSizes(HMENU menu,const wchar_t* suffix) const {
+void DesktopEditor::appendSizes(HMENU menu,const wchar_t* suffix) const {
     const int current=int(std::lround(100.f*float(rect.getWidth())/kDesignWidth));
     for(int i=0;i<kSizeCount;i++)
         AppendMenuW(menu,MF_STRING|(current==kSizeLevels[i] ? MF_CHECKED : 0),UINT_PTR(kSizeCommand+i),
                     (std::to_wstring(kSizeLevels[i])+L"%"+suffix).c_str());
 }
-bool WindowsEditor::pickSize(int command) {
+bool DesktopEditor::pickSize(int command) {
     if(command<kSizeCommand || command>=kSizeCommand+kSizeCount) return false;
     requestWidth(int(std::lround(kDesignWidth*kSizeLevels[command-kSizeCommand]/100.f)));
     return true;
 }
-void WindowsEditor::showThemeMenu(int x,int y) {
+void DesktopEditor::showThemeMenu(int x,int y) {
     HMENU m=CreatePopupMenu();
     appendSizes(m,L" size");
     AppendMenuW(m,MF_SEPARATOR,0,nullptr);
@@ -2298,7 +2136,7 @@ void WindowsEditor::showThemeMenu(int x,int y) {
     DestroyMenu(m);
     if(!pickTheme(choice,picks)) pickSize(choice);
 }
-void WindowsEditor::requestWidth(int width) {
+void DesktopEditor::requestWidth(int width) {
     if(!plugFrame)return;
     width=std::clamp(width,kMinWidth,kMaxWidth);
     ViewRect r(0,0,width,0);
@@ -2307,7 +2145,7 @@ void WindowsEditor::requestWidth(int width) {
     if(plugFrame->resizeView(this,&r)!=kResultOk)
         requestedZoomWidth_=-1;
 }
-void WindowsEditor::showMainMenu(int x,int y) {
+void DesktopEditor::showMainMenu(int x,int y) {
     HMENU menu=CreatePopupMenu();
     AppendMenuW(menu,MF_STRING,10,L"Initialize patch");
     AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
@@ -2358,15 +2196,15 @@ void WindowsEditor::showMainMenu(int x,int y) {
 // releases.json comes in the background, then a message box answers (the
 // mac's UpdateDialog texts, EditorCore/UpdateCheck.hpp). Closing the
 // editor cancels it.
-void WindowsEditor::checkForUpdates() {
+void DesktopEditor::checkForUpdates() {
     const std::string site=OXO_VENDOR_URL;
-    if(!window_ || !updateCheck_.Start(toWide((site+"/releases.json").c_str()),window_,kUpdateMessage)) return;
+    if(!window_ || !startUpdateCheck(site+"/releases.json")) return;
     flash(toWide(update::Message({update::Kind::Checking,{},{},{}},update::SiteName(site),"").c_str()),30000);
 }
-void WindowsEditor::updateArrived() {
+void DesktopEditor::updateArrived() {
     const std::string site=OXO_VENDOR_URL;
     const std::optional<std::string> body=updateCheck_.Take();
-    const update::State state=body ? update::Evaluate(*body,OXO_UPDATE_PRODUCT,"win",OXO_VERSION,
+    const update::State state=body ? update::Evaluate(*body,OXO_UPDATE_PRODUCT,kUpdatePlatform,OXO_VERSION,
                                                        std::atoi(OXO_BUILD_NUMBER),site)
                                    : update::State{};
     flash({});
@@ -2380,7 +2218,7 @@ void WindowsEditor::updateArrived() {
                     MB_OK|(state.kind==update::Kind::Latest?MB_ICONINFORMATION:MB_ICONWARNING));
     }
 }
-void WindowsEditor::showParameterMenu(int id,int x,int y) {
+void DesktopEditor::showParameterMenu(int id,int x,int y) {
     HMENU menu=CreatePopupMenu();
     std::vector<int> values;
     const int current=value(id);
@@ -2412,7 +2250,7 @@ void WindowsEditor::showParameterMenu(int id,int x,int y) {
     DestroyMenu(menu); // and its sub-menus
     if(selected>=2000&&selected<2000+int(values.size()))setValueOnce(id,values[size_t(selected-2000)]);
 }
-void WindowsEditor::tick() {
+void DesktopEditor::tick() {
     sharedThemes().flush(false);
     savePendingSize(false);
     if(flashUntil_ && GetTickCount64()>=flashUntil_) flash({});
@@ -2458,165 +2296,4 @@ void WindowsEditor::tick() {
     }
 }
 
-bool WindowsEditor::ensureBuffers(HDC screen,int width,int height) {
-    if(static_.dc && back_.dc && width==bufferWidth_ && height==bufferHeight_) return true;
-    releaseBuffers();
-    for(Buffer* b:{&static_,&back_}) {
-        b->dc=CreateCompatibleDC(screen);
-        b->bitmap=b->dc ? CreateCompatibleBitmap(screen,width,height) : nullptr;
-        b->previous=b->bitmap ? SelectObject(b->dc,b->bitmap) : nullptr;
-        if(!b->previous || b->previous==HGDI_ERROR) {releaseBuffers();return false;}
-    }
-    bufferWidth_=width;bufferHeight_=height;
-    staticDirty_=true;
-    return true;
-}
-void WindowsEditor::releaseBuffers() {
-    for(Buffer* b:{&static_,&back_}) {
-        if(b->dc && b->previous && b->previous!=HGDI_ERROR) SelectObject(b->dc,b->previous);
-        if(b->bitmap) DeleteObject(b->bitmap);
-        if(b->dc) DeleteDC(b->dc);
-        *b={};
-    }
-    bufferWidth_=bufferHeight_=0;
-}
-void WindowsEditor::paint(HDC screen,const RECT& dirty) {
-    RECT client{};GetClientRect(window_,&client);
-    const int width=client.right-client.left, height=client.bottom-client.top;
-    if(width<=0 || height<=0) return;
-    const float sx=float(width)/kDesignWidth, sy=float(height)/kDesignHeight;
-    auto prepare=[&](Graphics& g) {
-        g.SetSmoothingMode(SmoothingModeAntiAlias);
-        g.SetTextRenderingHint(TextRenderingHintAntiAlias);
-        g.SetPixelOffsetMode(PixelOffsetModeHighQuality);
-        g.ScaleTransform(sx,sy);
-    };
-    const RectF full(0,0,kDesignWidth,kDesignHeight);
-    if(!ensureBuffers(screen,width,height)) { // no bitmaps: everything, straight to the screen
-        Graphics g(screen);
-        prepare(g);
-        paintClip_=full;
-        drawStatic(g);
-        drawDynamic(g);
-        return;
-    }
-    if(staticDirty_) {
-        Graphics g(static_.dc);
-        prepare(g);
-        paintClip_=full;
-        drawStatic(g);
-        staticDirty_=false;
-    }
-    const int x=dirty.left, y=dirty.top, w=dirty.right-dirty.left, h=dirty.bottom-dirty.top;
-    BitBlt(back_.dc,x,y,w,h,static_.dc,x,y,SRCCOPY);
-    {
-        Graphics g(back_.dc);
-        g.SetClip(Rect(x,y,w,h)); // device pixels: before the scale
-        prepare(g);
-        paintClip_=RectF(float(x)/sx-1.f,float(y)/sy-1.f,float(w)/sx+2.f,float(h)/sy+2.f);
-        drawDynamic(g);
-    }
-    paintClip_=full;
-    BitBlt(screen,x,y,w,h,back_.dc,x,y,SRCCOPY);
-}
-
-LRESULT CALLBACK WindowsEditor::wndProc(HWND window,UINT msg,WPARAM wp,LPARAM lp) {
-    WindowsEditor* editor=reinterpret_cast<WindowsEditor*>(GetWindowLongPtrW(window,GWLP_USERDATA));
-    if(msg==WM_NCCREATE) {
-        auto* create=reinterpret_cast<CREATESTRUCTW*>(lp);
-        editor=static_cast<WindowsEditor*>(create->lpCreateParams);
-        if(!editor) return FALSE;
-        editor->window_=window; // WM_CREATE arrives before CreateWindowExW returns.
-        SetWindowLongPtrW(window,GWLP_USERDATA,LONG_PTR(editor));
-        return TRUE;
-    }
-    return editor?editor->windowMessage(msg,wp,lp):DefWindowProcW(window,msg,wp,lp);
-}
-LRESULT WindowsEditor::windowMessage(UINT msg,WPARAM wp,LPARAM lp) {
-    const float sx=float(std::max(1,rect.getWidth()))/kDesignWidth;
-    const float sy=float(std::max(1,rect.getHeight()))/kDesignHeight;
-    switch(msg) {
-    case WM_ERASEBKGND:return 1;
-    // Everything scales with the window: a size change redraws all of it
-    // (Windows itself would only invalidate the newly exposed strip).
-    case WM_SIZE:InvalidateRect(window_,nullptr,FALSE);return 0;
-    case WM_SETCURSOR: {
-        if(press_.active && press_.dragging) {SetCursor(dragCursor());return TRUE;}
-        if(LOWORD(lp)==HTCLIENT) {
-            POINT pos{};GetCursorPos(&pos);ScreenToClient(window_,&pos);
-            const float dx=float(pos.x)/sx, dy=float(pos.y)/sy;
-            if(hoveredChrome_!=0 || hoveredControl_>=0 || isVersionBox(dx,dy) ||
-               (midiLearn_ && !browser_ && learnHit(dx,dy)>=0)) {
-                SetCursor(LoadCursorW(nullptr,IDC_HAND));return TRUE;
-            }
-            RECT client{};GetClientRect(window_,&client);
-            const int gripW=std::max(8,int(std::lround(22.f*sx)));
-            const int gripH=std::max(8,int(std::lround(22.f*sy)));
-            if(pos.x>=client.right-gripW && pos.y>=client.bottom-gripH) {
-                SetCursor(LoadCursorW(nullptr,IDC_SIZENWSE));return TRUE;
-            }
-        }
-        return DefWindowProcW(window_,msg,wp,lp);
-    }
-    case WM_PAINT: {
-        PAINTSTRUCT ps{};
-        if(HDC screen=BeginPaint(window_,&ps)) paint(screen,ps.rcPaint);
-        EndPaint(window_,&ps);
-        return 0;
-    }
-    case WM_TIMER:if(wp==1)tick();return 0;
-    case kUpdateMessage:updateArrived();return 0;
-    case WM_LBUTTONDOWN:
-        SetFocus(window_);
-        mouseDown(float(GET_X_LPARAM(lp))/sx,float(GET_Y_LPARAM(lp))/sy,false);return 0;
-    case WM_LBUTTONDBLCLK:
-        SetFocus(window_);
-        mouseDown(float(GET_X_LPARAM(lp))/sx,float(GET_Y_LPARAM(lp))/sy,true);return 0;
-    case WM_MOUSEMOVE:
-        if(!trackingMouseLeave_) {
-            TRACKMOUSEEVENT tm{};
-            tm.cbSize=sizeof(tm);
-            tm.dwFlags=TME_LEAVE;
-            tm.hwndTrack=window_;
-            trackingMouseLeave_=TrackMouseEvent(&tm)!=FALSE;
-        }
-        mouseMove(float(GET_X_LPARAM(lp))/sx,float(GET_Y_LPARAM(lp))/sy);return 0;
-    case WM_MOUSELEAVE:
-        trackingMouseLeave_=false;
-        hoverChanged(-1,0);
-        if(typeMenuHover_>=0) {typeMenuHover_=-1;invalidateTypeMenu();}
-        return 0;
-    case WM_LBUTTONUP:mouseUp();return 0;
-    case WM_CAPTURECHANGED: // lost the capture (another window, a menu): a drag is cancelled
-        if(press_.active) dragEnd(false); else mouseUp();
-        return 0;
-    case WM_MOUSEWHEEL: {
-        POINT screen{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};
-        ScreenToClient(window_,&screen);
-        // Preserve the wheel magnitude for fast browser navigation.
-        // GUI knobs still change by just one step inside wheel().
-        const int delta=GET_WHEEL_DELTA_WPARAM(wp);
-        if(delta!=0) {
-            const int rows=std::max(1,(std::abs(delta)*8+WHEEL_DELTA/2)/WHEEL_DELTA);
-            wheel(delta>0?rows:-rows,float(screen.x)/sx,float(screen.y)/sy);
-        }
-        return 0;
-    }
-    case WM_GETDLGCODE: return DLGC_WANTALLKEYS|DLGC_WANTARROWS; // hosts with dialog-style windows
-    case WM_KEYDOWN:
-        if(keyDown(UINT(wp))) return 0;
-        return DefWindowProcW(window_,msg,wp,lp);
-    case kFieldKeyMessage:keyDown(UINT(wp));return 0;
-    case WM_CONTEXTMENU: {
-        if(typeMenu_>=0) {closeTypeMenu();return 0;} // like a click outside it
-        POINT p{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};
-        if(p.x!=-1 || p.y!=-1) { // -1, -1 = from the keyboard
-            POINT client=p;ScreenToClient(window_,&client);
-            if(showLibraryMenu(float(client.x)/sx,float(client.y)/sy,p.x,p.y)) return 0;
-        }
-        showMainMenu(p.x,p.y);return 0;
-    }
-    default:return DefWindowProcW(window_,msg,wp,lp);
-    }
-}
 } // namespace oxo

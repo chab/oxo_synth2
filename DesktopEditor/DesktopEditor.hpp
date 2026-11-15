@@ -2,40 +2,61 @@
 
 #include "public.sdk/source/common/pluginview.h"
 #include "EditorCore/OxoSynth2Bridge.h"
-#include <windows.h>
-#include <objidl.h>
-#include <gdiplus.h>
 #include <cstdint>
 #include <string>
 #include <vector>
 #include <array>
 #include <memory>
+#include <optional>
 #include <filesystem>
 #include "EditorCore/Themes.hpp"
+#if defined(_WIN32)
+#include <windows.h>
+#include <objidl.h>
+#include <gdiplus.h>
 #include "WindowsModule.hpp"
 #include "WindowsHttp.hpp"
+#else
+// GDI+ on cairo, and the Win32 names this editor calls (no X11 here).
+#include "LinuxPlatform.hpp"
+struct _XDisplay; // Xlib's Display
+#endif
 
 namespace oxo {
 class OxoSynth2Controller;
 class ThemeEditorWindow;
 class TextCache;
+#if !defined(_WIN32)
+class LinuxRunLoopHandler;
+#endif
 
-// Windows-only implementation of the original 770x560 SwiftUI design canvas.
-// It uses the existing SynthEditorCore bridge; the DSP and parameter layout
-// belong exclusively to the original Synth2 project.
-class WindowsEditor final : public Steinberg::CPluginView {
+// The VST3 editor of the Windows and Linux builds (the mac's is SwiftUI):
+// the original 770x560 SwiftUI design canvas redrawn with GDI+ (on Linux,
+// GDI+ on cairo: Linux_Build/Source/LinuxGdiplus.hpp). It uses the existing
+// SynthEditorCore bridge; the DSP and parameter layout belong exclusively
+// to the original Synth2 project.
+//   DesktopEditor.cpp  the panel: layout, drawing, browser, menus, input
+//   Windows_Build/Source/DesktopEditor.cpp  its Win32 window
+//   Linux_Build/Source/LinuxEditor.cpp      its X11 window
+// Each platform file defines the "platform" members below.
+class DesktopEditor final : public Steinberg::CPluginView {
 public:
-    explicit WindowsEditor(OxoSynth2Controller* controller);
-    ~WindowsEditor() override;
+    explicit DesktopEditor(OxoSynth2Controller* controller);
+    ~DesktopEditor() override;
     Steinberg::tresult PLUGIN_API isPlatformTypeSupported(Steinberg::FIDString type) override;
     Steinberg::tresult PLUGIN_API canResize() override { return Steinberg::kResultTrue; }
     Steinberg::tresult PLUGIN_API checkSizeConstraint(Steinberg::ViewRect* r) override;
     Steinberg::tresult PLUGIN_API onSize(Steinberg::ViewRect* r) override;
     void attachedToParent() override;
     void removedFromParent() override;
-    // Keys from hosts that deliver them to the view (else WM_KEYDOWN).
+    // Keys from hosts that deliver them to the view (else the window's own).
     Steinberg::tresult PLUGIN_API onKeyDown(Steinberg::char16 key, Steinberg::int16 keyCode,
                                             Steinberg::int16 modifiers) override;
+#if !defined(_WIN32)
+    // The host's Linux::IRunLoop: X events, the 50 ms timer.
+    void onEvents();
+    void onTimer();
+#endif
 
 private:
     enum class Kind { Knob, Toggle, Cycle, Display, Wave, Radio, Badge, Label };
@@ -95,14 +116,10 @@ private:
     void drawTypeMenu(Gdiplus::Graphics& g);
     void drawChrome(Gdiplus::Graphics& g, int id, bool hovered);
     void drawBrowser(Gdiplus::Graphics& g);
-    void paint(HDC screen, const RECT& dirty);
-    bool ensureBuffers(HDC screen, int width, int height);
-    void releaseBuffers();
     void showMainMenu(int x, int y);
     void showThemeMenu(int x, int y);
-    void showThemeEditor();
     void checkForUpdates();
-    void updateArrived(); // kUpdateMessage: releases.json came (or not)
+    void updateArrived(); // releases.json came (or not)
     void appendThemes(HMENU menu, std::vector<themes::Palette>& picks) const;
     void appendSizes(HMENU menu, const wchar_t* suffix) const;
     bool pickSize(int command);
@@ -140,8 +157,6 @@ private:
     void commitWrite();
     bool keyDown(UINT key); // true = handled
     void loadSlot(int bank, int slot);
-    static LRESULT CALLBACK nameFieldProc(HWND field, UINT message, WPARAM w, LPARAM l);
-    static constexpr UINT kFieldKeyMessage = WM_APP + 2; // name field: Return / Esc (wParam)
     void dragMove(float x, float y);
     void dragEnd(bool drop); // false = cancelled
     Gdiplus::RectF dragLabelRect() const;
@@ -151,21 +166,13 @@ private:
     int bankRowAt(float x, float y) const; // bank (or kNewUserBank) under a point, -1 = none
     int slotAt(float x, float y) const;    // slot of the shown bank under a point, -1 = none
     bool showLibraryMenu(float x, float y, int screenX, int screenY); // false = not over a row
-    void revealInExplorer(const std::string& utf8Path) const;
-    bool pickFolder(const wchar_t* title, std::wstring& folder) const;
     void buildLearnRects();
     void setLearn(bool on);
     void learnSelect(int id);
     int learnHit(float x, float y) const; // hotspot under a point, -1 = none
     void drawLearn(Gdiplus::Graphics& g);
     void requestWidth(int width);
-    void updateEditControl();
-    void layoutChild();
     void tick();
-    LRESULT windowMessage(UINT message, WPARAM w, LPARAM l);
-    static LRESULT CALLBACK wndProc(HWND window, UINT message, WPARAM w, LPARAM l);
-    static win::WindowClass& windowClass();
-    void repaint() const;
     int value(int id) const;
     std::wstring formatted(int id) const;
     std::wstring patchName() const;
@@ -173,23 +180,50 @@ private:
     // SynthModel.flash: a timed message on LCD line 2 (instead of the
     // bank); an empty text clears it.
     void flash(const std::wstring& text, unsigned milliseconds = 1500);
+    static themes::Store& themeStore();                   // the user themes (themes.json)
+    static std::vector<themes::Named> themeFiles();       // the Themes folder's
+
+    // Design canvas and UI sizes.
+    static constexpr float kDesignWidth = 770.f, kDesignHeight = 560.f;
+    static constexpr int kMinWidth = 578;  // 75% of the 770-pixel design width, rounded up
+    static constexpr int kMaxWidth = 2310; // 300% of the design width
+    static constexpr uint64_t kSizeSettleMs = 1000, kSizeSaveDelayMs = 400; // host resizes (sizeSettledAt_)
+
+    // ---- platform (Windows_Build/Source/DesktopEditor.cpp, Linux_Build/Source/LinuxEditor.cpp) ----
     static std::wstring toWide(const char* utf8);
     static std::string toUtf8(const std::wstring& wide);
+    bool startGraphics();      // constructor: false = no TextCache (nothing drawn)
+    void endGraphics();        // destructor, after the TextCache
+    bool openWindow();         // attachedToParent: the child window and the 50 ms timer
+    void closeWindow();        // removedFromParent: window, timer, buffers, name field
+    void layoutChild();        // after a resize
+    void repaint() const;      // everything
+    void invalidateDevice(int left, int top, int right, int bottom) const; // device pixels
+    void updateEditControl();  // the write dialog's name field follows browser_ / writing_
+    std::optional<std::wstring> nameFieldText() const; // nullopt = no field
+    // Keys the host delivers (onKeyDown) that belong to the name field: true = taken.
+    bool nameFieldKey(Steinberg::char16 key, Steinberg::int16 keyCode, Steinberg::int16 modifiers);
+    HCURSOR copyCursor();      // the drag cursor over a bank row: an arrow with a "+"
+    bool askText(const wchar_t* title, const wchar_t* label, std::wstring& text);
+    enum class FileDialog { ImportFile, OpenPatch, SavePatch };
+    bool chooseFile(FileDialog kind, std::wstring& path); // false = cancelled
+    void revealInExplorer(const std::string& utf8Path) const;
+    bool pickFolder(const wchar_t* title, std::wstring& folder) const;
+    bool startUpdateCheck(const std::string& url); // false = one is running
+    static const char* const kUpdatePlatform;     // its key in releases.json: "win" / "linux"
+    void showThemeEditor();
+    void refreshThemeEditor(); // the palette changed elsewhere
+    void closeThemeEditor();
+    struct ThemeEditorDeleter { void operator()(ThemeEditorWindow* w) const; }; // in the platform file
 
     OxoSynth2Controller* controller_ = nullptr;
     OxoSynth2Hooks hooks_{};
-    HWND window_ = nullptr;
-    HWND editName_ = nullptr;
-    ULONG_PTR gdiplusToken_ = 0;
+    HWND window_{}; // the editor's child window (Win32 / X11)
     std::vector<Control> controls_;
     themes::Palette theme_ = themes::Synth2(); // this instance's palette (kept in the session)
     std::array<Gdiplus::Color, themes::kSlotCount> colors_; // theme_ as GDI+ colours
-    std::unique_ptr<ThemeEditorWindow> themeEditor_;
-    std::unique_ptr<TextCache> textCache_; // GDI+ objects: lives between GdiplusStartup / Shutdown
-    // Persistent bitmaps, recreated only on resize: the static layer and the back buffer.
-    struct Buffer { HDC dc = nullptr; HBITMAP bitmap = nullptr; HGDIOBJ previous = nullptr; };
-    Buffer static_, back_;
-    int bufferWidth_ = 0, bufferHeight_ = 0;
+    std::unique_ptr<ThemeEditorWindow, ThemeEditorDeleter> themeEditor_;
+    std::unique_ptr<TextCache> textCache_; // GDI+ objects: lives between startGraphics / endGraphics
     bool staticDirty_ = true;
     Gdiplus::RectF paintClip_{0, 0, 770, 560}; // design-space area being painted
     std::array<int, 100> knownValues_{};        // params 0..99 as last drawn (host automation polling)
@@ -208,8 +242,11 @@ private:
     int dragId_ = -1;
     float dragStartY_ = 0;
     int dragStartValue_ = 0;
-    static constexpr UINT kUpdateMessage = WM_APP + 1;
+#if defined(_WIN32)
     win::HttpGet updateCheck_; // "Check for updates": releases.json in the background
+#else
+    lx::HttpGet updateCheck_;
+#endif
     std::wstring flashText_;
     ULONGLONG flashUntil_ = 0; // GetTickCount64 deadline, 0 = no flash
     // Write dialog: the proposed "User" bank the library lacks (a last row;
@@ -227,7 +264,6 @@ private:
     uint64_t knownVoiceStates_ = 0;
     int hoveredControl_ = -1;
     int hoveredChrome_ = 0;
-    bool trackingMouseLeave_ = false;
     bool resizeDragging_ = false;
     POINT resizeStartScreen_{};
     int resizeStartWidth_ = 0;
@@ -255,8 +291,67 @@ private:
     SlotPress press_;
     int dropSlot_ = -1, dropBank_ = -1; // the drag's move / copy target
     int dragFullBank_ = -1;             // a full bank under the drag (refused, said once)
-    HCURSOR copyCursor_ = nullptr;      // made on first use
     mutable int loadedBankForPaint_ = -1;
     mutable int loadedSlotForPaint_ = -1;
+
+#if defined(_WIN32)
+    // ---- Windows only (DesktopEditor.cpp) ----
+    void paint(HDC screen, const RECT& dirty);
+    bool ensureBuffers(HDC screen, int width, int height);
+    void releaseBuffers();
+    LRESULT windowMessage(UINT message, WPARAM w, LPARAM l);
+    static LRESULT CALLBACK wndProc(HWND window, UINT message, WPARAM w, LPARAM l);
+    static win::WindowClass& windowClass();
+    static LRESULT CALLBACK nameFieldProc(HWND field, UINT message, WPARAM w, LPARAM l);
+    static constexpr UINT kUpdateMessage = WM_APP + 1;
+    static constexpr UINT kFieldKeyMessage = WM_APP + 2; // name field: Return / Esc (wParam)
+    HWND editName_ = nullptr;
+    ULONG_PTR gdiplusToken_ = 0;
+    // Persistent bitmaps, recreated only on resize: the static layer and the back buffer.
+    struct Buffer { HDC dc = nullptr; HBITMAP bitmap = nullptr; HGDIOBJ previous = nullptr; };
+    Buffer static_, back_;
+    int bufferWidth_ = 0, bufferHeight_ = 0;
+    bool trackingMouseLeave_ = false;
+    HCURSOR copyCursor_ = nullptr; // made on first use
+#else
+    // ---- Linux only (LinuxEditor.cpp) ----
+    // The Win32 calls that need this editor's window (LinuxPlatform.hpp has the others).
+    UINT_PTR TrackPopupMenu(HMENU menu, UINT flags, int x, int y, int, HWND, void*);
+    int MessageBoxW(HWND, const std::wstring& text, const std::wstring& title, UINT flags);
+    void GetCursorPos(POINT* p) const { p->x = rootX_; p->y = rootY_; }
+    short GetKeyState(UINT key) const;
+    void SetCursor(HCURSOR c);
+    void SetCapture(HWND) {} // X: the pointer stays ours while a button is held
+    void ReleaseCapture() {}
+    HWND GetCapture() const { return window_; }
+
+    void paint();
+    void handleEvent(void* xevent, bool input); // an XEvent*; input = false while a menu / dialog is modal
+    void pumpModal();                           // a menu / dialog is open: paint, tick
+    void drawNameField(Gdiplus::Graphics& g);
+    bool nameFieldEdit(unsigned long keysym, const std::string& utf8, bool ctrl); // true = taken
+    ::_XDisplay* display_ = nullptr;
+    Steinberg::Linux::IRunLoop* runLoop_ = nullptr;
+    LinuxRunLoopHandler* handler_ = nullptr;
+    cairo_region_t* dirty_ = nullptr;     // device pixels waiting for a paint
+    cairo_surface_t* windowSurface_ = nullptr;
+    cairo_surface_t* static_ = nullptr;   // the static layer
+    cairo_surface_t* back_ = nullptr;     // the back buffer
+    int bufferWidth_ = 0, bufferHeight_ = 0;
+    std::array<unsigned long, 5> cursors_{};    // X cursors, by HCURSOR
+    HCURSOR cursorShown_ = IDC_ARROW;
+    long rootX_ = 0, rootY_ = 0;                // the pointer, screen pixels (GetCursorPos)
+    unsigned modifiers_ = 0;                    // X modifier state of the last input event
+    unsigned long lastClickTime_ = 0;
+    int lastClickX_ = -100, lastClickY_ = -100;
+    bool lastWasDouble_ = false;
+    int modalDepth_ = 0;
+    // The write dialog's name field (Windows: a native EDIT control), drawn in the panel.
+    bool nameFieldOpen_ = false;
+    std::wstring nameText_;
+    size_t nameCaret_ = 0;
+    bool nameAllSelected_ = false;
+    mutable lx::Dialogs dialogs_;
+#endif
 };
 }

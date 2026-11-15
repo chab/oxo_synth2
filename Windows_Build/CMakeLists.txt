@@ -75,6 +75,7 @@ smtg_add_vst3plugin(OxoSynth2VST3
         "${OXO_SRC}/OxoSynth2Entry.cpp"
         "${OXO_ROOT}/DesktopEditor/DesktopEditor.hpp"
         "${OXO_ROOT}/DesktopEditor/DesktopEditor.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Source/WindowsEditor.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Source/WindowsTrash.cpp"
         "${OXO_ROOT}/EditorCore/State.hpp"
         "${OXO_ROOT}/EditorCore/Storage.hpp"

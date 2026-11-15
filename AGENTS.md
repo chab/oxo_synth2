@@ -151,10 +151,12 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   gitignored.
 - `Windows_Build/` — Windows x64 VST3 port (contributed, PR #3): CMake
   project (parses `Identity.xcconfig` like the mac one, vendored zlib
-  1.3.1 = byte-identical upstream), `Source/` = native Win32 / GDI+ editor
-  (`WindowsEditor.cpp`: the SwiftUI panel's layout redrawn; static layer
-  cached in a bitmap, dynamic parts redrawn in the invalid rect only,
-  `TextCache` for outlines, parameter values polled like SynthModel),
+  1.3.1 = byte-identical upstream), editor = `DesktopEditor/` (shared with
+  Linux, below: `DesktopEditor.cpp` = the SwiftUI panel's layout redrawn
+  in GDI+, `TextCache` for outlines, parameter values polled like
+  SynthModel) + `Source/WindowsEditor.cpp` = its Win32 window (static
+  layer cached in a bitmap, dynamic parts redrawn in the invalid rect
+  only, the name field's EDIT control, common dialogs, WinHTTP),
   `WindowsThemeEditor.hpp` (ThemeDialog as a window), `WindowsModule.hpp`
   (window classes on OUR module, unregistered with the last window),
   `WindowsTrash.cpp` (Recycle Bin; false where Windows cannot recycle),
@@ -168,6 +170,11 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   is the mac's (no favourites: removed), incl. drag and drop.
   Windows-only code in shared files stays under `#if defined(_WIN32)` /
   `SMTG_OS_WINDOWS`.
+- `DesktopEditor/` — the ONE editor of Windows and Linux: a panel change
+  is made once here (and in SwiftUI). Written against Win32 + GDI+;
+  `DesktopEditor.hpp` lists the "platform" members each window file
+  defines (open / close the window, invalidate, name field, dialogs,
+  update check, theme editor...), plus a Windows and a Linux section.
 - `docs/images/` — README pictures (`synth2_preview.jpg`).
 - `third_party/` — submodules `vst3sdk` v3.8.1_build_84 (MIT) +
   `AudioUnitSDK` 1.4.0 (Apache 2.0); remaining patches: auwrapper hidden
@@ -572,7 +579,7 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   owns the momentum tail (`WheelMonitor.momentumOwner`); Windows (no
   momentum flag) = a run of events < 300 ms apart belongs to the target
   under its first event, events over anything else are dropped
-  (`WindowsEditor::wheel` / `wheelTarget`). Type /
+  (`DesktopEditor::wheel` / `wheelTarget`). Type /
   dst / range buttons: click = next, Shift-click = back. ctrl src /
   assign = pop-up menus (src: pitch bend, ch pressure + 4 sub-menus "CC
   0–31".. of "#n:name" items; assign: none + Synth1's list in one column;
@@ -580,7 +587,7 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   a click opens a pick list under the display (`TypeMenu`, effect = 2 x 5
   grid, LFO shapes Synth1's 2 x 3 (saw / tri / sine | square / S&H /
   smooth, `lfoShapeOrder`), `SynthModel.typeMenu` = the open id; Windows: the same in-panel
-  list drawn in GDI+, `WindowsEditor::typeMenu_` / `drawTypeMenu`, wave
+  list drawn in GDI+, `DesktopEditor::typeMenu_` / `drawTypeMenu`, wave
   icons through `drawWaveShape`, theme display colours);
   phaser level reads feedback %. First click acts in
   an unfocused window (`acceptsFirstMouse`).
@@ -591,7 +598,7 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
 - Bottom LCD: line 1 "NNN:name" (click = browser) + ◀ ▶ (next / previous
   NON-EMPTY slot, rolls over banks), line 2 = bank "NN:name" or a 1.5 s
   readout ("filter freq: 64", learn / library messages). Windows: the
-  same (`WindowsEditor::show` / `flash`: panel edits only, learn, write,
+  same (`DesktopEditor::show` / `flash`: panel edits only, learn, write,
   delete, export, import, all notes off, the library notice 10 s, worded
   "Recycle Bin"). write = write
   dialog; menu = Initialize patch | Load / Save patch file… | MIDI Learn |
@@ -604,7 +611,7 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   down = ◀ ▶, left / right = next column, nearest non-empty slot), Return /
   Enter / Esc close (write dialog: Esc only), Esc closes the logo menu.
   Routed by `Synth2HostingView`: local NSEvent monitor + own keyDown; Logic
-  fallback = editor is the front window. Windows: `WindowsEditor::keyDown`
+  fallback = editor is the front window. Windows / Linux: `DesktopEditor::keyDown`
   (WM_KEYDOWN + `IPlugView::onKeyDown`, WM_GETDLGCODE wants all keys; Ctrl
   / Alt / Win = the host's): the same keys, plus Return / Enter in the
   write dialog = Write (the name field forwards Return / Esc); < > and up /
