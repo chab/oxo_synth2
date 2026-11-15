@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+#
+# Builds the Linux distribution: ONE tar.gz holding a VST3 bundle with every
+# architecture inside (Contents/x86_64-linux + Contents/aarch64-linux, the
+# host loads its own), tools/linux_installer/install.sh and README.txt.
+# Run by .github/workflows/linux-release.yml; works the same on a Linux box:
+#
+#   tools/prepare_linux_installer build
+#       this machine's architecture -> dist/linux/<arch>/<Product>.vst3
+#   tools/prepare_linux_installer package [--arches "x86_64 aarch64"] <dir>...
+#       merges the bundles found under <dir>... ->
+#       dist/linux/<Product>-<version>-<build>-Linux.tar.gz (+ .sha256)
+#
+# BUILD ON THE OLDEST SYSTEM YOU SUPPORT. A Linux binary needs the glibc it
+# was linked against or newer: the workflow builds in a Debian 12 container
+# (glibc 2.36: Debian 12+, Ubuntu 24.04+, Mint 22+, Fedora 37+, Arch...).
+# `build` refuses a .so needing more than OXO_MAX_GLIBC (default 2.36).
+#
+# STATIC C++ RUNTIME (-static-libstdc++ -static-libgcc), like the Windows
+# release's static CRT: otherwise the .so needs the GLIBCXX of the build
+# machine's GCC, which an older distribution lacks. A version script exports
+# only the three VST3 entry points: no C++ symbol (ours, or the copies of
+# std:: templates GCC makes visible) can bind to the host's own libstdc++.
+# OWN BUILD DIR (dist/linux/build-<arch>) for these flags; build_linux.sh's
+# Linux_Build/build is the developer's.
+#
+# Needs: CMake 3.25+, GCC 12+, pkg-config, the X11 / cairo / fontconfig /
+# zlib dev packages (Linux_Build/README.md), objdump + readelf (binutils),
+# zip (EngineCoreTests).
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+RES_DIR="$SCRIPT_DIR/linux_installer"
+DIST_DIR="$REPO_DIR/dist/linux"
+
+IDENTITY_FILES=("$REPO_DIR/Identity.xcconfig")
+[[ -f "$REPO_DIR/Identity.local.xcconfig" ]] && IDENTITY_FILES+=("$REPO_DIR/Identity.local.xcconfig")
+identity() { # <KEY> -> value (the local override wins)
+    local value
+    value="$(sed -n "s/^$1[[:space:]]*=[[:space:]]*//p" "${IDENTITY_FILES[@]}" | tail -1 | sed 's/[[:space:]]*$//')"
+    [[ -n "$value" ]] || { echo "ERROR: $1 missing in Identity.xcconfig" >&2; exit 1; }
+    printf '%s' "$value"
+}
+PRODUCT_NAME="$(identity OXO_PRODUCT_NAME)"
+PRODUCT_FILE="${PRODUCT_NAME// /}"
+BUNDLE="$PRODUCT_FILE.vst3"
+VERSION="$(identity MARKETING_VERSION)"
+BUILD_NUM="$(identity CURRENT_PROJECT_VERSION)"
+OUT_NAME="$PRODUCT_FILE-$VERSION-$BUILD_NUM-Linux"
+
+fail() { echo "ERROR: $*" >&2; exit 1; }
+
+build() {
+    local arch build_dir log bundle so syms glibc_max factory
+    arch="$(uname -m)"
+    build_dir="$DIST_DIR/build-$arch"
+    log="$DIST_DIR/build-$arch.log"
+    [[ -f "$REPO_DIR/third_party/vst3sdk/CMakeLists.txt" ]] \
+        || fail "VST3 SDK missing: git submodule update --init --recursive"
+    [[ -f "$REPO_DIR/Linux_Build/CMakeLists.txt" ]] || fail "Linux_Build/ missing (the Linux port)"
+    rm -rf "$build_dir" "$DIST_DIR/$arch"
+    mkdir -p "$build_dir"
+
+    echo "==> $PRODUCT_NAME $VERSION ($BUILD_NUM), $arch: configuring"
+    printf '{ global: GetPluginFactory; ModuleEntry; ModuleExit; local: *; };\n' > "$build_dir/exports.map"
+    local static="-static-libstdc++ -static-libgcc -Wl,--version-script=$build_dir/exports.map"
+    cmake -S "$REPO_DIR/Linux_Build" -B "$build_dir" -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_MODULE_LINKER_FLAGS="$static" -DCMAKE_SHARED_LINKER_FLAGS="$static" \
+        > "$log" 2>&1 || { tail -30 "$log"; fail "configure failed"; }
+    echo "==> Building the plug-in and Steinberg's validator"
+    cmake --build "$build_dir" --target OxoSynth2VST3 validator -j"$(nproc)" >> "$log" 2>&1 \
+        || { grep -E "error|Error" "$log" | head -30; fail "build failed"; }
+    grep -E "warning:" "$log" | grep -v "/third_party/" | sort -u | head -20 || true
+
+    bundle="$build_dir/VST3/Release/$BUNDLE"
+    so="$bundle/Contents/$arch-linux/$PRODUCT_FILE.so"
+    echo "==> Checking the bundle"
+    [[ -f "$so" ]] || fail "missing $so"
+    [[ -f "$bundle/Contents/Resources/moduleinfo.json" ]] || fail "missing moduleinfo.json"
+    factory="$(find "$bundle/Contents/Resources/Synth2 Factory" -name '*.sy1' | wc -l)"
+    [[ "$factory" -gt 0 ]] || fail "no factory bank in the bundle"
+    [[ -n "$(find "$bundle/Contents/Resources/Synth2 Starter Banks" -name '*.sy1' -print -quit)" ]] \
+        || fail "no starter bank in the bundle"
+    if readelf -d "$so" | grep -E "NEEDED.*(libstdc\+\+|libgcc_s)"; then
+        fail "the C++ runtime is not static"
+    fi
+    syms="$(objdump -T "$so")"
+    for entry in GetPluginFactory ModuleEntry ModuleExit; do
+        grep -q -E "\.text.* $entry$" <<< "$syms" || fail "$entry is not exported"
+    done
+    if grep -v "\*UND\*" <<< "$syms" | grep -E " _Z"; then
+        fail "C++ symbols are exported"
+    fi
+    glibc_max="$(grep -o -E 'GLIBC_[0-9.]+' <<< "$syms" | sed 's/GLIBC_//' | sort -V | tail -1)"
+    [[ "$(printf '%s\n' "$glibc_max" "${OXO_MAX_GLIBC:-2.36}" | sort -V | tail -1)" == "${OXO_MAX_GLIBC:-2.36}" ]] \
+        || fail "needs glibc $glibc_max, more than ${OXO_MAX_GLIBC:-2.36}: build on an older system"
+    echo "    $factory factory patches, needs glibc $glibc_max+, $(du -h "$so" | cut -f1) .so"
+
+    echo "==> Validator"
+    local home
+    home="$(mktemp -d)" # keeps the user's library and settings out of it
+    HOME="$home" "$build_dir/bin/Release/validator" "$bundle" > "$DIST_DIR/validator-$arch.log" 2>&1 \
+        || { grep -E "\[(Failed|Error)\]|Result:" "$DIST_DIR/validator-$arch.log" | head -20; fail "validator failed"; }
+    rm -rf "$home"
+    grep "Result:" "$DIST_DIR/validator-$arch.log"
+
+    echo "==> EngineCoreTests"
+    # -w: the Makefile's -Werror trips GCC-version-specific warnings
+    # (-Wformat-truncation, -Wrange-loop-construct) that are not failures.
+    make -s -C "$REPO_DIR/EngineCoreTests" clean
+    make -s -C "$REPO_DIR/EngineCoreTests" test CXX=g++ CXXFLAGS="-std=c++20 -O1 -w" | tail -1
+
+    mkdir -p "$DIST_DIR/$arch"
+    cp -R "$bundle" "$DIST_DIR/$arch/"
+    echo "==> $DIST_DIR/$arch/$BUNDLE"
+}
+
+package() {
+    local arches="x86_64 aarch64" dirs=() merged stage bundles arch b tarball
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --arches) arches="$2"; shift 2 ;;
+            *) dirs+=("$1"); shift ;;
+        esac
+    done
+    [[ ${#dirs[@]} -gt 0 ]] || fail "package: no input folder"
+    mapfile -t bundles < <(find "${dirs[@]}" -type d -name "$BUNDLE" -prune | sort)
+    [[ ${#bundles[@]} -gt 0 ]] || fail "no $BUNDLE under ${dirs[*]}"
+
+    stage="$DIST_DIR/$OUT_NAME"
+    merged="$stage/$BUNDLE"
+    rm -rf "$stage" "$DIST_DIR/$OUT_NAME.tar.gz" "$DIST_DIR/$OUT_NAME.tar.gz.sha256"
+    mkdir -p "$stage"
+    echo "==> Merging ${#bundles[@]} bundle(s)"
+    cp -R "${bundles[0]}" "$merged"
+    for b in "${bundles[@]:1}"; do
+        # Everything but the binaries must be the same build of the same commit.
+        diff -r "$b/Contents/Resources" "$merged/Contents/Resources" > /dev/null \
+            || fail "$b: its Resources differ from ${bundles[0]}"
+        cp -R "$b/Contents/"*-linux "$merged/Contents/"
+    done
+    for arch in $arches; do
+        [[ -f "$merged/Contents/$arch-linux/$PRODUCT_FILE.so" ]] || fail "no $arch build among the inputs"
+    done
+    cp "$RES_DIR/install.sh" "$RES_DIR/README.txt" "$stage/"
+    # Artifacts drop permissions: set them here, the tar keeps them.
+    find "$stage" -type d -exec chmod 755 {} +
+    find "$stage" -type f -exec chmod 644 {} +
+    chmod 755 "$stage/install.sh" "$merged/Contents/"*-linux/*.so
+
+    echo "==> Archiving"
+    tarball="$DIST_DIR/$OUT_NAME.tar.gz"
+    tar --sort=name --owner=0 --group=0 --numeric-owner \
+        --mtime="@$(git -C "$REPO_DIR" log -1 --format=%ct 2>/dev/null || date +%s)" \
+        -C "$DIST_DIR" -czf "$tarball" "$OUT_NAME"
+    (cd "$DIST_DIR" && sha256sum "$OUT_NAME.tar.gz" > "$OUT_NAME.tar.gz.sha256")
+    tar -tzf "$tarball" | grep -E "\.so$|install.sh|README" | sed 's/^/    /'
+    echo "==> $tarball ($(du -h "$tarball" | cut -f1))"
+    cat "$tarball.sha256"
+    [[ -n "${GITHUB_OUTPUT:-}" ]] && echo "name=$OUT_NAME" >> "$GITHUB_OUTPUT"
+    return 0
+}
+
+case "${1:-}" in
+    build) build ;;
+    package) shift; package "$@" ;;
+    *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

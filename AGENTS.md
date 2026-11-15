@@ -145,6 +145,8 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   scripts (its README: chunk layout, param mapping, process-wide state).
 - `tools/s2render/` — renders the same jobs through our engine.
 - `tools/prepare_mac_installer`, `tools/mac_installer/` — pkg / dmg.
+- `tools/prepare_linux_installer`, `tools/linux_installer/` (`install.sh`,
+  `README.txt`), `.github/workflows/linux-release.yml` — Linux tar.gz.
 - `reference/meta/` — committed measurements (params.json, nativemap.txt,
   the tables' sources). `reference/renders/` + `reference/derived/`
   (download, README "Reference data") and `reference/presets/` are
@@ -325,6 +327,21 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   `tools/win_check/check.sh` compile-checks the Windows sources with
   mingw-w64 (`brew install mingw-w64`; warnings = errors; the worktree's
   SDK or `VST3SDK=<path>`). `.bat` files are CRLF (`.gitattributes`).
+- LINUX RELEASE: GitHub Actions > "Linux release" > Run workflow (on the
+  tag; manual only) → artifacts `<Product>-<ver>-<build>-Linux.tar.gz` +
+  `.sha256` (not zipped): ONE bundle with `Contents/x86_64-linux` +
+  `aarch64-linux`, `install.sh` (~/.vst3, `--system`, `--uninstall`),
+  `README.txt`. Each arch builds natively (`ubuntu-24.04`, `-arm`) in a
+  DEBIAN 12 container = the glibc floor (2.36; a newer build machine
+  raises it: `build` fails above `OXO_MAX_GLIBC`), static libstdc++ /
+  libgcc, a version script exporting only GetPluginFactory / ModuleEntry /
+  ModuleExit (no C++ symbol may bind to the host's libstdc++; checked).
+  `tools/prepare_linux_installer build` (per arch: own dir
+  `dist/linux/build-<arch>`, bundle checks, validator with a temporary
+  HOME, EngineCoreTests) / `package <dirs>` (merge, Resources must match)
+  run the same on any Linux box (`podman run -v $PWD:/src debian:12`).
+  Actions pinned by commit SHA. "Run workflow" only lists workflows on the
+  default branch; from there it runs on any branch or tag.
 - WINDOWS INSTALLER: `tools\prepare_win_installer.bat [--skip-build]
   [--skip-validator] [--msvc] [--dynamic-crt] [--no-pause]` on Windows (+
   Inno Setup 6.3+, `winget install JRSoftware.InnoSetup`) →
