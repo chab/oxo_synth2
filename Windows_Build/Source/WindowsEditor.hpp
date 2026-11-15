@@ -130,6 +130,11 @@ private:
     void updateHover(float x, float y);
     void mouseUp();
     void wheel(int direction, float x, float y);
+    int wheelTarget(float x, float y) const;
+    // The current wheel run's owner (wheelTarget at its first event) and its
+    // last event's time: see wheel().
+    int wheelOwner_ = -1;
+    uint64_t wheelLastAt_ = 0;
     void browserClick(float x, float y, bool doubleClick);
     void slotClick(int index, bool doubleClick);
     void commitWrite();

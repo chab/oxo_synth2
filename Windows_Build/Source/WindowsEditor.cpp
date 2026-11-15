@@ -34,6 +34,7 @@ constexpr float kDesignWidth = 770.f, kDesignHeight = 560.f;
 constexpr int kMinWidth = 578;  // 75% of the 770-pixel design width, rounded up
 constexpr int kMaxWidth = 2310; // 300% of the design width
 constexpr uint64_t kSizeSettleMs = 1000, kSizeSaveDelayMs = 400; // host resizes (WindowsEditor.hpp)
+constexpr uint64_t kWheelRunMs = 300; // wheel events closer than this = one run (wheel())
 constexpr float kPi = 3.14159265358979323846f;
 constexpr int kPanel=themes::kPanel, kHeader=themes::kHeader, kHeaderText=themes::kHeaderText,
               kLabel=themes::kLabel, kKnob=themes::kKnobBody, kKnobHighlight=themes::kKnobGradient,
@@ -2153,44 +2154,58 @@ void WindowsEditor::mouseUp() {
     dragId_=-1;
     if(GetCapture()==window_)ReleaseCapture();
 }
-void WindowsEditor::wheel(int direction,float x,float y) {
+// What a wheel event at (x, y) moves: a parameter id, kWheelBanks /
+// kWheelSlots (the browser's lists), or -1 (nothing: buttons, the ctrl src
+// / assign menus, the vertical LED lists, an open pick list, learn mode).
+constexpr int kWheelBanks=-2, kWheelSlots=-3;
+int WindowsEditor::wheelTarget(float x,float y) const {
     // Scrolling over the master volume must change volume, not the browser.
-    if(browser_ && x>=6.f && x<764.f && y>=34.f && y<478.f) {
-        if(x<196) {
-            // Wheel input is expressed as rows, not merely the sign of one
-            // notch. A standard wheel step now moves eight bank entries.
-            const int next=std::clamp(bankScroll_-direction,0,std::max(0,bankRowCount()-20));
-            if(next!=bankScroll_) {bankScroll_=next;invalidate(kBrowserRect);}
-        } else if(selectedBank_==kNewUserBank ||
-                  (selectedBank_>=0 && selectedBank_<int(banks_.size()))) {
-            const int count=selectedBank_==kNewUserBank?s2::kBankSlots:int(banks_[size_t(selectedBank_)].slots.size());
-            const int rows=(count+3)/4;
-            const int amount=(direction>0?1:-1)*std::max(1,(std::abs(direction)+1)/2);
-            const int next=std::clamp(slotScroll_-amount,0,std::max(0,rows-20));
-            if(next!=slotScroll_) {slotScroll_=next;invalidate(kBrowserRect);}
-        }
-        return;
-    }
-    if(direction==0 || midiLearn_) return;
-    if(typeMenu_>=0 && typeMenu().rect().Contains(x,y)) return; // the mac's WheelShield
+    if(browser_ && x>=6.f && x<764.f && y>=34.f && y<478.f) return x<196 ? kWheelBanks : kWheelSlots;
+    if(midiLearn_) return -1;
+    if(typeMenu_>=0 && typeMenu().rect().Contains(x,y)) return -1; // the mac's WheelShield
     for(auto it=controls_.rbegin();it!=controls_.rend();++it) {
         const auto& c=*it;
         if(c.id<0 || x<c.x || x>c.x+c.w || y<c.y || y>c.y+c.h) continue;
-
         // Buttons are click-only. Do not change toggles, numbered buttons or
         // cycling buttons when the user scrolls over them.
         if(c.kind==Kind::Toggle || c.kind==Kind::Cycle ||
-           c.kind==Kind::Badge || c.kind==Kind::Label) return;
-
+           c.kind==Kind::Badge || c.kind==Kind::Label) return -1;
         // The MIDI source / assign menus and the vertical LED lists ignore
         // the wheel; everything else steps by one, up = value up, clamped.
-        if(c.kind==Kind::Display && c.id>=86 && c.id<=89) return;
-        if(c.kind==Kind::Radio && c.id!=71 && c.id!=97) return;
-        const int id=c.id;
-        const int current=value(id);
-        const int next=s2::OfferedStep(id,current,direction>0?1:-1); // skips chorus type 3
-        if(next!=current) setValueOnce(id,next);
-        return;
+        if(c.kind==Kind::Display && c.id>=86 && c.id<=89) return -1;
+        if(c.kind==Kind::Radio && c.id!=71 && c.id!=97) return -1;
+        return c.id;
+    }
+    return -1;
+}
+void WindowsEditor::wheel(int direction,float x,float y) {
+    if(direction==0) return;
+    // A RUN of wheel events (< kWheelRunMs apart) belongs to what was under
+    // the cursor at its first one (the mac's WheelMonitor momentum owner):
+    // touchpad / free-spin inertia carries no momentum flag on Windows, so
+    // without this its tail moved the next knob under a drifting cursor.
+    // Events over anything else are dropped until the run ends.
+    const int target=wheelTarget(x,y);
+    const uint64_t now=GetTickCount64();
+    if(now-wheelLastAt_>=kWheelRunMs) wheelOwner_=target;
+    wheelLastAt_=now;
+    if(target!=wheelOwner_ || target==-1) return;
+    if(target==kWheelBanks) {
+        // Wheel input is expressed as rows, not merely the sign of one
+        // notch. A standard wheel step now moves eight bank entries.
+        const int next=std::clamp(bankScroll_-direction,0,std::max(0,bankRowCount()-20));
+        if(next!=bankScroll_) {bankScroll_=next;invalidate(kBrowserRect);}
+    } else if(target==kWheelSlots) {
+        if(selectedBank_!=kNewUserBank && (selectedBank_<0 || selectedBank_>=int(banks_.size()))) return;
+        const int count=selectedBank_==kNewUserBank?s2::kBankSlots:int(banks_[size_t(selectedBank_)].slots.size());
+        const int rows=(count+3)/4;
+        const int amount=(direction>0?1:-1)*std::max(1,(std::abs(direction)+1)/2);
+        const int next=std::clamp(slotScroll_-amount,0,std::max(0,rows-20));
+        if(next!=slotScroll_) {slotScroll_=next;invalidate(kBrowserRect);}
+    } else {
+        const int current=value(target);
+        const int next=s2::OfferedStep(target,current,direction>0?1:-1); // skips chorus type 3
+        if(next!=current) setValueOnce(target,next);
     }
 }
 

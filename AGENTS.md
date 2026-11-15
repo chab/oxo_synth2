@@ -567,7 +567,12 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   natural scrolling ignored, browser lists keep it); ignored on toggles,
   type / dst / range buttons, the ctrl src / assign menus and the VERTICAL
   LED lists (filter / arp type / range, LFO dst, voice mode); horizontal
-  LEDs (sub oct, m.env dest), wave grids and every display step. Type /
+  LEDs (sub oct, m.env dest), wave grids and every display step.
+  INERTIA never jumps controls: mac = the last direct gesture's control
+  owns the momentum tail (`WheelMonitor.momentumOwner`); Windows (no
+  momentum flag) = a run of events < 300 ms apart belongs to the target
+  under its first event, events over anything else are dropped
+  (`WindowsEditor::wheel` / `wheelTarget`). Type /
   dst / range buttons: click = next, Shift-click = back. ctrl src /
   assign = pop-up menus (src: pitch bend, ch pressure + 4 sub-menus "CC
   0–31".. of "#n:name" items; assign: none + Synth1's list in one column;
