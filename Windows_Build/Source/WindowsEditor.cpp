@@ -1478,12 +1478,14 @@ bool WindowsEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
         const auto count=std::count_if(b.slots.begin(),b.slots.end(),[](const std::string& s){return !s.empty();});
         const std::wstring name=toWide(b.name.c_str()); // b may not survive the box's modal loop
         const std::wstring detail=L"\u201C"+name+L"\u201D ("+std::to_wstring(count)+
-            (count==1?L" patch":L" patches")+L") will be moved to the Recycle Bin.";
+            (count==1?L" patch":L" patches")+(CanRecycle(std::filesystem::path(toWide(b.source.c_str())))
+                ? L") will be moved to the Recycle Bin."
+                : L") will be deleted: this drive has no Recycle Bin. This can't be undone.");
         if(MessageBoxW(window_,detail.c_str(),L"Delete bank?",MB_YESNO|MB_ICONWARNING|MB_DEFBUTTON2)!=IDYES) break;
         bank=bankNow();
-        if(bank<0 || !hooks_.deleteBank || !hooks_.deleteBank(hooks_.ctx,bank))
-            MessageBoxW(window_,L"Unable to delete this bank.",L"Synth2",MB_ICONWARNING);
-        else flash(L"bank "+name+L" moved to the Recycle Bin");
+        const int result=bank>=0 && hooks_.deleteBank ? hooks_.deleteBank(hooks_.ctx,bank) : 0;
+        if(result==0) MessageBoxW(window_,L"Unable to delete this bank.",L"Synth2",MB_ICONWARNING);
+        else flash(L"bank "+name+(result==1 ? L" moved to the Recycle Bin" : L" deleted"));
         adopt();
         break;
     }

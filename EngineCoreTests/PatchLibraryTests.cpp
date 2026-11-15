@@ -400,24 +400,24 @@ OXO_TEST(PatchManagerDeleteBank) {
     };
     // factory, Synth2 (loose), A, B, Sets, Sets / Sub
     OXO_EXPECT_EQ(m.Library().Banks().size(), size_t(6));
-    OXO_EXPECT(!m.DeleteBank(0) && fs::exists(factory / "001.sy1"));
-    OXO_EXPECT(!m.DeleteBank(-1) && !m.DeleteBank(99));
+    OXO_EXPECT(m.DeleteBank(0) == kDeleteFailed && fs::exists(factory / "001.sy1"));
+    OXO_EXPECT(m.DeleteBank(-1) == kDeleteFailed && m.DeleteBank(99) == kDeleteFailed);
 
-    OXO_EXPECT(m.DeleteBank(find("A")));
+    OXO_EXPECT(m.DeleteBank(find("A")) == kDeleteTrashed);
     OXO_EXPECT(!fs::exists(root / "A") && fs::exists(trash / "A" / "notes.txt"));
     OXO_EXPECT_EQ(find("A"), -1);
 
-    OXO_EXPECT(m.DeleteBank(find("Sets")));
+    OXO_EXPECT(m.DeleteBank(find("Sets")) == kDeleteTrashed);
     OXO_EXPECT(!fs::exists(root / "Sets" / "001.sy1") && fs::exists(root / "Sets" / "Sub" / "001.sy1"));
     OXO_EXPECT_EQ(find("Sets"), -1);
     OXO_EXPECT(find("Sets / Sub") >= 0);
 
-    OXO_EXPECT(m.DeleteBank(find("Synth2")));
+    OXO_EXPECT(m.DeleteBank(find("Synth2")) == kDeleteTrashed);
     OXO_EXPECT(fs::exists(root) && !fs::exists(root / "Loose.sy1") && fs::exists(root / "B" / "001.sy1"));
     OXO_EXPECT_EQ(trashed.size(), size_t(3));
 
     m.SetTrash(nullptr); // no Trash (iOS): deleted
-    OXO_EXPECT(m.DeleteBank(find("B")));
+    OXO_EXPECT(m.DeleteBank(find("B")) == kDeleteRemoved);
     OXO_EXPECT(!fs::exists(root / "B") && !fs::exists(trash / "B"));
     OXO_EXPECT_EQ(m.Library().Banks().size(), size_t(2)); // factory, Sets / Sub
     fs::remove_all(base);

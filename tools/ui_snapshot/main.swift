@@ -58,7 +58,7 @@ final class MockHost: SynthHost {
     func newBank(_ name: String) -> Int { 0 }
     func movePatch(bank: Int, from: Int, to: Int) -> Bool { true }
     func copyPatch(bank: Int, slot: Int, to: Int) -> Int { 0 }
-    func deleteBank(_ bank: Int) -> Bool { true }
+    func deleteBank(_ bank: Int) -> Int { 1 }
     func exportBank(_ bank: Int, to dir: String) -> String { "" }
     func importItems(_ paths: String) -> [String] { [] }
     func name(_ id: Int) -> String { "param \(id)" }

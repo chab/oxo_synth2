@@ -48,7 +48,8 @@ public protocol SynthHost: AnyObject {
     /// that slot, -1 = the bank is full, -2 = failed.
     func copyPatch(bank: Int, slot: Int, to: Int) -> Int
     /// Browser > Delete bank: its folder to the Trash (mac) / deleted (iPad).
-    func deleteBank(_ bank: Int) -> Bool
+    /// 0 = failed, 1 = in the Trash, 2 = deleted (no Trash there).
+    func deleteBank(_ bank: Int) -> Int
     /// Browser > Export bank: copies the bank as a new folder into `dir`;
     /// returns that folder, "" = failed.
     func exportBank(_ bank: Int, to dir: String) -> String
@@ -673,13 +674,13 @@ final class SynthModel: ObservableObject {
         bankToDelete = nil
         guard let b = banks.firstIndex(where: { $0.id == id }), !banks[b].readOnly else { return }
         let name = banks[b].name
-        let ok = host.deleteBank(b)
+        let result = host.deleteBank(b)
         loadLibrary()
         if loadedBankID == id { // the sound plays on, out of no bank (the host forgot it too)
             currentProgram = nil
             loadedBankID = nil
         }
-        flash(ok ? "bank \(name) \(Self.deletedWord)" : "delete failed")
+        flash(result == 0 ? "delete failed" : "bank \(name) \(result == 1 ? "moved to Trash" : "deleted")")
     }
 
     /// Browser drag and drop within the shown bank: move, or swap with an
