@@ -75,13 +75,13 @@ inline std::string FormatParam(int id, int v, bool tempoSync = false, int effect
         return buf;
     }
     switch (id) {
-    case kOsc1Shape: return pick({"sine", "saw", "pulse", "tri"});
-    case kOsc2Shape: return pick({"saw", "pulse", "tri", "noise"}, 1);
-    case kSubShape: return pick({"sine", "tri", "saw", "square"});
+    case kOsc1Shape: return pick({"sine", "saw", "pulse", "triangle"});
+    case kOsc2Shape: return pick({"saw", "pulse", "triangle", "noise"}, 1);
+    case kSubShape: return pick({"sine", "triangle", "saw", "square"});
     case kSubOctave: return pick({"0 oct", "-1 oct"});
     case kFilterType: return pick({"LP12", "LP24", "HP12", "BP12", "LPDL"});
     case kLfo1Type:
-    case kLfo2Type: return pick({"saw", "tri", "square", "S&H", "smooth", "sine"});
+    case kLfo2Type: return pick({"saw", "triangle", "square", "random (S&H)", "random (smooth)", "sine"});
     case kLfo1Dest:
     case kLfo2Dest: return pick({"osc2", "osc1+2", "filter", "amp", "p/w", "FM", "pan"}, 1);
     case kModEnvDest: return pick({"osc2", "FM", "p/w"});
