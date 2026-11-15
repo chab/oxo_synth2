@@ -15,7 +15,7 @@
 #if SMTG_OS_MACOS
 #include "OxoSynth2EditorView.h"
 #elif SMTG_OS_WINDOWS
-#include "WindowsEditor.hpp"
+#include "DesktopEditor/DesktopEditor.hpp"
 #endif
 
 #include <cmath>

@@ -1,4 +1,4 @@
-#include "WindowsEditor.hpp"
+#include "DesktopEditor/DesktopEditor.hpp"
 #include "OxoSynth2VST3/source/OxoSynth2Controller.h"
 #include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/base/keycodes.h"
