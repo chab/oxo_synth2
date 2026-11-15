@@ -175,6 +175,23 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   `DesktopEditor.hpp` lists the "platform" members each window file
   defines (open / close the window, invalidate, name field, dialogs,
   update check, theme editor...), plus a Windows and a Linux section.
+- `Linux_Build/` — Linux VST3 (x86_64 / aarch64): CMake (system zlib,
+  X11 + cairo + fontconfig via pkg-config; `OXO_LINUX_EDITOR=OFF` = no
+  editor), `build_linux.sh` (-> `~/.vst3`). `Source/LinuxEditor.cpp` =
+  DesktopEditor's X11 window: a child of the host's window, events + the
+  50 ms timer from the host's `Linux::IRunLoop` (REAPER, Bitwig, Ardour,
+  Carla; Wayland hosts embed through XWayland), cairo double buffer,
+  the name field drawn in the panel. `LinuxGdiplus.hpp` = the GDI+
+  subset the panel uses, on cairo (Segoe UI / Consolas stand-ins
+  condensed to their widths: labels and LCD columns fit as designed).
+  `LinuxPlatform.hpp` = the Win32 names the panel calls (no X11: the
+  shared header includes it) + zenity / kdialog dialogs, xdg-open,
+  FileManager1 reveal, curl update check; `LinuxX11.hpp` = the popup
+  menu; `LinuxThemeEditor.hpp`; `LinuxTrash.cpp` (freedesktop Trash on
+  the home filesystem, else deleted). Data = `$XDG_CONFIG_HOME/<data
+  folder>`, library = the desktop's Documents (`XDG_DOCUMENTS_DIR` in
+  user-dirs.dirs, else ~/Documents). Compile check of our Linux files:
+  `-Wall -Wextra` clean, GCC 12+.
 - `docs/images/` — README pictures (`synth2_preview.jpg`).
 - `third_party/` — submodules `vst3sdk` v3.8.1_build_84 (MIT) +
   `AudioUnitSDK` 1.4.0 (Apache 2.0); remaining patches: auwrapper hidden
