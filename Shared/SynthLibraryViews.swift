@@ -151,6 +151,7 @@ struct BottomBar: View {
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
+        .menuOrder(.fixed)
         .frame(width: 50, height: 26)
     }
 }

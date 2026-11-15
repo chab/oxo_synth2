@@ -445,6 +445,7 @@ struct ThemeDialog: View {
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
+        .menuOrder(.fixed)
         .fixedSize()
     }
 }

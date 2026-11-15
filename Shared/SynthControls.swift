@@ -568,6 +568,7 @@ struct MenuDisplay: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .menuOrder(.fixed)
         .padding(.horizontal, 4)
         .frame(width: width, height: 16)
         .background(RoundedRectangle(cornerRadius: 2).fill(theme.displayFill))
