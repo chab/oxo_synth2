@@ -601,7 +601,7 @@ OXO_TEST(ArpChangesWithHeldKeysLeaveNoStuckNote) {
 OXO_TEST(ArpStepsDoNotRestartKeySyncedLfo) {
     Synth s;
     s.SetSampleRate(48000);
-    for (const auto [id, v] : {std::pair{kLfo1On, 1}, {kLfo1Dest, 4}, {kLfo1Type, 3}, {kLfo1Speed, 0}, {kLfo1Depth, 127},
+    for (const auto &[id, v] : {std::pair{kLfo1On, 1}, {kLfo1Dest, 4}, {kLfo1Type, 3}, {kLfo1Speed, 0}, {kLfo1Depth, 127},
                                {kLfo1KeySync, 1}, {kLfo1TempoSync, 0}, {kLfo2On, 0}, {kArpOn, 1}, {kArpGate, 80},
                                {kAmpAttack, 0}, {kAmpDecay, 0}, {kAmpSustain, 127}, {kAmpRelease, 0}, {kOsc1Shape, 0},
                                {kOscMix, 0}, {kSubGain, 0}, {kFilterFreq, 127}, {kFilterAmount, 64}, {kUnisonOn, 0},

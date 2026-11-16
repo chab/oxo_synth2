@@ -103,7 +103,7 @@ template <class SynthT> const PatchValues *SwitchProgram(SynthT &synth, const Pr
 
 // "NNN:name" (the LCD's form), for a host's program list.
 inline std::string ProgramLabel(const ProgramBankPatches &bank, int slot) {
-    char n[8];
+    char n[16]; // room for any int: GCC's -Wformat-truncation cannot see slot's range
     std::snprintf(n, sizeof n, "%03d:", slot + 1);
     return n + (bank.present[size_t(slot)] ? bank.patches[size_t(slot)].name : std::string("----"));
 }
