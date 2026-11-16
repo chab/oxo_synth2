@@ -18,12 +18,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <fcntl.h>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <poll.h>
 #include <signal.h>
 #include <spawn.h>
 #include <string>
@@ -93,14 +93,11 @@ inline void SignalPidFd(int pidfd, int sig) {
 #endif
 }
 
-// Runs argv, returns its exit status (-1 = could not start) and its stdout.
-// `pump` is called about every 50 ms while it runs (the editor keeps
-// painting and polling, as Windows' modal dialog loops let it). `owned`
-// gets the child's pidfd once it starts and -1 before Run reaps it.
-inline int Run(const std::vector<std::string> &argv, std::string *out, const std::function<void()> &pump = {},
-               const std::function<void(int)> &owned = {}) {
+// Starts argv with its stdout on a pipe (stderr: /dev/null): its PID and
+// the pipe's read end. false = could not start.
+inline bool Spawn(const std::vector<std::string> &argv, pid_t &pid, int &fd) {
     int fds[2];
-    if (pipe2(fds, O_CLOEXEC) != 0) return -1;
+    if (argv.empty() || pipe2(fds, O_CLOEXEC) != 0) return false;
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
     posix_spawn_file_actions_adddup2(&actions, fds[1], 1);
@@ -108,26 +105,32 @@ inline int Run(const std::vector<std::string> &argv, std::string *out, const std
     std::vector<char *> args;
     for (const auto &a : argv) args.push_back(const_cast<char *>(a.c_str()));
     args.push_back(nullptr);
-    pid_t pid = -1;
+    pid = -1;
     const int spawned = posix_spawnp(&pid, args[0], &actions, nullptr, args.data(), environ);
     posix_spawn_file_actions_destroy(&actions);
     close(fds[1]);
-    if (spawned != 0) { close(fds[0]); return -1; }
+    if (spawned != 0) { close(fds[0]); return false; }
+    fd = fds[0];
+    return true;
+}
+
+// Runs argv, returns its exit status (-1 = could not start) and its stdout.
+// It blocks: only for a background thread (HttpGet) or a quick tool.
+// `owned` gets the child's pidfd once it starts and -1 before Run reaps it.
+inline int Run(const std::vector<std::string> &argv, std::string *out, const std::function<void(int)> &owned = {}) {
+    pid_t pid = -1;
+    int fd = -1;
+    if (!Spawn(argv, pid, fd)) return -1;
     const int pidfd = owned ? PidFd(pid) : -1;
     if (owned) owned(pidfd);
     std::string data;
     char buffer[4096];
     for (;;) {
-        pollfd p{fds[0], POLLIN, 0};
-        const int r = poll(&p, 1, 50);
-        if (r > 0) {
-            const ssize_t n = read(fds[0], buffer, sizeof buffer);
-            if (n > 0) { data.append(buffer, size_t(n)); continue; }
-            if (n == 0 || (n < 0 && errno != EINTR && errno != EAGAIN)) break;
-        }
-        if (pump) pump();
+        const ssize_t n = read(fd, buffer, sizeof buffer);
+        if (n > 0) data.append(buffer, size_t(n));
+        else if (n == 0 || errno != EINTR) break;
     }
-    close(fds[0]);
+    close(fd);
     if (owned) owned(-1);
     if (pidfd >= 0) close(pidfd);
     int status = 0;
@@ -137,6 +140,76 @@ inline int Run(const std::vector<std::string> &argv, std::string *out, const std
     if (w < 0) return data.empty() ? 1 : 0; // the host reaps children (SIGCHLD ignored): judge by output
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
+
+// A program running while nobody waits for it (a dialog: zenity, kdialog).
+// Start returns at once; Poll, from the editor's timer, collects its output
+// and sees it exit. Destroyed while it runs, it stops it (SIGTERM).
+class Child {
+public:
+    Child() = default;
+    Child(const Child &) = delete;
+    Child &operator=(const Child &) = delete;
+    ~Child() { Stop(); }
+    bool Start(const std::vector<std::string> &argv) {
+        if (!Spawn(argv, pid_, fd_)) return false;
+        fcntl(fd_, F_SETFL, fcntl(fd_, F_GETFL) | O_NONBLOCK);
+        pidfd_ = PidFd(pid_);
+        return true;
+    }
+    // true once it has exited: Status() (-1 = crashed), Output()
+    bool Poll() {
+        if (pid_ <= 0) return true;
+        char buffer[4096];
+        while (fd_ >= 0) {
+            const ssize_t n = read(fd_, buffer, sizeof buffer);
+            if (n > 0) { out_.append(buffer, size_t(n)); continue; }
+            if (n < 0 && errno == EINTR) continue;
+            if (n < 0 && errno == EAGAIN) return false;
+            close(fd_); // its output closed: it is ending
+            fd_ = -1;
+        }
+        int status = 0;
+        const pid_t w = waitpid(pid_, &status, WNOHANG);
+        if (w == 0) return false;
+        // w < 0: the host reaps children (SIGCHLD ignored): judge by the output (as Run)
+        status_ = w < 0 ? (out_.empty() ? 1 : 0) : WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        Forget();
+        return true;
+    }
+    int Status() const { return status_; }
+    const std::string &Output() const { return out_; }
+
+private:
+    void Stop() {
+        if (pid_ <= 0) return;
+        // the pidfd reaches it or nobody; without one, the PID is still
+        // its while its output is open (it has not exited)
+        if (pidfd_ >= 0) SignalPidFd(pidfd_, SIGTERM);
+        else if (fd_ >= 0) kill(pid_, SIGTERM);
+        int status = 0;
+        pid_t w = 0;
+        for (int i = 0; i < 50 && w == 0; ++i) { // dialogs quit at once on SIGTERM
+            while ((w = waitpid(pid_, &status, WNOHANG)) < 0 && errno == EINTR) {}
+            if (w == 0) usleep(10000);
+        }
+        if (w == 0) {
+            if (pidfd_ >= 0) SignalPidFd(pidfd_, SIGKILL);
+            else kill(pid_, SIGKILL);
+            while (waitpid(pid_, &status, 0) < 0 && errno == EINTR) {}
+        }
+        Forget();
+    }
+    void Forget() {
+        if (fd_ >= 0) close(fd_);
+        if (pidfd_ >= 0) close(pidfd_);
+        fd_ = pidfd_ = -1;
+        pid_ = -1;
+    }
+    pid_t pid_ = -1;
+    int fd_ = -1, pidfd_ = -1;
+    int status_ = -1;
+    std::string out_;
+};
 
 // Starts a program and forgets it. posix_spawnp, not fork(): the host is
 // multithreaded, and a forked child may only call async-signal-safe
@@ -195,6 +268,11 @@ inline void Reveal(const std::string &path) {
 }
 
 // ---- dialogs (zenity, else kdialog) ------------------------------------------------
+// Never modal: each call returns at once and its `then` runs later, from
+// Poll (the editor's 50 ms timer), once the dialog is closed; only when
+// something was chosen, except Message's. The host's UI thread runs on
+// meanwhile (a loop waiting here made the desktop call the host "not
+// responding"). One dialog at a time: the next one waits in a queue.
 class Dialogs {
 public:
     enum class Tool { Missing, Zenity, KDialog };
@@ -203,88 +281,125 @@ public:
         return tool;
     }
     static bool Available() { return Which() != Tool::Missing; }
+    using Then = std::function<void(const std::string &)>;
 
-    std::function<void()> pump; // the editor's, while a dialog is open
-
-    // false = No / closed (or no dialog tool: then `fallback` says it).
-    bool Message(const std::string &title, const std::string &text, bool warning, bool yesNo) {
-        std::string out;
+    // then(false) = No / closed (or no dialog tool: then `fallback` says it).
+    void Message(const std::string &title, const std::string &text, bool warning, bool yesNo,
+                 std::function<void(bool)> then = {}) {
+        auto answer = [then](int r, const std::string &) { if (then) then(r == 0); };
         switch (Which()) {
         case Tool::Zenity:
-            return Run({"zenity", yesNo ? "--question" : warning ? "--warning" : "--info", "--title=" + title,
-                        "--text=" + text, "--no-markup", "--width=380"}, &out, pump) == 0;
+            Start({"zenity", yesNo ? "--question" : warning ? "--warning" : "--info", "--title=" + title,
+                   "--text=" + text, "--no-markup", "--width=380"}, answer);
+            break;
         case Tool::KDialog:
-            return Run({"kdialog", "--title", title, yesNo ? "--warningyesno" : warning ? "--sorry" : "--msgbox", text},
-                       &out, pump) == 0;
+            Start({"kdialog", "--title", title, yesNo ? "--warningyesno" : warning ? "--sorry" : "--msgbox", text}, answer);
+            break;
         default:
             if (fallback) fallback(text);
-            return false;
+            if (then) then(false);
         }
     }
-    bool AskText(const std::string &title, const std::string &label, std::string &text) {
-        std::string out;
-        int r = -1;
+    void AskText(const std::string &title, const std::string &label, const std::string &text, Then then) {
+        auto answer = [then](int r, const std::string &out) { if (r == 0 && then) then(Line(out)); };
         if (Which() == Tool::Zenity)
-            r = Run({"zenity", "--entry", "--title=" + title, "--text=" + label, "--entry-text=" + text}, &out, pump);
+            Start({"zenity", "--entry", "--title=" + title, "--text=" + label, "--entry-text=" + text}, answer);
         else if (Which() == Tool::KDialog)
-            r = Run({"kdialog", "--title", title, "--inputbox", label, "--", text}, &out, pump); // "--": a text may start with "-"
-        else { if (fallback) fallback("install zenity or kdialog for this dialog"); return false; }
-        if (r != 0) return false;
-        text = Line(out);
-        return true;
+            Start({"kdialog", "--title", title, "--inputbox", label, "--", text}, answer); // "--": a text may start with "-"
+        else if (fallback) fallback("install zenity or kdialog for this dialog");
     }
     // patterns: "*.sy1 *.zip"
-    std::optional<std::string> OpenFile(const std::string &title, const std::string &label, const std::string &patterns) {
-        std::string out;
-        int r = -1;
+    void OpenFile(const std::string &title, const std::string &label, const std::string &patterns, Then then) {
         if (Which() == Tool::Zenity)
-            r = Run({"zenity", "--file-selection", "--title=" + title, "--file-filter=" + label + " | " + patterns,
-                     "--file-filter=All files | *"}, &out, pump);
+            Start({"zenity", "--file-selection", "--title=" + title, "--file-filter=" + label + " | " + patterns,
+                   "--file-filter=All files | *"}, PathThen(std::move(then)));
         else if (Which() == Tool::KDialog)
-            r = Run({"kdialog", "--title", title, "--getopenfilename", Home(), patterns + "|" + label}, &out, pump);
-        else return NoTool();
-        return Path(r, out);
+            Start({"kdialog", "--title", title, "--getopenfilename", Home(), patterns + "|" + label}, PathThen(std::move(then)));
+        else NoTool();
     }
-    std::optional<std::string> SaveFile(const std::string &title, const std::string &label, const std::string &patterns,
-                                        const std::string &extension) {
-        std::string out;
-        int r = -1;
-        if (Which() == Tool::Zenity)
-            r = Run({"zenity", "--file-selection", "--save", "--confirm-overwrite", "--title=" + title,
-                     "--file-filter=" + label + " | " + patterns, "--file-filter=All files | *"}, &out, pump);
-        else if (Which() == Tool::KDialog)
-            r = Run({"kdialog", "--title", title, "--getsavefilename", Home(), patterns + "|" + label}, &out, pump);
-        else return NoTool();
-        auto path = Path(r, out);
+    void SaveFile(const std::string &title, const std::string &label, const std::string &patterns,
+                  const std::string &extension, Then then) {
         // as OPENFILENAME's lpstrDefExt: a name without an extension gets it
-        if (path && !extension.empty()) {
-            const size_t slash = path->find_last_of('/'), dot = path->find_last_of('.');
-            if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) *path += "." + extension;
-        }
-        return path;
-    }
-    std::optional<std::string> PickFolder(const std::string &title) {
-        std::string out;
-        int r = -1;
+        Then withExtension = [extension, then](const std::string &chosen) {
+            std::string path = chosen;
+            const size_t slash = path.find_last_of('/'), dot = path.find_last_of('.');
+            if (!extension.empty() && (dot == std::string::npos || (slash != std::string::npos && dot < slash)))
+                path += "." + extension;
+            if (then) then(path);
+        };
         if (Which() == Tool::Zenity)
-            r = Run({"zenity", "--file-selection", "--directory", "--title=" + title}, &out, pump);
+            Start({"zenity", "--file-selection", "--save", "--confirm-overwrite", "--title=" + title,
+                   "--file-filter=" + label + " | " + patterns, "--file-filter=All files | *"}, PathThen(withExtension));
         else if (Which() == Tool::KDialog)
-            r = Run({"kdialog", "--title", title, "--getexistingdirectory", Home()}, &out, pump);
-        else return NoTool();
-        return Path(r, out);
+            Start({"kdialog", "--title", title, "--getsavefilename", Home(), patterns + "|" + label}, PathThen(withExtension));
+        else NoTool();
     }
-    std::optional<uint32_t> PickColor(const std::string &title, uint32_t rgb) {
+    void PickFolder(const std::string &title, Then then) {
+        if (Which() == Tool::Zenity)
+            Start({"zenity", "--file-selection", "--directory", "--title=" + title}, PathThen(std::move(then)));
+        else if (Which() == Tool::KDialog)
+            Start({"kdialog", "--title", title, "--getexistingdirectory", Home()}, PathThen(std::move(then)));
+        else NoTool();
+    }
+    void PickColor(const std::string &title, uint32_t rgb, std::function<void(uint32_t)> then) {
         char hex[8];
         std::snprintf(hex, sizeof hex, "#%06X", unsigned(rgb & 0xFFFFFF));
-        std::string out;
-        int r = -1;
+        auto answer = [then](int r, const std::string &out) {
+            if (r != 0 || !then) return;
+            if (const auto rgb = ParseColor(Line(out))) then(*rgb);
+        };
         if (Which() == Tool::Zenity)
-            r = Run({"zenity", "--color-selection", "--title=" + title, std::string("--color=") + hex}, &out, pump);
+            Start({"zenity", "--color-selection", "--title=" + title, std::string("--color=") + hex}, answer);
         else if (Which() == Tool::KDialog)
-            r = Run({"kdialog", "--title", title, "--getcolor", "--default", hex}, &out, pump);
-        else { if (fallback) fallback("install zenity or kdialog to pick colours"); return std::nullopt; }
-        if (r != 0) return std::nullopt;
-        const std::string s = Line(out);
+            Start({"kdialog", "--title", title, "--getcolor", "--default", hex}, answer);
+        else if (fallback) fallback("install zenity or kdialog to pick colours");
+    }
+    std::function<void(const std::string &)> fallback; // no dialog tool: say it on the LCD
+
+    bool Busy() const { return child_ || !queue_.empty(); } // a dialog is open (or waits)
+    // The editor's timer: a closed dialog answers, the next one opens.
+    void Poll() {
+        if (!child_ || !child_->Poll()) return;
+        const int status = child_->Status();
+        const std::string out = child_->Output();
+        Done done = std::move(done_);
+        done_ = nullptr;
+        child_.reset();
+        if (done) done(status, out); // may start the next dialog
+        Next();
+    }
+    // The editor closes: the dialogs too, no `then` runs.
+    void Cancel() {
+        queue_.clear();
+        done_ = nullptr;
+        child_.reset();
+    }
+
+private:
+    using Done = std::function<void(int status, const std::string &out)>;
+    struct Job {
+        std::vector<std::string> argv;
+        Done done;
+    };
+    void Start(std::vector<std::string> argv, Done done) {
+        queue_.push_back({std::move(argv), std::move(done)});
+        Next();
+    }
+    void Next() {
+        while (!child_ && !queue_.empty()) {
+            Job job = std::move(queue_.front());
+            queue_.pop_front();
+            auto child = std::make_unique<Child>();
+            if (child->Start(job.argv)) { child_ = std::move(child); done_ = std::move(job.done); }
+            else if (job.done) job.done(-1, {});
+        }
+    }
+    static Done PathThen(Then then) {
+        return [then](int r, const std::string &out) {
+            if (const auto path = Path(r, out); path && then) then(*path);
+        };
+    }
+    static std::optional<uint32_t> ParseColor(const std::string &s) {
         unsigned R = 0, G = 0, B = 0;
         if (std::sscanf(s.c_str(), "rgb(%u,%u,%u)", &R, &G, &B) == 3 || std::sscanf(s.c_str(), "rgba(%u,%u,%u", &R, &G, &B) == 3)
             return (std::min(R, 255u) << 16) | (std::min(G, 255u) << 8) | std::min(B, 255u);
@@ -296,9 +411,9 @@ public:
         }
         return std::nullopt;
     }
-    std::function<void(const std::string &)> fallback; // no dialog tool: say it on the LCD
-
-private:
+    std::deque<Job> queue_;
+    std::unique_ptr<Child> child_;
+    Done done_;
     static std::string Line(std::string s) {
         while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
         return s;
@@ -308,9 +423,8 @@ private:
         if (r != 0 || s.empty()) return std::nullopt;
         return s;
     }
-    std::optional<std::string> NoTool() {
+    void NoTool() {
         if (fallback) fallback("install zenity or kdialog for file dialogs");
-        return std::nullopt;
     }
     static std::string Home() {
         const char *h = std::getenv("HOME");
@@ -331,7 +445,7 @@ public:
         body_.reset();
         thread_ = std::thread([this, url] {
             std::string out;
-            const int r = Run({"curl", "-fsSL", "--connect-timeout", "10", "--max-time", "20", url}, &out, {},
+            const int r = Run({"curl", "-fsSL", "--connect-timeout", "10", "--max-time", "20", url}, &out,
                               [this](int pidfd) { std::lock_guard<std::mutex> lock(mutex_); pidfd_ = pidfd; });
             std::lock_guard<std::mutex> lock(mutex_);
             if (r == 0 && !out.empty()) body_ = out;
@@ -391,8 +505,9 @@ struct Menu {
 // ---- the Win32 names the shared editor calls ---------------------------------------
 // DesktopEditor.cpp is written against Win32 + GDI+ (GDI+: LinuxGdiplus.hpp).
 // The stateless calls are here; those needing the editor's window
-// (TrackPopupMenu, MessageBoxW, GetCursorPos, GetKeyState, SetCursor,
-// capture) are DesktopEditor members (Linux_Build/Source/LinuxEditor.cpp).
+// (GetCursorPos, GetKeyState, SetCursor, capture) are DesktopEditor
+// members (Linux_Build/Source/LinuxEditor.cpp); menus and dialogs are its
+// popupMenu / messageBox / askText... (DesktopEditor.hpp).
 namespace oxo {
 using UINT = unsigned;
 using UINT_PTR = uintptr_t;
@@ -409,7 +524,7 @@ inline constexpr UINT VK_RETURN = 0x0D, VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_M
                       VK_LEFT = 0x25, VK_UP = 0x26, VK_RIGHT = 0x27, VK_DOWN = 0x28, VK_LWIN = 0x5B, VK_RWIN = 0x5C;
 inline constexpr UINT MB_OK = 0, MB_YESNO = 4, MB_ICONWARNING = 0x30, MB_ICONINFORMATION = 0x40, MB_DEFBUTTON2 = 0x100;
 inline constexpr int IDOK = 1, IDYES = 6, IDNO = 7;
-inline constexpr UINT TPM_NONOTIFY = 0x80, TPM_RETURNCMD = 0x100;
+
 inline constexpr int SM_CXDRAG = 68, SM_CYDRAG = 69, SW_SHOWNORMAL = 1;
 using lx::MF_STRING, lx::MF_GRAYED, lx::MF_CHECKED, lx::MF_POPUP, lx::MF_MENUBREAK, lx::MF_SEPARATOR;
 

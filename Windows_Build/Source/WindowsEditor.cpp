@@ -136,21 +136,31 @@ void DesktopEditor::revealInExplorer(const std::string& utf8Path) const {
     }
     if(SUCCEEDED(com)) CoUninitialize();
 }
-bool DesktopEditor::pickFolder(const wchar_t* title,std::wstring& folder) const {
+// Menus and dialogs: Win32's modal loops (the host's windows run on in
+// them), so `then` runs before these return.
+void DesktopEditor::popupMenu(HMENU menu,int x,int y,std::function<void(int)> then) {
+    const int choice=menu && GetMenuItemCount(menu)>0 ?
+        int(TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,x,y,0,window_,nullptr)) : 0;
+    if(menu) DestroyMenu(menu); // and its sub-menus
+    if(then) then(choice);
+}
+void DesktopEditor::messageBox(const std::wstring& text,const wchar_t* title,UINT flags,std::function<void(int)> then) {
+    const int answer=MessageBoxW(window_,text.c_str(),title,flags);
+    if(then) then(answer);
+}
+void DesktopEditor::pickFolder(const wchar_t* title,std::function<void(const std::wstring&)> then) {
     BROWSEINFOW browse{};
     browse.hwndOwner=window_;
     browse.lpszTitle=title;
     browse.ulFlags=BIF_RETURNONLYFSDIRS|BIF_NEWDIALOGSTYLE;
     PIDLIST_ABSOLUTE item=SHBrowseForFolderW(&browse);
-    if(!item) return false;
+    if(!item) return;
     wchar_t path[MAX_PATH]={};
     const BOOL gotPath=SHGetPathFromIDListW(item,path);
     CoTaskMemFree(item);
-    if(!gotPath) return false;
-    folder=path;
-    return true;
+    if(gotPath && then) then(path);
 }
-bool DesktopEditor::chooseFile(FileDialog kind,std::wstring& path) {
+void DesktopEditor::chooseFile(FileDialog kind,std::function<void(const std::wstring&)> then) {
     wchar_t file[4096]={};
     OPENFILENAMEW dialog{};
     dialog.lStructSize=sizeof(dialog);
@@ -167,12 +177,12 @@ bool DesktopEditor::chooseFile(FileDialog kind,std::wstring& path) {
                      (kind==FileDialog::SavePatch?OFN_OVERWRITEPROMPT:OFN_FILEMUSTEXIST);
     }
     const BOOL chosen=kind==FileDialog::SavePatch?GetSaveFileNameW(&dialog):GetOpenFileNameW(&dialog);
-    if(!chosen) return false;
-    path=file;
-    return true;
+    if(chosen && then) then(file);
 }
-bool DesktopEditor::askText(const wchar_t* title,const wchar_t* label,std::wstring& text) {
-    return win::AskText(window_,title,label,text);
+void DesktopEditor::askText(const wchar_t* title,const wchar_t* label,const std::wstring& text,
+                            std::function<void(const std::wstring&)> then) {
+    std::wstring typed=text;
+    if(win::AskText(window_,title,label,typed) && then) then(typed);
 }
 HCURSOR DesktopEditor::copyCursor() {
     if(!copyCursor_) copyCursor_=makeCopyCursor();

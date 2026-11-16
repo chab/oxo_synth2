@@ -1,8 +1,8 @@
 #pragma once
 
 // The X11 half of the Linux helpers (LinuxPlatform.hpp is the X-free
-// half, safe in the shared editor header): the popup menu, modal like
-// Win32's TrackPopupMenu, with submenus, check marks and column breaks.
+// half, safe in the shared editor header): the popup menu, with submenus,
+// check marks and column breaks.
 // Include it after the editor headers: Xlib's macros (Bool, None,
 // Status...) would break EditorCore/Json.hpp.
 
@@ -13,18 +13,98 @@
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
 #include <cairo/cairo-xlib.h>
-#include <poll.h>
 
 namespace oxo::lx {
 
+// An open popup menu. Not modal: it never runs a loop of its own (the
+// host's UI thread must keep running, or the desktop calls the host "not
+// responding"). It opens and grabs the pointer and keyboard; the editor's
+// run-loop handler then feeds it the display's events (Handle) until Done.
 class MenuTracker {
 public:
-    // `other`: events of the editor's own windows meanwhile (paint them);
-    // `idle`: about every 50 ms (the editor's timer, as Windows keeps it running).
-    static int Track(Display *d, Menu &menu, int rootX, int rootY, const std::function<void(XEvent &)> &other,
-                     const std::function<void()> &idle) {
-        MenuTracker t(d);
-        return t.run(menu, rootX, rootY, other, idle);
+    MenuTracker(Display *d, std::unique_ptr<Menu> menu, int rootX, int rootY)
+        : d_(d), font_(L"Segoe UI"), menu_(std::move(menu)), opened_(NowMs()) {
+        if (!menu_ || menu_->items.empty()) { done_ = true; return; }
+        openLevel(menu_.get(), rootX, rootY, rootX);
+        paint(levels_.back());
+        XGrabPointer(d_, levels_[0].win, False, ButtonPressMask | ButtonReleaseMask | PointerMotionMask, GrabModeAsync,
+                     GrabModeAsync, None, None, CurrentTime);
+        XGrabKeyboard(d_, levels_[0].win, False, GrabModeAsync, GrabModeAsync, CurrentTime);
+        XFlush(d_);
+    }
+    MenuTracker(const MenuTracker &) = delete;
+    MenuTracker &operator=(const MenuTracker &) = delete;
+    ~MenuTracker() {
+        if (!levels_.empty()) {
+            XUngrabKeyboard(d_, CurrentTime);
+            XUngrabPointer(d_, CurrentTime);
+        }
+        while (!levels_.empty()) closeLevel();
+        XFlush(d_);
+    }
+    bool Done() const { return done_; }
+    int Result() const { return result_; } // the chosen item's id, 0 = none
+
+    // An event of the display while the menu is open: false = not the
+    // menu's (the editor's own windows: their Expose...). Input is the
+    // menu's wherever it lands (as its grab makes it), a press outside
+    // every level cancels.
+    bool Handle(XEvent &e) {
+        if (done_) return false;
+        int li = -1;
+        for (size_t k = 0; k < levels_.size(); ++k) if (levels_[k].win == e.xany.window) li = int(k);
+        auto choose = [&](int level, int i) {
+            const Level &l = levels_[size_t(level)];
+            if (!selectable(l, i) || l.menu->items[size_t(i)].sub) return false;
+            result_ = l.menu->items[size_t(i)].id;
+            return done_ = true;
+        };
+        switch (e.type) {
+        case Expose:
+            if (li < 0) return false;
+            paint(levels_[size_t(li)]);
+            break;
+        case MotionNotify: {
+            const auto [hl, hi] = hit(e.xmotion.x_root, e.xmotion.y_root);
+            if (hl >= 0) setHot(hl, hi);
+            break;
+        }
+        case ButtonPress: {
+            if (e.xbutton.button > 3) break; // wheel
+            const auto [hl, hi] = hit(e.xbutton.x_root, e.xbutton.y_root);
+            if (hl < 0) { done_ = true; break; } // outside: cancelled
+            pressedInside_ = true;
+            break;
+        }
+        case ButtonRelease: {
+            if (e.xbutton.button > 3) break;
+            const auto [hl, hi] = hit(e.xbutton.x_root, e.xbutton.y_root);
+            // the release of the click that opened the menu selects only
+            // after a drag onto an item (as TrackPopupMenu)
+            if (hl >= 0 && (pressedInside_ || NowMs() - opened_ > 350)) choose(hl, hi);
+            break;
+        }
+        case KeyPress: {
+            const KeySym k = XLookupKeysym(&e.xkey, 0);
+            Level &top = levels_.back();
+            const int tl = int(levels_.size()) - 1;
+            if (k == XK_Escape) { if (levels_.size() > 1) closeLevel(); else done_ = true; }
+            else if (k == XK_Down || k == XK_Up) setHot(tl, step(top, top.hot, k == XK_Down ? 1 : -1));
+            else if (k == XK_Left && levels_.size() > 1) closeLevel();
+            else if (k == XK_Right && selectable(top, top.hot) && top.menu->items[size_t(top.hot)].sub) {
+                setHot(tl, top.hot);
+                setHot(tl + 1, step(levels_.back(), -1, 1));
+            } else if ((k == XK_Return || k == XK_KP_Enter) && top.hot >= 0) {
+                if (!choose(tl, top.hot) && selectable(top, top.hot)) setHot(tl, top.hot);
+            }
+            break;
+        }
+        default:
+            if (li < 0) return false;
+            break;
+        }
+        XFlush(d_);
+        return true;
     }
 
 private:
@@ -39,10 +119,6 @@ private:
         std::vector<Cell> cells;
         int hot = -1;
     };
-    explicit MenuTracker(Display *d) : d_(d), font_(L"Segoe UI") {}
-    ~MenuTracker() {
-        while (!levels_.empty()) closeLevel();
-    }
 
     double textWidth(const std::wstring &s) {
         cairo_surface_t *s1 = cairo_image_surface_create(CAIRO_FORMAT_A8, 1, 1);
@@ -198,91 +274,14 @@ private:
         }
         return -1;
     }
-    int run(Menu &menu, int rx, int ry, const std::function<void(XEvent &)> &other, const std::function<void()> &idle) {
-        if (menu.items.empty()) return 0;
-        openLevel(&menu, rx, ry, rx);
-        paint(levels_.back());
-        XGrabPointer(d_, levels_[0].win, False, ButtonPressMask | ButtonReleaseMask | PointerMotionMask, GrabModeAsync,
-                     GrabModeAsync, None, None, CurrentTime);
-        XGrabKeyboard(d_, levels_[0].win, False, GrabModeAsync, GrabModeAsync, CurrentTime);
-        const uint64_t opened = NowMs();
-        bool pressedInside = false;
-        int result = 0;
-        bool done = false;
-        uint64_t lastIdle = NowMs();
-        auto choose = [&](int li, int i) {
-            const Level &l = levels_[size_t(li)];
-            if (!selectable(l, i) || l.menu->items[size_t(i)].sub) return false;
-            result = l.menu->items[size_t(i)].id;
-            return done = true;
-        };
-        while (!done) {
-            if (!XPending(d_)) {
-                pollfd p{ConnectionNumber(d_), POLLIN, 0};
-                poll(&p, 1, 50);
-            }
-            if (NowMs() - lastIdle >= 50) { lastIdle = NowMs(); if (idle) idle(); }
-            while (!done && XPending(d_)) {
-                XEvent e;
-                XNextEvent(d_, &e);
-                int li = -1;
-                for (size_t k = 0; k < levels_.size(); ++k) if (levels_[k].win == e.xany.window) li = int(k);
-                switch (e.type) {
-                case Expose:
-                    if (li >= 0) paint(levels_[size_t(li)]);
-                    else if (other) other(e);
-                    break;
-                case MotionNotify: {
-                    const auto [hl, hi] = hit(e.xmotion.x_root, e.xmotion.y_root);
-                    if (hl >= 0) setHot(hl, hi);
-                    break;
-                }
-                case ButtonPress: {
-                    if (e.xbutton.button > 3) break; // wheel
-                    const auto [hl, hi] = hit(e.xbutton.x_root, e.xbutton.y_root);
-                    if (hl < 0) { done = true; break; } // outside: cancelled
-                    pressedInside = true;
-                    break;
-                }
-                case ButtonRelease: {
-                    if (e.xbutton.button > 3) break;
-                    const auto [hl, hi] = hit(e.xbutton.x_root, e.xbutton.y_root);
-                    // the release of the click that opened the menu selects only
-                    // after a drag onto an item (as TrackPopupMenu)
-                    if (hl >= 0 && (pressedInside || NowMs() - opened > 350)) choose(hl, hi);
-                    break;
-                }
-                case KeyPress: {
-                    const KeySym k = XLookupKeysym(&e.xkey, 0);
-                    Level &top = levels_.back();
-                    const int tl = int(levels_.size()) - 1;
-                    if (k == XK_Escape) { if (levels_.size() > 1) closeLevel(); else done = true; }
-                    else if (k == XK_Down || k == XK_Up) setHot(tl, step(top, top.hot, k == XK_Down ? 1 : -1));
-                    else if (k == XK_Left && levels_.size() > 1) closeLevel();
-                    else if (k == XK_Right && selectable(top, top.hot) && top.menu->items[size_t(top.hot)].sub) {
-                        setHot(tl, top.hot);
-                        setHot(tl + 1, step(levels_.back(), -1, 1));
-                    } else if ((k == XK_Return || k == XK_KP_Enter) && top.hot >= 0) {
-                        if (!choose(tl, top.hot) && selectable(top, top.hot)) setHot(tl, top.hot);
-                    }
-                    break;
-                }
-                default:
-                    if (li < 0 && other) other(e);
-                    break;
-                }
-            }
-        }
-        XUngrabKeyboard(d_, CurrentTime);
-        XUngrabPointer(d_, CurrentTime);
-        while (!levels_.empty()) closeLevel();
-        XFlush(d_);
-        return result;
-    }
 
     Display *d_;
     Gdiplus::FontFamily font_;
+    std::unique_ptr<Menu> menu_;
     std::vector<Level> levels_;
+    uint64_t opened_;
+    bool pressedInside_ = false, done_ = false;
+    int result_ = 0;
 };
 
 } // namespace oxo::lx

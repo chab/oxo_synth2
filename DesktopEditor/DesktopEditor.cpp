@@ -1346,9 +1346,9 @@ int DesktopEditor::slotAt(float x,float y) const {
 bool DesktopEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
     if(!browser_ || !kBrowserRect.Contains(x,y)) return false;
     enum {kExport=1,kReveal,kDeleteBank,kDelete};
-    // What the menu acts on, taken NOW: the menu and the message boxes are
-    // modal loops in which the timer still runs, and a background scan
-    // landing meanwhile renumbers the banks.
+    // What the menu acts on, taken NOW: the menu and the message boxes
+    // answer later (Windows: from modal loops) while the timer still runs,
+    // and a background scan landing meanwhile renumbers the banks.
     std::string source,slotFile;
     std::wstring slotLabel; // "NNN:name", for the LCD
     HMENU menu=CreatePopupMenu();
@@ -1376,61 +1376,62 @@ bool DesktopEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
             }
         }
     }
-    const int choice=GetMenuItemCount(menu)>0 ?
-        int(TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,screenX,screenY,0,window_,nullptr)) : 0;
-    DestroyMenu(menu);
-    auto adopt=[this] {adoptLibrary();};
-    auto bankNow=[&] {return this->bankNow(source);};
-    switch(choice) {
-    case kReveal:
-        revealInExplorer(slotFile.empty() ? source : slotFile);
-        break;
-    case kExport: {
-        std::wstring dir;
-        if(!pickFolder(L"Export bank: a folder holding its patches is created in the folder you choose",dir)) break;
-        const int bank=bankNow();
-        const std::string made=bank>=0 && hooks_.exportBank ? hooks_.exportBank(hooks_.ctx,bank,toUtf8(dir).c_str()) : "";
-        if(made.empty()) MessageBoxW(window_,L"Unable to export this bank.",L"Synth2",MB_ICONWARNING);
-        else {
-            flash(L"bank exported as "+std::filesystem::path(toWide(made.c_str())).filename().wstring(),4000);
-            revealInExplorer(made);
+    popupMenu(menu,screenX,screenY,[this,source,slotFile,slotLabel](int choice) {
+        auto bankNow=[this,source] {return this->bankNow(source);};
+        switch(choice) {
+        case kReveal:
+            revealInExplorer(slotFile.empty() ? source : slotFile);
+            break;
+        case kExport:
+            pickFolder(L"Export bank: a folder holding its patches is created in the folder you choose",
+                       [this,bankNow](const std::wstring& dir) {
+                const int bank=bankNow();
+                const std::string made=bank>=0 && hooks_.exportBank ? hooks_.exportBank(hooks_.ctx,bank,toUtf8(dir).c_str()) : "";
+                if(made.empty()) messageBox(L"Unable to export this bank.",L"Synth2",MB_ICONWARNING);
+                else {
+                    flash(L"bank exported as "+std::filesystem::path(toWide(made.c_str())).filename().wstring(),4000);
+                    revealInExplorer(made);
+                }
+            });
+            break;
+        case kDeleteBank: {
+            // DeleteBankDialog
+            const int bank=bankNow();
+            if(bank<0) break;
+            const Bank& b=banks_[size_t(bank)];
+            const auto count=std::count_if(b.slots.begin(),b.slots.end(),[](const std::string& s){return !s.empty();});
+            const std::wstring name=toWide(b.name.c_str()); // b may not survive until the answer
+            const std::wstring detail=L"\u201C"+name+L"\u201D ("+std::to_wstring(count)+
+                (count==1?L" patch":L" patches")+(CanRecycle(std::filesystem::path(toWide(b.source.c_str())))
+                    ? L") will be moved to the "+std::wstring(kTrash)+L"."
+                    : L") will be deleted: this drive has no "+std::wstring(kTrash)+L". This can't be undone.");
+            messageBox(detail,L"Delete bank?",MB_YESNO|MB_ICONWARNING|MB_DEFBUTTON2,[this,bankNow,name](int answer) {
+                if(answer!=IDYES) return;
+                const int bank=bankNow();
+                const int result=bank>=0 && hooks_.deleteBank ? hooks_.deleteBank(hooks_.ctx,bank) : 0;
+                if(result==0) messageBox(L"Unable to delete this bank.",L"Synth2",MB_ICONWARNING);
+                else flash(L"bank "+name+(result==1 ? L" moved to the "+std::wstring(kTrash) : std::wstring(L" deleted")));
+                adoptLibrary();
+                repaint();
+            });
+            break;
         }
-        break;
-    }
-    case kDeleteBank: {
-        // DeleteBankDialog
-        int bank=bankNow();
-        if(bank<0) break;
-        const Bank& b=banks_[size_t(bank)];
-        const auto count=std::count_if(b.slots.begin(),b.slots.end(),[](const std::string& s){return !s.empty();});
-        const std::wstring name=toWide(b.name.c_str()); // b may not survive the box's modal loop
-        const std::wstring detail=L"\u201C"+name+L"\u201D ("+std::to_wstring(count)+
-            (count==1?L" patch":L" patches")+(CanRecycle(std::filesystem::path(toWide(b.source.c_str())))
-                ? L") will be moved to the "+std::wstring(kTrash)+L"."
-                : L") will be deleted: this drive has no "+std::wstring(kTrash)+L". This can't be undone.");
-        if(MessageBoxW(window_,detail.c_str(),L"Delete bank?",MB_YESNO|MB_ICONWARNING|MB_DEFBUTTON2)!=IDYES) break;
-        bank=bankNow();
-        const int result=bank>=0 && hooks_.deleteBank ? hooks_.deleteBank(hooks_.ctx,bank) : 0;
-        if(result==0) MessageBoxW(window_,L"Unable to delete this bank.",L"Synth2",MB_ICONWARNING);
-        else flash(L"bank "+name+(result==1 ? L" moved to the "+std::wstring(kTrash) : std::wstring(L" deleted")));
-        adopt();
-        break;
-    }
-    case kDelete: {
-        // SynthModel.deleteSlot: the .sy1 to the Recycle Bin (PatchManager's
-        // rule: deleted where there is none), then a rescan.
-        if(slotFile.empty()) break;
-        const std::filesystem::path file(toWide(slotFile.c_str()));
-        std::error_code ec;
-        if(MoveToTrash(file)) flash(slotLabel+L" moved to the "+kTrash);
-        else flash(std::filesystem::remove(file,ec) ? slotLabel+L" deleted" : std::wstring(L"delete failed"));
-        if(hooks_.rescanLibrary) hooks_.rescanLibrary(hooks_.ctx);
-        adopt();
-        break;
-    }
-    default: break;
-    }
-    repaint();
+        case kDelete: {
+            // SynthModel.deleteSlot: the .sy1 to the Recycle Bin (PatchManager's
+            // rule: deleted where there is none), then a rescan.
+            if(slotFile.empty()) break;
+            const std::filesystem::path file(toWide(slotFile.c_str()));
+            std::error_code ec;
+            if(MoveToTrash(file)) flash(slotLabel+L" moved to the "+kTrash);
+            else flash(std::filesystem::remove(file,ec) ? slotLabel+L" deleted" : std::wstring(L"delete failed"));
+            if(hooks_.rescanLibrary) hooks_.rescanLibrary(hooks_.ctx);
+            adoptLibrary();
+            break;
+        }
+        default: break;
+        }
+        repaint();
+    });
     return true;
 }
 // The bank's number in the list ("NN:"), as the browser shows it.
@@ -1594,8 +1595,7 @@ void DesktopEditor::commitWrite() {
     // rescans: its index is valid for the write right away).
     int bank=selectedBank_;
     if(newUser && (!hooks_.newBank || (bank=hooks_.newBank(hooks_.ctx,s2::kUserBankName))<0)) {
-        MessageBoxW(window_,L"Cannot create the User bank. Check the library folder is writable.",
-                    L"Synth2",MB_ICONWARNING);
+        messageBox(L"Cannot create the User bank. Check the library folder is writable.",L"Synth2",MB_ICONWARNING);
         return;
     }
     if(hooks_.writeLibraryPatch && hooks_.writeLibraryPatch(hooks_.ctx,bank,selectedSlot_,toUtf8(name).c_str())) {
@@ -1607,7 +1607,7 @@ void DesktopEditor::commitWrite() {
             wchar_t number[8];std::swprintf(number,8,L" %03d",slot+1);
             flash(where+toWide(banks_[size_t(bank)].name.c_str())+number);
         }
-    } else MessageBoxW(window_,L"Cannot write that preset. Check the library folder is writable.",L"Synth2",MB_ICONWARNING);
+    } else messageBox(L"Cannot write that preset. Check the library folder is writable.",L"Synth2",MB_ICONWARNING);
 }
 
 // Keys (SynthModel.browserKey, fed by WM_KEYDOWN and IPlugView::onKeyDown):
@@ -1658,6 +1658,9 @@ bool DesktopEditor::keyDown(UINT key) {
     return true;
 }
 tresult PLUGIN_API DesktopEditor::onKeyDown(char16 key,int16 keyCode,int16 modifiers) {
+#if !defined(_WIN32)
+    if(modal()) return kResultFalse; // a menu / dialog is open (the host runs on): the keys wait with the panel
+#endif
     if(nameFieldKey(key,keyCode,modifiers)) return kResultTrue; // typing in the write dialog's name
     if(modifiers&(kAlternateKey|kCommandKey|kControlKey)) return kResultFalse;
     UINT vk=0;
@@ -1688,18 +1691,19 @@ void DesktopEditor::browserClick(float x,float y,bool doubleClick) {
             if(x>=514 && x<601) {commitWrite();return;}
             if(x>=604 && x<680) {
                 // SynthModel.newBank: a uniquely named folder, then write into it.
-                std::wstring name=L"New Bank";
-                if(!hooks_.newBank || !askText(L"New bank",L"Bank name:",name)) return;
-                const int bank=hooks_.newBank(hooks_.ctx,toUtf8(name).c_str());
-                if(bank<0) {
-                    MessageBoxW(window_,L"Cannot create that bank. Check the library folder is writable.",
-                                L"Synth2",MB_ICONWARNING);
-                    return;
-                }
-                if(hooks_.libraryRevision) knownRevision_=hooks_.libraryRevision(hooks_.ctx);
-                refreshBanks();
-                if(bank<int(banks_.size())) {selectedBank_=bank;selectedSlot_=0;slotScroll_=0;}
-                repaint();
+                if(!hooks_.newBank) return;
+                askText(L"New bank",L"Bank name:",L"New Bank",[this](const std::wstring& name) {
+                    const int bank=hooks_.newBank(hooks_.ctx,toUtf8(name).c_str());
+                    if(bank<0) {
+                        messageBox(L"Cannot create that bank. Check the library folder is writable.",
+                                   L"Synth2",MB_ICONWARNING);
+                        return;
+                    }
+                    if(hooks_.libraryRevision) knownRevision_=hooks_.libraryRevision(hooks_.ctx);
+                    refreshBanks();
+                    if(bank<int(banks_.size())) {selectedBank_=bank;selectedSlot_=0;slotScroll_=0;}
+                    repaint();
+                });
                 return;
             }
         } else {
@@ -2078,38 +2082,39 @@ void DesktopEditor::showImportDialog(int screenX,int screenY) {
     HMENU menu=CreatePopupMenu();
     AppendMenuW(menu,MF_STRING,1,L"Import .sy1 or ZIP bank...");
     AppendMenuW(menu,MF_STRING,2,L"Import folder...");
-    const int selected=int(TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,screenX,screenY,0,window_,nullptr));
-    DestroyMenu(menu);
-    if(!selected || !hooks_.importItems)return;
-    std::wstring path;
-    if(selected==1) {
-        if(!chooseFile(FileDialog::ImportFile,path)) return;
-    } else if(!pickFolder(L"Choose a folder containing Synth1 .sy1 presets",path)) return;
-    const std::string bytes=toUtf8(path);
-    const char* imported=hooks_.importItems(hooks_.ctx,bytes.c_str());
-    // newline-separated added items (SynthModel.importItems)
-    const std::string added=imported ? imported : "";
-    if(added.empty())
-        MessageBoxW(window_,L"No new preset bank was imported. The files may already exist or may not contain valid .sy1 presets.",
-                    L"Synth2",MB_ICONINFORMATION);
-    refreshBanks();
-    if(!added.empty())
-        flash(L"imported "+std::to_wstring(std::count(added.begin(),added.end(),'\n')+(added.back()=='\n'?0:1))+L" item(s)");
+    popupMenu(menu,screenX,screenY,[this](int selected) {
+        if(!selected || !hooks_.importItems)return;
+        auto import=[this](const std::wstring& path) {
+            const std::string bytes=toUtf8(path);
+            const char* imported=hooks_.importItems(hooks_.ctx,bytes.c_str());
+            // newline-separated added items (SynthModel.importItems)
+            const std::string added=imported ? imported : "";
+            if(added.empty())
+                messageBox(L"No new preset bank was imported. The files may already exist or may not contain valid .sy1 presets.",
+                           L"Synth2",MB_ICONINFORMATION);
+            refreshBanks();
+            if(!added.empty())
+                flash(L"imported "+std::to_wstring(std::count(added.begin(),added.end(),'\n')+(added.back()=='\n'?0:1))+L" item(s)");
+            repaint();
+        };
+        if(selected==1) chooseFile(FileDialog::ImportFile,import);
+        else pickFolder(L"Choose a folder containing Synth1 .sy1 presets",import);
+    });
 }
 
 void DesktopEditor::showFileDialog(bool save) {
-    std::wstring filename;
-    if(!chooseFile(save?FileDialog::SavePatch:FileDialog::OpenPatch,filename))return;
-    const std::string path=toUtf8(filename);
-    if(save) {
-        if(hooks_.savePatchFile && !hooks_.savePatchFile(hooks_.ctx,path.c_str()))
-            MessageBoxW(window_,L"Unable to save this patch.",L"Synth2",MB_ICONWARNING);
-    } else {
-        if(hooks_.loadPatchFile && hooks_.loadPatchFile(hooks_.ctx,path.c_str())) {
-            knownSerial_=-1;
-            refreshBanks();
-        } else MessageBoxW(window_,L"Unable to load this .sy1 patch.",L"Synth2",MB_ICONWARNING);
-    }
+    chooseFile(save?FileDialog::SavePatch:FileDialog::OpenPatch,[this,save](const std::wstring& filename) {
+        const std::string path=toUtf8(filename);
+        if(save) {
+            if(hooks_.savePatchFile && !hooks_.savePatchFile(hooks_.ctx,path.c_str()))
+                messageBox(L"Unable to save this patch.",L"Synth2",MB_ICONWARNING);
+        } else {
+            if(hooks_.loadPatchFile && hooks_.loadPatchFile(hooks_.ctx,path.c_str())) {
+                knownSerial_=-1;
+                refreshBanks();
+            } else messageBox(L"Unable to load this .sy1 patch.",L"Synth2",MB_ICONWARNING);
+        }
+    });
 }
 
 // UI sizes: commands 120.. (the logo menu, menu > Select size).
@@ -2132,9 +2137,7 @@ void DesktopEditor::showThemeMenu(int x,int y) {
     AppendMenuW(m,MF_SEPARATOR,0,nullptr);
     std::vector<themes::Palette> picks;
     appendThemes(m,picks);
-    int choice=int(TrackPopupMenu(m,TPM_RETURNCMD|TPM_NONOTIFY,x,y,0,window_,nullptr));
-    DestroyMenu(m);
-    if(!pickTheme(choice,picks)) pickSize(choice);
+    popupMenu(m,x,y,[this,picks](int choice) {if(!pickTheme(choice,picks)) pickSize(choice);});
 }
 void DesktopEditor::requestWidth(int width) {
     if(!plugFrame)return;
@@ -2169,27 +2172,27 @@ void DesktopEditor::showMainMenu(int x,int y) {
         AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
         AppendMenuW(menu,MF_STRING|(updateCheck_.Running()?MF_GRAYED:0),16,L"Check for updates...");
     }
-    int selected=int(TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,x,y,0,window_,nullptr));
-    DestroyMenu(menu);
-    switch(selected) {
-        case 10:
-            if(hooks_.initializePatch)hooks_.initializePatch(hooks_.ctx);
-            break;
-        case 11: showFileDialog(false);break;
-        case 12: showFileDialog(true);break;
-        case 13: setLearn(!midiLearn_);break;
-        case 14: if(hooks_.allNotesOff) {hooks_.allNotesOff(hooks_.ctx);flash(L"all notes off");} break;
-        case 17: // SynthModel.programChange
-            if(hooks_.setProgramChange) {
-                hooks_.setProgramChange(hooks_.ctx,programChange?0:1);
-                flash(programChange?L"program change: off":L"program change: on");
-            }
-            break;
-        case 15: showThemeEditor();break;
-        case 16: checkForUpdates();break;
-        default: if(!pickTheme(selected,picks)) pickSize(selected);break;
-    }
-    repaint();
+    popupMenu(menu,x,y,[this,programChange,picks](int selected) {
+        switch(selected) {
+            case 10:
+                if(hooks_.initializePatch)hooks_.initializePatch(hooks_.ctx);
+                break;
+            case 11: showFileDialog(false);break;
+            case 12: showFileDialog(true);break;
+            case 13: setLearn(!midiLearn_);break;
+            case 14: if(hooks_.allNotesOff) {hooks_.allNotesOff(hooks_.ctx);flash(L"all notes off");} break;
+            case 17: // SynthModel.programChange
+                if(hooks_.setProgramChange) {
+                    hooks_.setProgramChange(hooks_.ctx,programChange?0:1);
+                    flash(programChange?L"program change: off":L"program change: on");
+                }
+                break;
+            case 15: showThemeEditor();break;
+            case 16: checkForUpdates();break;
+            default: if(!pickTheme(selected,picks)) pickSize(selected);break;
+        }
+        repaint();
+    });
 }
 
 // SynthModel.checkForUpdates on Windows: the LCD says "Checking…" while
@@ -2211,11 +2214,11 @@ void DesktopEditor::updateArrived() {
     std::wstring text=toWide(update::Message(state,update::SiteName(site),update::Email(OXO_VENDOR_EMAIL)).c_str());
     if(state.kind==update::Kind::Available) {
         text+=L"\n\nOpen the download page?";
-        if(MessageBoxW(window_,text.c_str(),L"Check for updates",MB_YESNO|MB_ICONINFORMATION)==IDYES)
-            ShellExecuteW(window_,L"open",toWide(state.page.c_str()).c_str(),nullptr,nullptr,SW_SHOWNORMAL);
+        messageBox(text,L"Check for updates",MB_YESNO|MB_ICONINFORMATION,[this,page=toWide(state.page.c_str())](int answer) {
+            if(answer==IDYES) ShellExecuteW(window_,L"open",page.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
+        });
     } else {
-        MessageBoxW(window_,text.c_str(),L"Check for updates",
-                    MB_OK|(state.kind==update::Kind::Latest?MB_ICONINFORMATION:MB_ICONWARNING));
+        messageBox(text,L"Check for updates",MB_OK|(state.kind==update::Kind::Latest?MB_ICONINFORMATION:MB_ICONWARNING));
     }
 }
 void DesktopEditor::showParameterMenu(int id,int x,int y) {
@@ -2246,9 +2249,9 @@ void DesktopEditor::showParameterMenu(int id,int x,int y) {
             79,80,81,61,62,63,60,90,35,36,37,83,98,52,53,54,55,56,39,75,92,84,85,34,43,44,48,49};
         for(int item:assigns) add(menu,toWide(hooks_.paramName?hooks_.paramName(hooks_.ctx,item):""),item);
     }
-    int selected=int(TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,x,y,0,window_,nullptr));
-    DestroyMenu(menu); // and its sub-menus
-    if(selected>=2000&&selected<2000+int(values.size()))setValueOnce(id,values[size_t(selected-2000)]);
+    popupMenu(menu,x,y,[this,id,values](int selected) { // the menu is destroyed with its sub-menus
+        if(selected>=2000&&selected<2000+int(values.size()))setValueOnce(id,values[size_t(selected-2000)]);
+    });
 }
 void DesktopEditor::tick() {
     sharedThemes().flush(false);

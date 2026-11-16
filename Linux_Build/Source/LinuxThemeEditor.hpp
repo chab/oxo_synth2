@@ -23,7 +23,8 @@ public:
         std::function<void(const themes::Palette &)> apply;
         std::function<themes::Store &()> store;
         std::function<std::vector<themes::Named>()> fileThemes;
-        std::function<int(lx::Menu &, int, int)> track; // the editor's modal menu
+        // the editor's popup menu (it takes the menu; `then` gets the choice, 0 = none)
+        std::function<void(lx::Menu *, int, int, std::function<void(int)>)> track;
         lx::Dialogs *dialogs = nullptr;
     };
     ThemeEditorWindow() = default;
@@ -142,20 +143,22 @@ private:
     }
     void Click(int x, int y, int rx, int ry) {
         focus_ = -1;
-        if (kLoadBox.in(x, y) && !entries_.empty()) {
-            lx::Menu menu;
+        if (kLoadBox.in(x, y) && !entries_.empty() && host_.track) {
+            auto *menu = new lx::Menu;
             for (size_t i = 0; i < entries_.size(); ++i) {
                 const std::string name = entries_[i].name + (i == 0 ? " (default)" : "");
-                menu.items.push_back({lx::Wide(name.c_str()), int(i) + 1, int(i) == current_ ? unsigned(lx::MF_CHECKED) : 0u, nullptr});
+                menu->items.push_back({lx::Wide(name.c_str()), int(i) + 1, int(i) == current_ ? unsigned(lx::MF_CHECKED) : 0u, nullptr});
             }
-            const int choice = host_.track ? host_.track(menu, rx - x + kLoadBox.x, ry - y + kLoadBox.y + kLoadBox.h) : 0;
-            if (choice > 0 && choice <= int(entries_.size())) {
-                const auto &e = entries_[size_t(choice - 1)];
+            // the list as shown: entries_ may be rebuilt before the answer
+            host_.track(menu, rx - x + kLoadBox.x, ry - y + kLoadBox.y + kLoadBox.h, [this, list = entries_](int choice) {
+                if (!win_ || choice <= 0 || choice > int(list.size())) return;
+                const auto &e = list[size_t(choice - 1)];
                 host_.apply(e.palette);
                 name_ = e.name;
                 Populate();
                 SelectCurrent();
-            }
+                Paint();
+            });
         } else if (kDeleteBox.in(x, y)) {
             if (IsUser(current_)) { host_.store().Delete(entries_[size_t(current_)].name); RebuildList(); }
         } else if (kSaveBox.in(x, y)) {
@@ -167,7 +170,12 @@ private:
                 if (HexBox(i).in(x, y)) { focus_ = int(i) + 1; break; }
                 if (SwatchBox(i).in(x, y) && host_.dialogs) {
                     const std::string title = std::string("Synth2 Themes: ") + themes::kTitles[i];
-                    if (auto rgb = host_.dialogs->PickColor(title, host_.theme()[i])) { Edit(i, *rgb); Populate(); }
+                    host_.dialogs->PickColor(title, host_.theme()[i], [this, i](uint32_t rgb) {
+                        if (!win_) return;
+                        Edit(i, rgb);
+                        Populate();
+                        Paint();
+                    });
                     break;
                 }
             }

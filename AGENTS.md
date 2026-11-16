@@ -188,7 +188,16 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   shared header includes it) + zenity / kdialog dialogs, xdg-open,
   FileManager1 reveal, curl update check; `LinuxX11.hpp` = the popup
   menu; `LinuxThemeEditor.hpp`; `LinuxTrash.cpp` (freedesktop Trash on
-  the home filesystem, else deleted). Data = `$XDG_CONFIG_HOME/<data
+  the home filesystem, else deleted). NEVER BLOCK THE HOST'S UI THREAD:
+  no loop of our own on Linux (no X11 equivalent of Win32's modal loops,
+  which keep the host's windows alive), or GNOME calls the host "not
+  responding" after ~5 s. So menus and dialogs answer through callbacks
+  (`DesktopEditor::popupMenu` / `messageBox` / `askText` / `chooseFile` /
+  `pickFolder`: on Windows at once, on Linux later): the menu is fed by
+  the run loop's events (its grab makes all input its own), zenity /
+  kdialog run detached and `Dialogs::Poll` (the timer) hands over their
+  answer; meanwhile the panel ignores input (`modal()`), and closing the
+  editor drops both, no callback runs. Data = `$XDG_CONFIG_HOME/<data
   folder>`, library = the desktop's Documents (`XDG_DOCUMENTS_DIR` in
   user-dirs.dirs, else ~/Documents). Compile check of our Linux files:
   `-Wall -Wextra` clean, GCC 12+.

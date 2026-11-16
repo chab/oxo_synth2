@@ -9,7 +9,7 @@ change is made once and both get it. Here is only its X11 window:
 | `Source/LinuxEditor.cpp` | The editor's X11 window: a child of the host's window, events and the 50 ms timer from the host's `Linux::IRunLoop`, the cairo double buffer, mouse / wheel / keys, the write dialog's name field (drawn in the panel; Windows uses an EDIT control). |
 | `Source/LinuxGdiplus.hpp` | The part of GDI+ the panel draws with, on cairo. Fonts: Segoe UI / Consolas when installed, else the first of Noto Sans, Open Sans, Liberation Sans, DejaVu Sans (and Liberation Mono, DejaVu Sans Mono...), scaled horizontally to the Windows fonts' widths so labels and LCD columns fit as designed. |
 | `Source/LinuxPlatform.hpp` | The Win32 names the panel calls (menu building, constants), message boxes / file, folder and colour pickers (`zenity`, else `kdialog`), `xdg-open`, "Show in file manager" (FileManager1 over D-Bus), `curl` for "Check for updates". No X11: the shared header includes it. |
-| `Source/LinuxX11.hpp` | The popup menu (X11, modal like `TrackPopupMenu`). |
+| `Source/LinuxX11.hpp` | The popup menu (X11). Not modal: the host's run loop feeds it its events, so the host never stops answering the desktop. |
 | `Source/LinuxThemeEditor.hpp` | The Windows theme editor window, drawn with cairo. |
 | `Source/LinuxTrash.cpp` | Deletes go to the freedesktop.org Trash (`~/.local/share/Trash`) when the item is on the same filesystem, else they are deleted (as Windows without a Recycle Bin). |
 

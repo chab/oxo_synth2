@@ -2,8 +2,9 @@
 // browser, menus, input) is DesktopEditor/DesktopEditor.cpp, shared with
 // Windows. Here: the child window and the host's run loop (events + the
 // 50 ms timer), the double-buffered cairo paint, mouse / wheel / keys, the
-// write dialog's name field (drawn in the panel), the Win32 calls that need
-// the window (menus, message boxes, cursor), dialogs, the theme editor.
+// write dialog's name field (drawn in the panel), menus and dialogs (never
+// modal: they answer from the run loop), the Win32 calls that need the
+// window (cursor, keys), the theme editor.
 #include "DesktopEditor/DesktopEditor.hpp"
 #include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/base/keycodes.h"
@@ -45,7 +46,6 @@ std::wstring DesktopEditor::toWide(const char* utf8) { return lx::Wide(utf8); }
 std::string DesktopEditor::toUtf8(const std::wstring& wide) { return lx::Utf8(wide); }
 
 bool DesktopEditor::startGraphics() {
-    dialogs_.pump=[this]{pumpModal();};
     dialogs_.fallback=[this](const std::string& s){flash(toWide(s.c_str()),5000);};
     return true;
 }
@@ -88,6 +88,10 @@ bool DesktopEditor::openWindow() {
 }
 void DesktopEditor::closeWindow() {
     nameFieldOpen_=false;
+    // An open menu / dialog goes with the window, its `then` never runs.
+    menu_.reset();
+    menuThen_=nullptr;
+    dialogs_.Cancel();
     // The theme editor's window lives on this display connection.
     if(themeEditor_) {themeEditor_->Close();themeEditor_.reset();}
     if(runLoop_) {
@@ -231,39 +235,41 @@ bool DesktopEditor::nameFieldKey(char16 key,int16 keyCode,int16 modifiers) {
 }
 
 // ---- dialogs and the desktop -------------------------------------------------------
+// zenity / kdialog, started and left running: Dialogs::Poll (onTimer)
+// hands their answer to `then`. Meanwhile the panel's input waits (modal).
 HCURSOR DesktopEditor::copyCursor() { return IDC_COPY; } // X's plus
-bool DesktopEditor::askText(const wchar_t* title,const wchar_t* label,std::wstring& text) {
-    std::string t=toUtf8(text);
-    if(!dialogs_.AskText(toUtf8(title),toUtf8(label),t)) return false;
-    text=toWide(t.c_str());
-    return true;
+static lx::Dialogs::Then wideThen(std::function<void(const std::wstring&)> then) {
+    return [then](const std::string& s){if(then) then(lx::Wide(s.c_str()));};
 }
-bool DesktopEditor::chooseFile(FileDialog kind,std::wstring& path) {
-    std::optional<std::string> chosen;
+void DesktopEditor::messageBox(const std::wstring& text,const wchar_t* title,UINT flags,std::function<void(int)> then) {
+    const bool yesNo=(flags&MB_YESNO)!=0;
+    dialogs_.Message(toUtf8(title),toUtf8(text),(flags&0xF0)==MB_ICONWARNING,yesNo,[yesNo,then](bool yes) {
+        if(then) then(yesNo ? (yes ? IDYES : IDNO) : IDOK);
+    });
+}
+void DesktopEditor::askText(const wchar_t* title,const wchar_t* label,const std::wstring& text,
+                            std::function<void(const std::wstring&)> then) {
+    dialogs_.AskText(toUtf8(title),toUtf8(label),toUtf8(text),wideThen(std::move(then)));
+}
+void DesktopEditor::chooseFile(FileDialog kind,std::function<void(const std::wstring&)> then) {
     switch(kind) {
     case FileDialog::ImportFile:
-        chosen=dialogs_.OpenFile("Import Synth1 presets","Synth1 presets / ZIP banks","*.sy1 *.SY1 *.zip *.ZIP");
+        dialogs_.OpenFile("Import Synth1 presets","Synth1 presets / ZIP banks","*.sy1 *.SY1 *.zip *.ZIP",wideThen(std::move(then)));
         break;
     case FileDialog::OpenPatch:
-        chosen=dialogs_.OpenFile("Load patch file","Synth1 presets","*.sy1 *.SY1");
+        dialogs_.OpenFile("Load patch file","Synth1 presets","*.sy1 *.SY1",wideThen(std::move(then)));
         break;
     case FileDialog::SavePatch:
-        chosen=dialogs_.SaveFile("Save patch file","Synth1 presets","*.sy1 *.SY1","sy1");
+        dialogs_.SaveFile("Save patch file","Synth1 presets","*.sy1 *.SY1","sy1",wideThen(std::move(then)));
         break;
     }
-    if(!chosen) return false;
-    path=toWide(chosen->c_str());
-    return true;
 }
 // Finder.reveal: the file manager shows the item (FileManager1), else its folder.
 void DesktopEditor::revealInExplorer(const std::string& utf8Path) const {
     lx::Reveal(utf8Path);
 }
-bool DesktopEditor::pickFolder(const wchar_t* title,std::wstring& folder) const {
-    const auto path=dialogs_.PickFolder(toUtf8(title));
-    if(!path) return false;
-    folder=toWide(path->c_str());
-    return true;
+void DesktopEditor::pickFolder(const wchar_t* title,std::function<void(const std::wstring&)> then) {
+    dialogs_.PickFolder(toUtf8(title),wideThen(std::move(then)));
 }
 bool DesktopEditor::startUpdateCheck(const std::string& url) {
     return updateCheck_.Start(url); // curl; onTimer sees it done
@@ -277,7 +283,7 @@ void DesktopEditor::showThemeEditor() {
                                  [this](const themes::Palette& p){setTheme(p,true);paint();},
                                  []()->themes::Store&{return themeStore();},
                                  []{return themeFiles();},
-                                 [this](lx::Menu& m,int x,int y){return int(TrackPopupMenu(&m,0,x,y,0,window_,nullptr));},
+                                 [this](HMENU m,int x,int y,std::function<void(int)> then){popupMenu(m,x,y,std::move(then));},
                                  &dialogs_};
     themeEditor_->Show(display_,window_,std::move(host));
 }
@@ -288,24 +294,28 @@ void DesktopEditor::closeThemeEditor() {
     if(themeEditor_) themeEditor_->Close();
 }
 
-// ---- the Win32 calls that need the window ---------------------------------------
-UINT_PTR DesktopEditor::TrackPopupMenu(HMENU m,UINT,int x,int y,int,HWND,void*) {
-    if(!display_ || !m) return 0;
-    ++modalDepth_;
-    const int choice=lx::MenuTracker::Track(display_,*m,x,y,
-        [this](XEvent& e){handleEvent(&e,false);paint();},
-        [this]{tick();paint();});
-    --modalDepth_;
+// ---- popup menus --------------------------------------------------------------------
+// Open, grabbing the pointer and keyboard, and fed by onEvents until done:
+// no loop of ours, the host's UI thread runs on (TrackPopupMenu's modal
+// loop keeps the host's windows alive on Windows; X has no such thing).
+void DesktopEditor::MenuDeleter::operator()(lx::MenuTracker* m) const { delete m; }
+void DesktopEditor::popupMenu(HMENU m,int x,int y,std::function<void(int)> then) {
+    std::unique_ptr<lx::Menu> menu(m);
+    if(!display_ || menu_ || !menu || menu->items.empty()) {if(then) then(0);return;}
+    menu_.reset(new lx::MenuTracker(display_,std::move(menu),x,y));
+    menuThen_=std::move(then);
+}
+void DesktopEditor::finishMenu() {
+    const int choice=menu_ ? menu_->Result() : 0;
+    auto then=std::move(menuThen_);
+    menuThen_=nullptr;
+    menu_.reset(); // ungrabbed, its windows gone
     paint();
-    return UINT_PTR(std::max(choice,0));
+    if(then) then(choice);
 }
-int DesktopEditor::MessageBoxW(HWND,const std::wstring& text,const std::wstring& title,UINT flags) {
-    ++modalDepth_;
-    const bool yesNo=(flags&MB_YESNO)!=0;
-    const bool yes=dialogs_.Message(toUtf8(title),toUtf8(text),(flags&0xF0)==MB_ICONWARNING,yesNo);
-    --modalDepth_;
-    return yesNo ? (yes ? IDYES : IDNO) : IDOK;
-}
+bool DesktopEditor::modal() const { return menu_ || dialogs_.Busy(); }
+
+// ---- the Win32 calls that need the window ---------------------------------------
 short DesktopEditor::GetKeyState(UINT key) const {
     unsigned mask=0;
     switch(key) {
@@ -393,31 +403,26 @@ void DesktopEditor::paint() {
 }
 
 // ---- events -----------------------------------------------------------------------
+// While a menu is open, its events (and all input: its grab) are its own;
+// while a dialog is open, the panel only paints.
 void DesktopEditor::onEvents() {
     while(display_ && XPending(display_)) {
         XEvent e;
         XNextEvent(display_,&e);
-        handleEvent(&e,true);
+        if(menu_ && menu_->Handle(e)) {
+            if(menu_->Done()) finishMenu();
+            continue;
+        }
+        handleEvent(&e,!modal());
     }
     paint();
 }
 void DesktopEditor::onTimer() {
-    if(!display_ || modalDepth_>0) return;
-    tick();
-    if(updateCheck_.Done()) updateArrived();
-    onEvents(); // also paints
-}
-// A menu or a dialog is open (a modal loop, as on Windows): keep painting
-// and polling; input stays with the menu / dialog.
-void DesktopEditor::pumpModal() {
     if(!display_) return;
-    while(XPending(display_)) {
-        XEvent e;
-        XNextEvent(display_,&e);
-        handleEvent(&e,false);
-    }
+    dialogs_.Poll(); // a closed dialog answers
     tick();
-    paint();
+    if(!modal() && updateCheck_.Done()) updateArrived(); // its message box waits for an open one
+    onEvents(); // also paints
 }
 // The Windows editor's windowMessage, for X events.
 void DesktopEditor::handleEvent(void* event,bool input) {

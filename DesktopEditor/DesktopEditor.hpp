@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <filesystem>
+#include <functional>
 #include "EditorCore/Themes.hpp"
 #if defined(_WIN32)
 #include <windows.h>
@@ -28,6 +29,7 @@ class ThemeEditorWindow;
 class TextCache;
 #if !defined(_WIN32)
 class LinuxRunLoopHandler;
+namespace lx { class MenuTracker; } // LinuxX11.hpp
 #endif
 
 // The VST3 editor of the Windows and Linux builds (the mac's is SwiftUI):
@@ -204,11 +206,20 @@ private:
     // Keys the host delivers (onKeyDown) that belong to the name field: true = taken.
     bool nameFieldKey(Steinberg::char16 key, Steinberg::int16 keyCode, Steinberg::int16 modifiers);
     HCURSOR copyCursor();      // the drag cursor over a bank row: an arrow with a "+"
-    bool askText(const wchar_t* title, const wchar_t* label, std::wstring& text);
+    // Menus and dialogs answer through `then`: on Windows at once, after the
+    // system's modal loop (it keeps the host's windows running); on Linux
+    // later, from the host's run loop, which goes on meanwhile (a loop of
+    // ours there made the desktop call the host "not responding"). So a
+    // `then` keeps what it needs by value; it never runs once the window
+    // is closed. askText / chooseFile / pickFolder call it only on OK.
+    void popupMenu(HMENU menu, int screenX, int screenY, std::function<void(int)> then); // takes the menu; 0 = none chosen
+    void messageBox(const std::wstring& text, const wchar_t* title, UINT flags, std::function<void(int)> then = {});
+    void askText(const wchar_t* title, const wchar_t* label, const std::wstring& text,
+                 std::function<void(const std::wstring&)> then);
     enum class FileDialog { ImportFile, OpenPatch, SavePatch };
-    bool chooseFile(FileDialog kind, std::wstring& path); // false = cancelled
+    void chooseFile(FileDialog kind, std::function<void(const std::wstring&)> then);
     void revealInExplorer(const std::string& utf8Path) const;
-    bool pickFolder(const wchar_t* title, std::wstring& folder) const;
+    void pickFolder(const wchar_t* title, std::function<void(const std::wstring&)> then);
     bool startUpdateCheck(const std::string& url); // false = one is running
     static const char* const kUpdatePlatform;     // its key in releases.json: "win" / "linux"
     void showThemeEditor();
@@ -316,8 +327,6 @@ private:
 #else
     // ---- Linux only (LinuxEditor.cpp) ----
     // The Win32 calls that need this editor's window (LinuxPlatform.hpp has the others).
-    UINT_PTR TrackPopupMenu(HMENU menu, UINT flags, int x, int y, int, HWND, void*);
-    int MessageBoxW(HWND, const std::wstring& text, const std::wstring& title, UINT flags);
     void GetCursorPos(POINT* p) const { p->x = rootX_; p->y = rootY_; }
     short GetKeyState(UINT key) const;
     void SetCursor(HCURSOR c);
@@ -326,8 +335,9 @@ private:
     HWND GetCapture() const { return window_; }
 
     void paint();
-    void handleEvent(void* xevent, bool input); // an XEvent*; input = false while a menu / dialog is modal
-    void pumpModal();                           // a menu / dialog is open: paint, tick
+    void handleEvent(void* xevent, bool input); // an XEvent*; input = false while a menu / dialog is open
+    bool modal() const;                         // a menu or a dialog is open: the panel's input waits
+    void finishMenu();                          // the menu closed: its `then`
     void drawNameField(Gdiplus::Graphics& g);
     bool nameFieldEdit(unsigned long keysym, const std::string& utf8, bool ctrl); // true = taken
     ::_XDisplay* display_ = nullptr;
@@ -345,7 +355,9 @@ private:
     unsigned long lastClickTime_ = 0;
     int lastClickX_ = -100, lastClickY_ = -100;
     bool lastWasDouble_ = false;
-    int modalDepth_ = 0;
+    struct MenuDeleter { void operator()(lx::MenuTracker* m) const; };
+    std::unique_ptr<lx::MenuTracker, MenuDeleter> menu_; // the open popup menu
+    std::function<void(int)> menuThen_;
     // The write dialog's name field (Windows: a native EDIT control), drawn in the panel.
     bool nameFieldOpen_ = false;
     std::wstring nameText_;
