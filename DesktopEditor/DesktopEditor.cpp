@@ -1312,11 +1312,13 @@ void DesktopEditor::openBrowser(bool writing) {
     refreshBanks();
     scrollBankIntoView(selectedBank_); // as the list's scrollTo(currentBank)
     updateEditControl();
+    takeKeyFocus();
     repaint();
 }
 void DesktopEditor::closeBrowser() {
     browser_=writing_=false;
     if(selectedBank_==kNewUserBank) selectedBank_=-1; // the next refresh selects the loaded bank
+    releaseKeyFocus(); // before the name field goes
     updateEditControl();
     repaint();
 }
@@ -1615,7 +1617,8 @@ void DesktopEditor::commitWrite() {
 // browser open, up / down = previous / next patch (rolling into the
 // neighbouring banks, as < >), left / right = the neighbouring column
 // (nearest patch), Return / Enter close; in the write dialog Return /
-// Enter write. With Ctrl / Alt / Win held: the host's. False = not ours.
+// Enter write. With Ctrl / Alt / Win held, and the arrows with the browser
+// closed (as the mac): the host's. False = not ours.
 bool DesktopEditor::keyDown(UINT key) {
     if((GetKeyState(VK_CONTROL)|GetKeyState(VK_MENU)|GetKeyState(VK_LWIN)|GetKeyState(VK_RWIN))&0x8000) return false;
     if(key==VK_ESCAPE) {
@@ -1626,12 +1629,7 @@ bool DesktopEditor::keyDown(UINT key) {
         else return false;
         return true;
     }
-    if(!browser_) {
-        // the closed panel: left / right = < >
-        if(key!=VK_LEFT && key!=VK_RIGHT) return false;
-        stepPatch(key==VK_LEFT?-1:1);
-        return true;
-    }
+    if(!browser_) return false;
     if(key==VK_RETURN) {
         if(writing_) commitWrite(); else closeBrowser();
         return true;

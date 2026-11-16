@@ -661,10 +661,20 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   Enter / Esc close (write dialog: Esc only), Esc closes the logo menu.
   Routed by `Synth2HostingView`: local NSEvent monitor + own keyDown; Logic
   fallback = editor is the front window. Windows / Linux: `DesktopEditor::keyDown`
-  (WM_KEYDOWN + `IPlugView::onKeyDown`, WM_GETDLGCODE wants all keys; Ctrl
-  / Alt / Win = the host's): the same keys, plus Return / Enter in the
-  write dialog = Write (the name field forwards Return / Esc); < > and up /
-  down roll over banks in list order. Both: the bottom bar's write clicked
+  (WM_KEYDOWN / X KeyPress + `IPlugView::onKeyDown`; Ctrl / Alt / Win =
+  the host's): the same keys, plus Return / Enter in the write dialog =
+  Write (the name field forwards Return / Esc); < > and up / down roll
+  over banks in list order. KEYBOARD FOCUS (a user report, Studio Pro:
+  a knob click killed the space bar): the panel takes it ONLY for the
+  browser (`takeKeyFocus`: opening it, a click while it is open; a knob
+  never), gives it back on close (`releaseKeyFocus` → `hostFocusWindow`
+  = who had it before, else the host's window), and any key not ours
+  gives it back WITH that key (Windows: reposted to that window, our
+  WM_CHAR dropped; Linux: an XSendEvent copy; the Linux name field keeps
+  all keys). WM_GETDLGCODE: arrows (+ Return / Esc) with the browser
+  open, nothing else. Linux selects KeyPress only while it has the focus
+  (X gives a key to the window under the pointer). No arrows with the
+  browser closed (the mac has none). Both: the bottom bar's write clicked
   again while the write dialog is open = its Write (save in place: click,
   click).
 - MIDI LEARN: menu > MIDI Learn → every control wears a hotspot (dim =

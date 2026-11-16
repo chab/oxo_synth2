@@ -42,6 +42,12 @@ private:
 
 const char* const DesktopEditor::kUpdatePlatform="linux";
 
+// The window's events. KeyPress only while the panel has the keyboard
+// (takeKeyFocus): selected, it takes every key typed over the panel from
+// the host's window (X sends a key to the window under the pointer).
+static constexpr long kWindowEvents=ExposureMask|ButtonPressMask|ButtonReleaseMask|PointerMotionMask|
+                                    LeaveWindowMask|StructureNotifyMask|FocusChangeMask;
+
 std::wstring DesktopEditor::toWide(const char* utf8) { return lx::Wide(utf8); }
 std::string DesktopEditor::toUtf8(const std::wstring& wide) { return lx::Utf8(wide); }
 
@@ -66,8 +72,7 @@ bool DesktopEditor::openWindow() {
     if(!display_) {runLoop_->release();runLoop_=nullptr;return false;}
     const Window parent=Window(reinterpret_cast<uintptr_t>(systemWindow));
     XSetWindowAttributes a{};
-    a.event_mask=ExposureMask|ButtonPressMask|ButtonReleaseMask|PointerMotionMask|LeaveWindowMask|
-                 KeyPressMask|StructureNotifyMask|FocusChangeMask;
+    a.event_mask=kWindowEvents;
     a.background_pixmap=None;
     const int width=std::max(1,rect.getWidth()), height=std::max(1,rect.getHeight());
     window_=XCreateWindow(display_,parent,0,0,unsigned(width),unsigned(height),0,CopyFromParent,InputOutput,
@@ -87,6 +92,7 @@ bool DesktopEditor::openWindow() {
     return true;
 }
 void DesktopEditor::closeWindow() {
+    releaseKeyFocus();
     nameFieldOpen_=false;
     // An open menu / dialog goes with the window, its `then` never runs.
     menu_.reset();
@@ -112,6 +118,40 @@ void DesktopEditor::closeWindow() {
     }
     cursors_={};
     window_=0;display_=nullptr;
+}
+void DesktopEditor::takeKeyFocus() {
+    if(!display_ || !window_) return;
+    Window focus=0;int revert=0;
+    XGetInputFocus(display_,&focus,&revert);
+    if(focus==window_) return;
+    focusBefore_=focus;
+    XSelectInput(display_,window_,kWindowEvents|KeyPressMask);
+    XSetInputFocus(display_,window_,RevertToParent,CurrentTime);
+    XFlush(display_);
+}
+// The window that had the keyboard, if it is one of our ancestors (alive
+// while we are: a stale id would be an X error, fatal with Xlib's default
+// handler), else the host's window.
+HWND DesktopEditor::hostFocusWindow() const {
+    const Window parent=Window(reinterpret_cast<uintptr_t>(systemWindow));
+    for(Window w=window_;display_ && w && focusBefore_>PointerRoot;) {
+        Window root=0,up=0,*children=nullptr;unsigned n=0;
+        if(!XQueryTree(display_,w,&root,&up,&children,&n)) break;
+        if(children) XFree(children);
+        if(up==focusBefore_) return focusBefore_;
+        if(!up || up==root) break;
+        w=up;
+    }
+    return parent;
+}
+void DesktopEditor::releaseKeyFocus() {
+    if(!display_ || !window_) return;
+    XSelectInput(display_,window_,kWindowEvents);
+    Window focus=0;int revert=0;
+    XGetInputFocus(display_,&focus,&revert);
+    if(focus==window_) XSetInputFocus(display_,hostFocusWindow(),RevertToParent,CurrentTime); // viewable: we are
+    focusBefore_=0;
+    XFlush(display_);
 }
 void DesktopEditor::layoutChild() {
     if(display_ && window_) {
@@ -459,7 +499,7 @@ void DesktopEditor::handleEvent(void* event,bool input) {
                              std::abs(e.xbutton.x-lastClickX_)<5 && std::abs(e.xbutton.y-lastClickY_)<5;
             lastWasDouble_=twice;
             lastClickTime_=e.xbutton.time;lastClickX_=e.xbutton.x;lastClickY_=e.xbutton.y;
-            XSetInputFocus(display_,window_,RevertToParent,CurrentTime);
+            if(browser_) takeKeyFocus(); // a knob leaves the keyboard to the host
             mouseDown(x,y,twice);
         } else if(e.xbutton.button==Button3) { // WM_CONTEXTMENU
             if(typeMenu_>=0) {closeTypeMenu();break;} // like a click outside it
@@ -507,7 +547,16 @@ void DesktopEditor::handleEvent(void* event,bool input) {
         case XK_Return: case XK_KP_Enter: vk=VK_RETURN;break;
         default: break;
         }
-        if(vk) keyDown(vk);
+        if((vk && keyDown(vk)) || nameFieldOpen_) break; // the name field keeps the keyboard (Windows: its EDIT control)
+        // Not ours: the keyboard goes back to the host, with this key (a
+        // synthetic copy; its release goes to the new focus by itself).
+        const Window host=hostFocusWindow();
+        releaseKeyFocus();
+        XEvent copy=e;
+        copy.xkey.window=host;
+        copy.xkey.subwindow=0;
+        XSendEvent(display_,host,True,KeyPressMask,&copy);
+        XFlush(display_);
         break;
     }
     default: break;

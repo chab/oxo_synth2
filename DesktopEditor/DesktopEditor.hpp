@@ -202,6 +202,13 @@ private:
     void repaint() const;      // everything
     void invalidateDevice(int left, int top, int right, int bottom) const; // device pixels
     void updateEditControl();  // the write dialog's name field follows browser_ / writing_
+    // The keyboard: the panel takes it only for the browser (openBrowser, a
+    // click while it is open); closing it, or a key that is not ours, gives
+    // it back to the host (else the host's shortcuts, e.g. the space bar,
+    // stop working).
+    void takeKeyFocus();
+    void releaseKeyFocus();
+    HWND hostFocusWindow() const; // the keyboard's owner before us, else the host's window
     std::optional<std::wstring> nameFieldText() const; // nullopt = no field
     // Keys the host delivers (onKeyDown) that belong to the name field: true = taken.
     bool nameFieldKey(Steinberg::char16 key, Steinberg::int16 keyCode, Steinberg::int16 modifiers);
@@ -230,6 +237,7 @@ private:
     OxoSynth2Controller* controller_ = nullptr;
     OxoSynth2Hooks hooks_{};
     HWND window_{}; // the editor's child window (Win32 / X11)
+    HWND focusBefore_{}; // who had the keyboard before takeKeyFocus (none = unknown)
     std::vector<Control> controls_;
     themes::Palette theme_ = themes::Synth2(); // this instance's palette (kept in the session)
     std::array<Gdiplus::Color, themes::kSlotCount> colors_; // theme_ as GDI+ colours
@@ -314,6 +322,8 @@ private:
     static LRESULT CALLBACK wndProc(HWND window, UINT message, WPARAM w, LPARAM l);
     static win::WindowClass& windowClass();
     static LRESULT CALLBACK nameFieldProc(HWND field, UINT message, WPARAM w, LPARAM l);
+    bool hasKeyFocus() const;      // the panel or its name field
+    void noteFocusFrom(HWND from); // WM_SETFOCUS: `from` lost it (focusBefore_ unless ours)
     static constexpr UINT kUpdateMessage = WM_APP + 1;
     static constexpr UINT kFieldKeyMessage = WM_APP + 2; // name field: Return / Esc (wParam)
     HWND editName_ = nullptr;

@@ -107,6 +107,7 @@ bool DesktopEditor::openWindow() {
     return true;
 }
 void DesktopEditor::closeWindow() {
+    releaseKeyFocus();
     if(editName_) {DestroyWindow(editName_);editName_=nullptr;}
     if(window_) {KillTimer(window_,1);DestroyWindow(window_);window_=nullptr;windowClass().Release();}
     releaseBuffers();
@@ -226,12 +227,33 @@ bool DesktopEditor::nameFieldKey(char16,int16,int16) { return false; }
 // a posted message: Esc / a write destroy this field), no beep.
 LRESULT CALLBACK DesktopEditor::nameFieldProc(HWND field,UINT msg,WPARAM wp,LPARAM lp) {
     const auto previous=reinterpret_cast<WNDPROC>(GetWindowLongPtrW(field,GWLP_USERDATA));
+    if(msg==WM_SETFOCUS)
+        if(auto* editor=reinterpret_cast<DesktopEditor*>(GetWindowLongPtrW(GetParent(field),GWLP_USERDATA)))
+            editor->noteFocusFrom(HWND(wp));
     if(msg==WM_KEYDOWN && (wp==VK_RETURN || wp==VK_ESCAPE)) {
         PostMessageW(GetParent(field),kFieldKeyMessage,wp,0);
         return 0;
     }
     if(msg==WM_CHAR && (wp==L'\r' || wp==0x1B)) return 0;
     return CallWindowProcW(previous,field,msg,wp,lp);
+}
+
+bool DesktopEditor::hasKeyFocus() const {
+    const HWND focus=GetFocus();
+    return window_ && focus && (focus==window_ || IsChild(window_,focus));
+}
+void DesktopEditor::noteFocusFrom(HWND from) {
+    if(from && from!=window_ && !IsChild(window_,from)) focusBefore_=from;
+}
+void DesktopEditor::takeKeyFocus() {
+    if(window_ && !hasKeyFocus()) SetFocus(window_); // WM_SETFOCUS notes who had it
+}
+HWND DesktopEditor::hostFocusWindow() const {
+    return focusBefore_ && IsWindow(focusBefore_) ? focusBefore_ : GetAncestor(window_,GA_ROOT);
+}
+void DesktopEditor::releaseKeyFocus() {
+    if(hasKeyFocus()) SetFocus(hostFocusWindow());
+    focusBefore_=nullptr;
 }
 
 bool DesktopEditor::startUpdateCheck(const std::string& url) {
@@ -361,12 +383,14 @@ LRESULT DesktopEditor::windowMessage(UINT msg,WPARAM wp,LPARAM lp) {
     }
     case WM_TIMER:if(wp==1)tick();return 0;
     case kUpdateMessage:updateArrived();return 0;
+    // A click takes the keyboard only for the browser (a knob leaves it to the host).
     case WM_LBUTTONDOWN:
-        SetFocus(window_);
+        if(browser_) takeKeyFocus();
         mouseDown(float(GET_X_LPARAM(lp))/sx,float(GET_Y_LPARAM(lp))/sy,false);return 0;
     case WM_LBUTTONDBLCLK:
-        SetFocus(window_);
+        if(browser_) takeKeyFocus();
         mouseDown(float(GET_X_LPARAM(lp))/sx,float(GET_Y_LPARAM(lp))/sy,true);return 0;
+    case WM_SETFOCUS:noteFocusFrom(HWND(wp));return 0;
     case WM_MOUSEMOVE:
         if(!trackingMouseLeave_) {
             TRACKMOUSEEVENT tm{};
@@ -397,10 +421,27 @@ LRESULT DesktopEditor::windowMessage(UINT msg,WPARAM wp,LPARAM lp) {
         }
         return 0;
     }
-    case WM_GETDLGCODE: return DLGC_WANTALLKEYS|DLGC_WANTARROWS; // hosts with dialog-style windows
-    case WM_KEYDOWN:
+    case WM_GETDLGCODE: { // hosts with dialog-style windows: the browser's keys only
+        if(!browser_) return 0;
+        const auto* m=reinterpret_cast<const MSG*>(lp);
+        const bool returnOrEsc=m && m->message==WM_KEYDOWN && (m->wParam==VK_RETURN || m->wParam==VK_ESCAPE);
+        return DLGC_WANTARROWS|(returnOrEsc?DLGC_WANTMESSAGE:0);
+    }
+    case WM_KEYDOWN: { // (Alt keys: WM_SYSKEYDOWN, DefWindowProc hands them to the host's window)
         if(keyDown(UINT(wp))) return 0;
-        return DefWindowProcW(window_,msg,wp,lp);
+        // A key a host sent us without the focus: as before (forwarding it
+        // could bounce between us).
+        if(!hasKeyFocus()) return DefWindowProcW(window_,msg,wp,lp);
+        // Not ours: the keyboard goes back to the host, with this key (posted:
+        // the host's message loop translates it and runs its shortcuts).
+        const HWND host=hostFocusWindow();
+        releaseKeyFocus();
+        if(host) PostMessageW(host,msg,wp,lp);
+        return 0;
+    }
+    // The characters of those keys: ours mean nothing, the forwarded ones
+    // are translated again from the host's copy.
+    case WM_CHAR: case WM_DEADCHAR: return 0;
     case kFieldKeyMessage:keyDown(UINT(wp));return 0;
     case WM_CONTEXTMENU: {
         if(typeMenu_>=0) {closeTypeMenu();return 0;} // like a click outside it
