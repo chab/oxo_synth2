@@ -262,7 +262,7 @@ public:
         echoes_ = echoL != nullptr;
         const size_t size = buf_[0].size();
         for (int i = 0; i < n; ++i) {
-            double d[4]; // tap delays: L voice, R voice (types 1-3) / LL RL LR RR (type 4)
+            double d[4] = {}; // tap delays: L voice, R voice (types 1-3) / LL RL LR RR (type 4); {} for GCC 12's -Wmaybe-uninitialized
             const auto at = [&](double theta) { return std::clamp(base + depth * std::sin(2 * M_PI * (lfoPhase_ - theta)), 0.0, maxD); };
             if (quad) d[0] = at(0.0), d[1] = at(0.25), d[2] = at(0.5), d[3] = at(0.75);
             else d[0] = at(0.0), d[1] = at(thetaR);

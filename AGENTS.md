@@ -92,7 +92,7 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   `Storage.hpp` (per-user files, mac library / factory paths), `Trash.hpp`,
   `Json.hpp` (small strict JSON reader), `Settings.hpp` (settings.json:
   independent top-level keys, a save edits only its value in place; Windows
-  zoom, program change; `EngineCoreTests/SettingsTests.cpp`), `Themes.hpp` (the C++ mirror of
+  zoom, program change, invert mouse wheel; `EngineCoreTests/SettingsTests.cpp`), `Themes.hpp` (the C++ mirror of
   `Shared/SynthTheme.swift` for C++ editors: 13 keys, factory themes,
   lenient hex map, `stateText`, the `themes.json` store;
   `EngineCoreTests/ThemesTests.cpp` PARSES the Swift file, so a key or a
@@ -145,16 +145,20 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   scripts (its README: chunk layout, param mapping, process-wide state).
 - `tools/s2render/` — renders the same jobs through our engine.
 - `tools/prepare_mac_installer`, `tools/mac_installer/` — pkg / dmg.
+- `tools/prepare_linux_installer`, `tools/linux_installer/` (`install.sh`,
+  `README.txt`), `.github/workflows/linux-release.yml` — Linux tar.gz.
 - `reference/meta/` — committed measurements (params.json, nativemap.txt,
   the tables' sources). `reference/renders/` + `reference/derived/`
   (download, README "Reference data") and `reference/presets/` are
   gitignored.
 - `Windows_Build/` — Windows x64 VST3 port (contributed, PR #3): CMake
   project (parses `Identity.xcconfig` like the mac one, vendored zlib
-  1.3.1 = byte-identical upstream), `Source/` = native Win32 / GDI+ editor
-  (`WindowsEditor.cpp`: the SwiftUI panel's layout redrawn; static layer
-  cached in a bitmap, dynamic parts redrawn in the invalid rect only,
-  `TextCache` for outlines, parameter values polled like SynthModel),
+  1.3.1 = byte-identical upstream), editor = `DesktopEditor/` (shared with
+  Linux, below: `DesktopEditor.cpp` = the SwiftUI panel's layout redrawn
+  in GDI+, `TextCache` for outlines, parameter values polled like
+  SynthModel) + `Source/WindowsEditor.cpp` = its Win32 window (static
+  layer cached in a bitmap, dynamic parts redrawn in the invalid rect
+  only, the name field's EDIT control, common dialogs, WinHTTP),
   `WindowsThemeEditor.hpp` (ThemeDialog as a window), `WindowsModule.hpp`
   (window classes on OUR module, unregistered with the last window),
   `WindowsTrash.cpp` (Recycle Bin; false where Windows cannot recycle),
@@ -168,6 +172,44 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   is the mac's (no favourites: removed), incl. drag and drop.
   Windows-only code in shared files stays under `#if defined(_WIN32)` /
   `SMTG_OS_WINDOWS`.
+- `DesktopEditor/` — the ONE editor of Windows and Linux: a panel change
+  is made once here (and in SwiftUI). Written against Win32 + GDI+;
+  `DesktopEditor.hpp` lists the "platform" members each window file
+  defines (open / close the window, invalidate, name field, dialogs,
+  update check, theme editor...), plus a Windows and a Linux section.
+- `Linux_Build/` — Linux VST3 (x86_64 / aarch64): CMake (system zlib,
+  X11 + cairo + fontconfig via pkg-config; `OXO_LINUX_EDITOR=OFF` = no
+  editor), `build_linux.sh` (-> `~/.vst3`). `Source/LinuxEditor.cpp` =
+  DesktopEditor's X11 window: a child of the host's window, events + the
+  50 ms timer from the host's `Linux::IRunLoop` (REAPER, Bitwig, Ardour,
+  Carla; Wayland hosts embed through XWayland), cairo double buffer,
+  the name field drawn in the panel. `LinuxGdiplus.hpp` = the GDI+
+  subset the panel uses, on cairo (Segoe UI / Consolas stand-ins
+  condensed to their widths: labels and LCD columns fit as designed).
+  `LinuxPlatform.hpp` = the Win32 names the panel calls (no X11: the
+  shared header includes it) + zenity / kdialog dialogs, xdg-open,
+  FileManager1 reveal, curl update check; `LinuxX11.hpp` = the popup
+  menu; `LinuxThemeEditor.hpp`; `LinuxTrash.cpp` (freedesktop Trash on
+  the home filesystem, else deleted). NEVER BLOCK THE HOST'S UI THREAD:
+  no loop of our own on Linux (no X11 equivalent of Win32's modal loops,
+  which keep the host's windows alive), or GNOME calls the host "not
+  responding" after ~5 s. So menus and dialogs answer through callbacks
+  (`DesktopEditor::popupMenu` / `messageBox` / `askText` / `chooseFile` /
+  `pickFolder`: on Windows at once, on Linux later): the menu is fed by
+  the run loop's events (its grab makes all input its own), zenity /
+  kdialog run detached and `Dialogs::Poll` (the timer) hands over their
+  answer; meanwhile the panel ignores input (`modal()`), and closing the
+  editor drops both, no callback runs. The dialog is not owned by the
+  host's window (zenity 4 ignores `--attach`), so a click on the host
+  can hide it: while one is open, a veil over the panel says "A dialog
+  is open / Alt+Tab to show it, Esc to close it" (`dialogVeil_`, the
+  timer follows `Dialogs::Busy`); a click on it takes the keyboard (given
+  back with the veil); Esc = `Dialogs::Close` (as cancelled). Keeping it above the host (`_NET_WM_PID` →
+  `WM_TRANSIENT_FOR`, zenity forced to `GDK_BACKEND=x11`, kdialog
+  `QT_QPA_PLATFORM=xcb` + `--attach`) = still to do, test GNOME / KDE. Data = `$XDG_CONFIG_HOME/<data
+  folder>`, library = the desktop's Documents (`XDG_DOCUMENTS_DIR` in
+  user-dirs.dirs, else ~/Documents). Compile check of our Linux files:
+  `-Wall -Wextra` clean, GCC 12+.
 - `docs/images/` — README pictures (`synth2_preview.jpg`).
 - `third_party/` — submodules `vst3sdk` v3.8.1_build_84 (MIT) +
   `AudioUnitSDK` 1.4.0 (Apache 2.0); remaining patches: auwrapper hidden
@@ -292,6 +334,21 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   `tools/win_check/check.sh` compile-checks the Windows sources with
   mingw-w64 (`brew install mingw-w64`; warnings = errors; the worktree's
   SDK or `VST3SDK=<path>`). `.bat` files are CRLF (`.gitattributes`).
+- LINUX RELEASE: GitHub Actions > "Linux release" > Run workflow (on the
+  tag; manual only) → artifacts `<Product>-<ver>-<build>-Linux.tar.gz` +
+  `.sha256` (not zipped): ONE bundle with `Contents/x86_64-linux` +
+  `aarch64-linux`, `install.sh` (~/.vst3, `--system`, `--uninstall`),
+  `README.txt`. Each arch builds natively (`ubuntu-24.04`, `-arm`) in a
+  DEBIAN 12 container = the glibc floor (2.36; a newer build machine
+  raises it: `build` fails above `OXO_MAX_GLIBC`), static libstdc++ /
+  libgcc, a version script exporting only GetPluginFactory / ModuleEntry /
+  ModuleExit (no C++ symbol may bind to the host's libstdc++; checked).
+  `tools/prepare_linux_installer build` (per arch: own dir
+  `dist/linux/build-<arch>`, bundle checks, validator with a temporary
+  HOME, EngineCoreTests) / `package <dirs>` (merge, Resources must match)
+  run the same on any Linux box (`podman run -v $PWD:/src debian:12`).
+  Actions pinned by commit SHA. "Run workflow" only lists workflows on the
+  default branch; from there it runs on any branch or tag.
 - WINDOWS INSTALLER: `tools\prepare_win_installer.bat [--skip-build]
   [--skip-validator] [--msvc] [--dynamic-crt] [--no-pause]` on Windows (+
   Inno Setup 6.3+, `winget install JRSoftware.InnoSetup`) →
@@ -562,9 +619,15 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   / EQ / Delay / Chorus / Voice right). Knobs: vertical drag (Shift fine),
   double-click = INIT value, wheel (full range = 1440 pt, Shift 6x finer;
   displays / radios 33 pt per step; one host gesture per burst, ends after
-  0.4 s idle). WHEEL RULES (mac + Windows; the iPad has no wheel): up =
+  0.4 s idle). WHEEL RULES (mac + Windows + Linux; the iPad has no wheel): up =
   value up, clamped, in the DEVICE's direction (mac `deviceDeltaY`:
-  natural scrolling ignored, browser lists keep it); ignored on toggles,
+  natural scrolling ignored, browser lists keep it). Windows / Linux get
+  no such flag (natural scrolling, driver / vendor reversers and VMs flip
+  the events before we see them), so Menu > "Invert mouse wheel" (after
+  Themes..., all three desktops, not the iPad) flips the VALUE wheels,
+  never the lists: `invertMouseWheel` in settings.json, one value per
+  process (`storage::InvertWheel`, hooks `invertWheel` / `setInvertWheel`:
+  every open editor follows at once). Ignored on toggles,
   type / dst / range buttons, the ctrl src / assign menus and the VERTICAL
   LED lists (filter / arp type / range, LFO dst, voice mode); horizontal
   LEDs (sub oct, m.env dest), wave grids and every display step.
@@ -572,7 +635,7 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   owns the momentum tail (`WheelMonitor.momentumOwner`); Windows (no
   momentum flag) = a run of events < 300 ms apart belongs to the target
   under its first event, events over anything else are dropped
-  (`WindowsEditor::wheel` / `wheelTarget`). Type /
+  (`DesktopEditor::wheel` / `wheelTarget`). Type /
   dst / range buttons: click = next, Shift-click = back. ctrl src /
   assign = pop-up menus (src: pitch bend, ch pressure + 4 sub-menus "CC
   0–31".. of "#n:name" items; assign: none + Synth1's list in one column;
@@ -580,7 +643,7 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   a click opens a pick list under the display (`TypeMenu`, effect = 2 x 5
   grid, LFO shapes Synth1's 2 x 3 (saw / tri / sine | square / S&H /
   smooth, `lfoShapeOrder`), `SynthModel.typeMenu` = the open id; Windows: the same in-panel
-  list drawn in GDI+, `WindowsEditor::typeMenu_` / `drawTypeMenu`, wave
+  list drawn in GDI+, `DesktopEditor::typeMenu_` / `drawTypeMenu`, wave
   icons through `drawWaveShape`, theme display colours);
   phaser level reads feedback %. First click acts in
   an unfocused window (`acceptsFirstMouse`).
@@ -591,7 +654,7 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
 - Bottom LCD: line 1 "NNN:name" (click = browser) + ◀ ▶ (next / previous
   NON-EMPTY slot, rolls over banks), line 2 = bank "NN:name" or a 1.5 s
   readout ("filter freq: 64", learn / library messages). Windows: the
-  same (`WindowsEditor::show` / `flash`: panel edits only, learn, write,
+  same (`DesktopEditor::show` / `flash`: panel edits only, learn, write,
   delete, export, import, all notes off, the library notice 10 s, worded
   "Recycle Bin"). write = write
   dialog; menu = Initialize patch | Load / Save patch file… | MIDI Learn |
@@ -604,11 +667,22 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   down = ◀ ▶, left / right = next column, nearest non-empty slot), Return /
   Enter / Esc close (write dialog: Esc only), Esc closes the logo menu.
   Routed by `Synth2HostingView`: local NSEvent monitor + own keyDown; Logic
-  fallback = editor is the front window. Windows: `WindowsEditor::keyDown`
-  (WM_KEYDOWN + `IPlugView::onKeyDown`, WM_GETDLGCODE wants all keys; Ctrl
-  / Alt / Win = the host's): the same keys, plus Return / Enter in the
-  write dialog = Write (the name field forwards Return / Esc); < > and up /
-  down roll over banks in list order. Both: the bottom bar's write clicked
+  fallback = editor is the front window. Windows / Linux: `DesktopEditor::keyDown`
+  (WM_KEYDOWN / X KeyPress + `IPlugView::onKeyDown`; Ctrl / Alt / Win =
+  the host's): the same keys, plus Return / Enter in the write dialog =
+  Write (the name field forwards Return / Esc); < > and up / down roll
+  over banks in list order. KEYBOARD FOCUS (a user report, Studio Pro:
+  a knob click killed the space bar): the panel takes it ONLY for the
+  browser (`takeKeyFocus`: opening it, a click while it is open; a knob
+  never), gives it back on close (`releaseKeyFocus` → `hostFocusWindow`
+  = who had it before, else the host's window), and any key not ours
+  gives it back WITH that key (Windows: reposted to that window, our
+  WM_CHAR dropped; Linux: an XSendEvent copy; the Linux name field keeps
+  all keys). WM_GETDLGCODE: arrows (+ Return / Esc) with the browser
+  open, and always the characters (left to a dialog host, e.g. REAPER's
+  plugin window, a passed-on key's character beeps: no such mnemonic). Linux selects KeyPress only while it has the focus
+  (X gives a key to the window under the pointer). No arrows with the
+  browser closed (the mac has none). Both: the bottom bar's write clicked
   again while the write dialog is open = its Write (save in place: click,
   click).
 - MIDI LEARN: menu > MIDI Learn → every control wears a hotspot (dim =

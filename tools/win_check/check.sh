@@ -31,7 +31,7 @@ sed -e 's|#cmakedefine \(.*\)|/* #undef \1 */|' "$ZLIB/zconf.h.cmakein" > "$OUT/
 FLAGS=(-std=c++20 -c -Wall -Wextra -Werror -DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN
        -D_USE_MATH_DEFINES -DRELEASE=1 -I. -I"$OUT/gen" -IWindows_Build/Source -isystem "$SDK" -isystem "$ZLIB")
 fail=0
-for f in Windows_Build/Source/*.cpp OxoSynth2VST3/source/OxoSynth2Controller.cpp \
+for f in Windows_Build/Source/*.cpp DesktopEditor/*.cpp OxoSynth2VST3/source/OxoSynth2Controller.cpp \
          OxoSynth2VST3/source/OxoSynth2Processor.cpp OxoSynth2VST3/source/OxoSynth2Entry.cpp \
          Windows_Build/Tests/*.cpp tools/bench/main.cpp; do
     if "$CXX" "${FLAGS[@]}" "$f" -o "$OUT/$(basename "$f" .cpp).o" 2> "$OUT/$(basename "$f" .cpp).log"; then

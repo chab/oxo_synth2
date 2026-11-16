@@ -11,6 +11,7 @@
 #include "EngineCore/PatchLibrary.hpp"
 #include "EngineCore/ProgramChange.hpp"
 #include "EditorCore/OxoSynth2Bridge.h"
+#include "EditorCore/Storage.hpp"
 #include "EditorCore/Trash.hpp"
 
 #if defined(_WIN32)
@@ -309,6 +310,8 @@ public:
         };
         h.programChange = [](void *c) { return int32_t(C(c)->ProgramChangeOn()); };
         h.setProgramChange = [](void *c, int32_t on) { C(c)->SetProgramChangeOn(on != 0); };
+        h.invertWheel = [](void *) { return int32_t(storage::InvertWheel()); };
+        h.setInvertWheel = [](void *, int32_t on) { storage::SetInvertWheel(on != 0); };
         return h;
     }
 

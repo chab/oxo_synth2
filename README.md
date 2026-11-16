@@ -26,7 +26,7 @@ Official builds are published on the Oxo Music website:
 - macOS 14+ (VST3 + AU, signed and notarized): <https://oxo-music.com/products/oxo_synth2>
 - Windows 10+ x64 (VST3): <https://oxo-music.com/products/oxo_synth2> (thanks to [sl23](https://github.com/sl2365) for the contribution)
 - iPad (AUv3): <https://apps.apple.com/us/app/oxo-synth2/id6829692180>
-- Linux: not available yet. Ports are welcome: if you're interested, open an issue to signal you're working on it, fork the repository and open a pull request. Please keep it a 1:1 port of the macOS / Windows versions (no new features).
+- Linux: build it yourself, see [Linux (VST3)](#linux-vst3).
 
 ## Relationship to Synth1
 
@@ -120,6 +120,20 @@ xcopy Windows_Build\build\VST3\Release\OxoSynth2.vst3 "%CommonProgramFiles%\VST3
   moved: the usual folders stay as they are and are used again if
   `Synth2_Data` goes away. Restart the host after adding or removing it.
 
+### Linux (VST3)
+
+Needs CMake 3.25+, GCC 12+ (or Clang 15+), pkg-config and the X11, cairo,
+fontconfig and zlib development packages (Debian / Ubuntu:
+`sudo apt install build-essential cmake pkg-config libx11-dev libcairo2-dev libfontconfig-dev zlib1g-dev`).
+
+```sh
+./build_linux.sh   # builds Linux_Build/build/VST3/Release/OxoSynth2.vst3 and installs it into ~/.vst3
+```
+
+Settings and themes are kept in `~/.config/Oxo Music/Oxo Synth2/`, banks in
+`Oxo Music/Oxo Synth2/` in your Documents folder (the desktop's, e.g.
+`~/Dokumente`). Details: [Linux_Build/README.md](Linux_Build/README.md).
+
 ### Tests
 
 ```sh
@@ -169,7 +183,9 @@ on first run. `--help` lists the options.
 | `EditorCore/` | Editor services shared by the VST3 and the AUv3 (C bridge to the UI, state, per-user files) |
 | `Shared/` | The SwiftUI panel (mac and iPad) |
 | `OxoSynth2VST3/` | VST3 plugin (+ the SDK's AUv2 wrapper), CMake |
-| `Windows_Build/` | Windows VST3: CMake project, native Win32 / GDI+ editor, vendored zlib |
+| `DesktopEditor/` | The Windows and Linux editor (GDI+ panel; each platform adds its window) |
+| `Windows_Build/` | Windows VST3: CMake project, the editor's Win32 window, vendored zlib |
+| `Linux_Build/` | Linux VST3: CMake project, the editor's X11 window, GDI+ on cairo |
 | `OxoSynth2.xcodeproj`, `OxoSynth2/`, `OxoSynth2AudioUnit/` | iPad app (an "open it in a host" screen) + AUv3 extension |
 | `EngineCoreTests/` | Engine unit tests |
 | `tools/s1ref/` | Black-box harness for the original Synth1 + the measurement / fitting scripts |

@@ -70,6 +70,10 @@ typedef struct OxoSynth2Hooks {
     // a per-user preference, saved by the wrapper.
     int32_t (*programChange)(void *ctx);
     void (*setProgramChange)(void *ctx, int32_t on);
+    // Menu > Invert mouse wheel (desktop editors): value wheels turn the
+    // other way (1); a per-user preference, one value for every instance.
+    int32_t (*invertWheel)(void *ctx);
+    void (*setInvertWheel)(void *ctx, int32_t on);
 } OxoSynth2Hooks;
 
 // Asks the host for a new editor width (the height follows the aspect):

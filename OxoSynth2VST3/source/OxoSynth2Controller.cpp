@@ -14,8 +14,8 @@
 
 #if SMTG_OS_MACOS
 #include "OxoSynth2EditorView.h"
-#elif SMTG_OS_WINDOWS
-#include "WindowsEditor.hpp"
+#elif SMTG_OS_WINDOWS || (SMTG_OS_LINUX && defined(OXO_LINUX_EDITOR))
+#include "DesktopEditor/DesktopEditor.hpp"
 #endif
 
 #include <cmath>
@@ -143,8 +143,8 @@ tresult PLUGIN_API OxoSynth2Controller::setComponentState(IBStream *state) {
 IPlugView *PLUGIN_API OxoSynth2Controller::createView(FIDString name) {
 #if SMTG_OS_MACOS
     if (name && strcmp(name, Vst::ViewType::kEditor) == 0) return new OxoSynth2EditorView(this);
-#elif SMTG_OS_WINDOWS
-    if (name && strcmp(name, Vst::ViewType::kEditor) == 0) return new WindowsEditor(this);
+#elif SMTG_OS_WINDOWS || (SMTG_OS_LINUX && defined(OXO_LINUX_EDITOR))
+    if (name && strcmp(name, Vst::ViewType::kEditor) == 0) return new DesktopEditor(this);
 #else
     (void)name;
 #endif

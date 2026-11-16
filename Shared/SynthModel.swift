@@ -79,6 +79,9 @@ public protocol SynthHost: AnyObject {
     /// Menu > Program change: MIDI program changes played (true) or
     /// ignored; a per-user preference, saved by the wrapper.
     var programChange: Bool { get set }
+    /// Menu > Invert mouse wheel (mac only): value wheels turn the other
+    /// way; a per-user preference shared by every instance.
+    var invertWheel: Bool { get set }
 }
 
 /// The voice grid's feed, apart from SynthModel so a 30 Hz change only
@@ -178,6 +181,16 @@ final class SynthModel: ObservableObject {
             flash(programChange ? "program change: on" : "program change: off")
         }
     }
+    /// Menu > Invert mouse wheel (checkmark): knobs, buttons and displays
+    /// turn the other way (on top of `deviceDeltaY`, for what macOS does
+    /// not report: wheel reversers, VMs); scrolled lists are not affected.
+    @Published var invertWheel = false {
+        didSet {
+            guard invertWheel != host.invertWheel else { return } // poll: another instance's change
+            host.invertWheel = invertWheel
+            flash(invertWheel ? "invert mouse wheel: on" : "invert mouse wheel: off")
+        }
+    }
     /// Menu > Check for updates: the dialog's state, nil = closed.
     @Published var update: UpdateCheck.State?
     private var updateRequest = 0
@@ -213,6 +226,7 @@ final class SynthModel: ObservableObject {
         learnTable = (0..<Self.paramCount).map { host.midiCC($0) }
         patchName = host.patchName
         programChange = host.programChange
+        invertWheel = host.invertWheel
         serial = host.patchSerial
         palette = ThemePalette(stateText: host.themeText) ?? ThemeStore.shared.startPalette()
         host.setThemeText(palette.stateText)
@@ -269,6 +283,8 @@ final class SynthModel: ObservableObject {
         }
         let loading = host.libraryScanning
         if loading != libraryLoading { libraryLoading = loading }
+        let invert = host.invertWheel
+        if invert != invertWheel { invertWheel = invert }
         let voiceStates = host.voiceStates
         if voiceStates != voices.states { voices.states = voiceStates }
         let now = Date()
@@ -376,7 +392,7 @@ final class SynthModel: ObservableObject {
         guard steps != 0 else { return }
         if wheelEnds[id] == nil { host.beginEdit(id) }
         wheelEnds[id] = Date().addingTimeInterval(0.4)
-        set(id, stepped(id, from: values[id], by: steps))
+        set(id, stepped(id, from: values[id], by: invertWheel ? -steps : steps))
     }
 
     func show(_ id: Int) { flash("\(host.displayName(id)): \(host.format(id, values[id]))") }

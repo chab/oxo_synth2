@@ -135,6 +135,7 @@ struct BottomBar: View {
             }
             Button("Themes…") { model.showThemes = true }
             #if os(macOS)
+            Toggle("Invert mouse wheel", isOn: $model.invertWheel)
             if UpdateCheck.enabled {
                 Divider()
                 Button("Check for updates…") { model.checkForUpdates() }

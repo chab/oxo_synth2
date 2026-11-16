@@ -14,6 +14,8 @@
 
 namespace oxo::json {
 
+struct Member;
+
 struct Value {
     enum class Type { Null, Bool, Number, String, Array, Object };
     Type type = Type::Null;
@@ -21,16 +23,25 @@ struct Value {
     double number = 0;
     std::string string;
     std::vector<Value> array;
-    std::vector<std::pair<std::string, Value>> object; // file order; a repeated key: the last wins in Find
+    std::vector<Member> object; // file order; a repeated key: the last wins in Find
 
     bool IsObject() const { return type == Type::Object; }
     bool IsString() const { return type == Type::String; }
-    const Value *Find(std::string_view key) const {
-        for (auto it = object.rbegin(); it != object.rend(); ++it)
-            if (it->first == key) return &it->second;
-        return nullptr;
-    }
+    const Value *Find(std::string_view key) const;
 };
+
+// An object's key and value. Not std::pair<std::string, Value>: Value is
+// incomplete inside itself, which clang with libstdc++ rejects for a pair.
+struct Member {
+    std::string first;
+    Value second;
+};
+
+inline const Value *Value::Find(std::string_view key) const {
+    for (auto it = object.rbegin(); it != object.rend(); ++it)
+        if (it->first == key) return &it->second;
+    return nullptr;
+}
 
 namespace detail {
 struct Reader {
@@ -150,7 +161,7 @@ struct Reader {
         ++p;
         if (Eat('}')) return true;
         do {
-            std::pair<std::string, Value> item;
+            Member item;
             if (!String(item.first) || !Eat(':') || !Parse(item.second)) return false;
             v.object.push_back(std::move(item));
         } while (Eat(','));

@@ -97,7 +97,8 @@ inline std::string Hex(uint32_t rgb) {
 // colour; anything else is ignored.
 inline Palette FromHexMap(const json::Value &map) {
     Palette p = Synth2();
-    for (const auto &[key, value] : map.object) {
+    for (const auto &[name, value] : map.object) {
+        const std::string &key = name; // a lambda cannot capture a structured binding before clang 16
         const auto slot = std::find_if(kKeys.begin(), kKeys.end(), [&](const char *k) { return key == k; });
         uint32_t rgb = 0;
         if (slot != kKeys.end() && value.IsString() && ParseHex(value.string, rgb)) p[size_t(slot - kKeys.begin())] = rgb;

@@ -75,6 +75,7 @@ final class MockHost: SynthHost {
     var themeText = ""
     func setThemeText(_ text: String) { themeText = text }
     var programChange = false
+    var invertWheel = false
 }
 
 let args = CommandLine.arguments

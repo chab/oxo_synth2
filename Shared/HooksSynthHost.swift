@@ -59,6 +59,10 @@ final class HooksSynthHost: SynthHost {
         get { h.programChange(h.ctx) != 0 }
         set { h.setProgramChange(h.ctx, newValue ? 1 : 0) }
     }
+    var invertWheel: Bool {
+        get { h.invertWheel(h.ctx) != 0 }
+        set { h.setInvertWheel(h.ctx, newValue ? 1 : 0) }
+    }
     func loadedProgram() -> (bank: Int, slot: Int)? {
         var bank: Int32 = -1, slot: Int32 = -1
         h.loadedProgram(h.ctx, &bank, &slot)
