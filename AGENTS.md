@@ -199,7 +199,14 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   the run loop's events (its grab makes all input its own), zenity /
   kdialog run detached and `Dialogs::Poll` (the timer) hands over their
   answer; meanwhile the panel ignores input (`modal()`), and closing the
-  editor drops both, no callback runs. Data = `$XDG_CONFIG_HOME/<data
+  editor drops both, no callback runs. The dialog is not owned by the
+  host's window (zenity 4 ignores `--attach`), so a click on the host
+  can hide it: while one is open, a veil over the panel says "A dialog
+  is open / Alt+Tab to show it, Esc to close it" (`dialogVeil_`, the
+  timer follows `Dialogs::Busy`); a click on it takes the keyboard (given
+  back with the veil); Esc = `Dialogs::Close` (as cancelled). Keeping it above the host (`_NET_WM_PID` →
+  `WM_TRANSIENT_FOR`, zenity forced to `GDK_BACKEND=x11`, kdialog
+  `QT_QPA_PLATFORM=xcb` + `--attach`) = still to do, test GNOME / KDE. Data = `$XDG_CONFIG_HOME/<data
   folder>`, library = the desktop's Documents (`XDG_DOCUMENTS_DIR` in
   user-dirs.dirs, else ~/Documents). Compile check of our Linux files:
   `-Wall -Wextra` clean, GCC 12+.

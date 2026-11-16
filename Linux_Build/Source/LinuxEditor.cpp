@@ -94,6 +94,7 @@ bool DesktopEditor::openWindow() {
 void DesktopEditor::closeWindow() {
     releaseKeyFocus();
     nameFieldOpen_=false;
+    dialogVeil_=false;
     // An open menu / dialog goes with the window, its `then` never runs.
     menu_.reset();
     menuThen_=nullptr;
@@ -153,6 +154,17 @@ void DesktopEditor::releaseKeyFocus() {
     focusBefore_=0;
     XFlush(display_);
 }
+// The key goes with it as a synthetic copy; its release goes to the new
+// focus by itself.
+void DesktopEditor::passKeyToHost(void* event) {
+    const Window host=hostFocusWindow();
+    releaseKeyFocus();
+    XEvent copy=*static_cast<XEvent*>(event);
+    copy.xkey.window=host;
+    copy.xkey.subwindow=0;
+    XSendEvent(display_,host,True,KeyPressMask,&copy);
+    XFlush(display_);
+}
 void DesktopEditor::layoutChild() {
     if(display_ && window_) {
         const int width=std::max(1,rect.getWidth()), height=std::max(1,rect.getHeight());
@@ -189,6 +201,18 @@ void DesktopEditor::updateEditControl() {
 std::optional<std::wstring> DesktopEditor::nameFieldText() const {
     if(!nameFieldOpen_) return std::nullopt;
     return nameText_;
+}
+void DesktopEditor::drawDialogVeil(Graphics& g) {
+    if(!dialogVeil_) return;
+    SolidBrush veil(Color(BYTE(140),0,0,0));
+    g.FillRectangle(&veil,0.f,0.f,kDesignWidth,kDesignHeight);
+    const RectF box(215.f,240.f,340.f,64.f);
+    if(!visible(box)) return;
+    const auto& p=colors_;
+    LinearGradientBrush face(PointF(box.X,box.Y),PointF(box.X,box.Y+box.Height),p[themes::kDisplayTop],p[themes::kDisplayBottom]);
+    g.FillRectangle(&face,box);
+    text(g,L"A dialog is open",box.X,box.Y+9.f,box.Width,24.f,17.f,p[themes::kDisplayText],true,true);
+    text(g,L"Alt+Tab to show it, Esc to close it",box.X,box.Y+36.f,box.Width,20.f,13.f,p[themes::kDisplayText],false,true);
 }
 void DesktopEditor::drawNameField(Graphics& g) {
     if(!nameFieldOpen_ || !visible(kNameField)) return;
@@ -424,6 +448,7 @@ void DesktopEditor::paint() {
             paintClip_=RectF(float(r.x)/sx-1.f,float(r.y)/sy-1.f,float(r.width)/sx+2.f,float(r.height)/sy+2.f);
             drawDynamic(g);
             drawNameField(g);
+            drawDialogVeil(g);
         }
         cairo_restore(back);
         cairo_surface_flush(back_);
@@ -460,6 +485,11 @@ void DesktopEditor::onEvents() {
 void DesktopEditor::onTimer() {
     if(!display_) return;
     dialogs_.Poll(); // a closed dialog answers
+    if(dialogVeil_!=dialogs_.Busy()) {
+        dialogVeil_=!dialogVeil_;
+        if(!dialogVeil_ && !browser_) releaseKeyFocus();
+        repaint();
+    }
     tick();
     if(!modal() && updateCheck_.Done()) updateArrived(); // its message box waits for an open one
     onEvents(); // also paints
@@ -478,7 +508,15 @@ void DesktopEditor::handleEvent(void* event,bool input) {
         invalidateDevice(e.xexpose.x,e.xexpose.y,e.xexpose.x+e.xexpose.width,e.xexpose.y+e.xexpose.height);
         return;
     }
-    if(!input) return;
+    if(!input) {
+        if(menu_ || !dialogs_.Busy()) return;
+        if(e.type==ButtonPress && e.xbutton.button==Button1) takeKeyFocus(); // for Esc
+        else if(e.type==KeyPress) {
+            if(XLookupKeysym(&e.xkey,0)==XK_Escape) {dialogs_.Close();flash({});}
+            else passKeyToHost(&e);
+        }
+        return;
+    }
     // WM_SETCURSOR: a hand over what reacts to a click, the resize arrow over the grip.
     auto updateCursor=[&](int px,int py) {
         if(press_.active && press_.dragging) {SetCursor(dragCursor());return;}
@@ -548,15 +586,7 @@ void DesktopEditor::handleEvent(void* event,bool input) {
         default: break;
         }
         if((vk && keyDown(vk)) || nameFieldOpen_) break; // the name field keeps the keyboard (Windows: its EDIT control)
-        // Not ours: the keyboard goes back to the host, with this key (a
-        // synthetic copy; its release goes to the new focus by itself).
-        const Window host=hostFocusWindow();
-        releaseKeyFocus();
-        XEvent copy=e;
-        copy.xkey.window=host;
-        copy.xkey.subwindow=0;
-        XSendEvent(display_,host,True,KeyPressMask,&copy);
-        XFlush(display_);
+        passKeyToHost(&e);
         break;
     }
     default: break;

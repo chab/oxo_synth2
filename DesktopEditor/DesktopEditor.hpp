@@ -349,6 +349,13 @@ private:
     bool modal() const;                         // a menu or a dialog is open: the panel's input waits
     void finishMenu();                          // the menu closed: its `then`
     void drawNameField(Gdiplus::Graphics& g);
+    void passKeyToHost(void* xevent); // a KeyPress not ours: the keyboard goes back to the host with it
+    // A dialog may hide behind the host's window (zenity / kdialog are not
+    // owned by it): while one is open, a veil over the panel says so (a
+    // panel that ignores clicks looked frozen); a click on it takes the
+    // keyboard for Esc (closes the dialog), given back with the veil.
+    bool dialogVeil_ = false;
+    void drawDialogVeil(Gdiplus::Graphics& g);
     bool nameFieldEdit(unsigned long keysym, const std::string& utf8, bool ctrl); // true = taken
     ::_XDisplay* display_ = nullptr;
     Steinberg::Linux::IRunLoop* runLoop_ = nullptr;

@@ -368,6 +368,16 @@ public:
         if (done) done(status, out); // may start the next dialog
         Next();
     }
+    // Esc on the panel: the open dialog closes as cancelled (its `then` as
+    // for Cancel / No), the next one opens.
+    void Close() {
+        if (!child_) return;
+        Done done = std::move(done_);
+        done_ = nullptr;
+        child_.reset(); // stops it
+        if (done) done(1, {});
+        Next();
+    }
     // The editor closes: the dialogs too, no `then` runs.
     void Cancel() {
         queue_.clear();
