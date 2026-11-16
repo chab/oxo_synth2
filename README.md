@@ -17,16 +17,18 @@ Synth2 aims to keep those sounds playable on modern computers. Open source, so t
 
 Note: the original Synth1 was studied only through its audio output. The binary was never disassembled or decompiled (see the clean-room rule in [AGENTS.md](AGENTS.md#rules)).
 
-Formats: macOS VST3 + AUv2, iPad AUv3, Windows VST3 (x64).
+Formats: macOS VST3 + AUv2, iPad AUv3, Windows VST3 (x64), Linux VST3 (x86-64, ARM64).
 
 ## Download
 
 Official builds are published on the Oxo Music website:
 
 - macOS 14+ (VST3 + AU, signed and notarized): <https://oxo-music.com/products/oxo_synth2>
-- Windows 10+ x64 (VST3): <https://oxo-music.com/products/oxo_synth2> (thanks to [sl23](https://github.com/sl2365) for the contribution)
+- Windows 10+ x64 (VST3): <https://oxo-music.com/products/oxo_synth2>
 - iPad (AUv3): <https://apps.apple.com/us/app/oxo-synth2/id6829692180>
-- Linux: build it yourself, see [Linux (VST3)](#linux-vst3).
+- Linux x86-64 / ARM64 (VST3): <https://oxo-music.com/products/oxo_synth2> or [build it yourself](#building)
+
+Thanks to [sl23](https://github.com/sl2365) for the Windows version and [Eufex](https://github.com/eufex) for the Linux version.
 
 ## Relationship to Synth1
 
@@ -42,7 +44,7 @@ time, but got no reply.
 Synth1 is a trademark/work of its respective owner. Patches (`.sy1`) are
 loaded for compatibility only; no Synth1 banks are distributed.
 
-> Dear Daichi, if you're reading this: I hope you're well. I'm not trying to take over your project; I'd just love to keep Synth1 patches playable for future generations. Please [contact me](https://oxo-music.com/support/): if you'd rather this project didn't exist, I'll take it down. Above all, I would love to see YOUR original code released under an open-source license. I'd be happy to maintain it if you're open to it.
+> Dear Daichi, if you're reading this: I hope you're well. I'm not trying to take over your project; I'd just love to keep Synth1 patches playable on modern computers. Please [contact me](https://oxo-music.com/support/): if you'd rather this project didn't exist, I'll take it down. Above all, I would love to see YOUR original code released under an open-source license. I'd be happy to maintain it if you're open to it.
 
 ## Building
 
@@ -131,8 +133,7 @@ fontconfig and zlib development packages (Debian / Ubuntu:
 ```
 
 Settings and themes are kept in `~/.config/Oxo Music/Oxo Synth2/`, banks in
-`Oxo Music/Oxo Synth2/` in your Documents folder (the desktop's, e.g.
-`~/Dokumente`). Details: [Linux_Build/README.md](Linux_Build/README.md).
+`~/Documents/Oxo Music/Oxo Synth2/`. Details: [Linux_Build/README.md](Linux_Build/README.md).
 
 ### Tests
 
