@@ -672,7 +672,8 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   gives it back WITH that key (Windows: reposted to that window, our
   WM_CHAR dropped; Linux: an XSendEvent copy; the Linux name field keeps
   all keys). WM_GETDLGCODE: arrows (+ Return / Esc) with the browser
-  open, nothing else. Linux selects KeyPress only while it has the focus
+  open, and always the characters (left to a dialog host, e.g. REAPER's
+  plugin window, a passed-on key's character beeps: no such mnemonic). Linux selects KeyPress only while it has the focus
   (X gives a key to the window under the pointer). No arrows with the
   browser closed (the mac has none). Both: the bottom bar's write clicked
   again while the write dialog is open = its Write (save in place: click,

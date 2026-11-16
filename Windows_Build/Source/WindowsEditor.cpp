@@ -421,11 +421,14 @@ LRESULT DesktopEditor::windowMessage(UINT msg,WPARAM wp,LPARAM lp) {
         }
         return 0;
     }
-    case WM_GETDLGCODE: { // hosts with dialog-style windows: the browser's keys only
-        if(!browser_) return 0;
+    // Hosts with dialog-style windows (REAPER): the browser's keys, and the
+    // characters (dropped below; left to the dialog, the character of a key
+    // passed on to the host is no mnemonic there: a beep).
+    case WM_GETDLGCODE: {
+        if(!browser_) return DLGC_WANTCHARS;
         const auto* m=reinterpret_cast<const MSG*>(lp);
         const bool returnOrEsc=m && m->message==WM_KEYDOWN && (m->wParam==VK_RETURN || m->wParam==VK_ESCAPE);
-        return DLGC_WANTARROWS|(returnOrEsc?DLGC_WANTMESSAGE:0);
+        return DLGC_WANTARROWS|DLGC_WANTCHARS|(returnOrEsc?DLGC_WANTMESSAGE:0);
     }
     case WM_KEYDOWN: { // (Alt keys: WM_SYSKEYDOWN, DefWindowProc hands them to the host's window)
         if(keyDown(UINT(wp))) return 0;
