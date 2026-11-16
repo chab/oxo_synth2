@@ -2072,8 +2072,11 @@ void DesktopEditor::wheel(int direction,float x,float y) {
         const int next=std::clamp(slotScroll_-amount,0,std::max(0,rows-20));
         if(next!=slotScroll_) {slotScroll_=next;invalidate(kBrowserRect);}
     } else {
+        // Menu > Invert mouse wheel: value controls only (the lists above
+        // scroll like any page of the desktop).
+        const bool invert=hooks_.invertWheel && hooks_.invertWheel(hooks_.ctx)!=0;
         const int current=value(target);
-        const int next=s2::OfferedStep(target,current,direction>0?1:-1); // skips chorus type 3
+        const int next=s2::OfferedStep(target,current,(direction>0)!=invert?1:-1); // skips chorus type 3
         if(next!=current) setValueOnce(target,next);
     }
 }
@@ -2167,12 +2170,14 @@ void DesktopEditor::showMainMenu(int x,int y) {
     AppendMenuW(menu,MF_POPUP,UINT_PTR(sizeMenu),L"Select size");
     AppendMenuW(menu,MF_POPUP,UINT_PTR(themeMenu),L"Select theme");
     AppendMenuW(menu,MF_STRING,15,L"Themes...");
+    const bool invertWheel=hooks_.invertWheel && hooks_.invertWheel(hooks_.ctx)!=0;
+    AppendMenuW(menu,MF_STRING|(invertWheel?MF_CHECKED:0),18,L"Invert mouse wheel");
     // UpdateCheck.enabled: no product slug (forks) = no entry
     if(*OXO_UPDATE_PRODUCT) {
         AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
         AppendMenuW(menu,MF_STRING|(updateCheck_.Running()?MF_GRAYED:0),16,L"Check for updates...");
     }
-    popupMenu(menu,x,y,[this,programChange,picks](int selected) {
+    popupMenu(menu,x,y,[this,programChange,invertWheel,picks](int selected) {
         switch(selected) {
             case 10:
                 if(hooks_.initializePatch)hooks_.initializePatch(hooks_.ctx);
@@ -2188,6 +2193,12 @@ void DesktopEditor::showMainMenu(int x,int y) {
                 }
                 break;
             case 15: showThemeEditor();break;
+            case 18: // SynthModel.invertWheel
+                if(hooks_.setInvertWheel) {
+                    hooks_.setInvertWheel(hooks_.ctx,invertWheel?0:1);
+                    flash(invertWheel?L"invert mouse wheel: off":L"invert mouse wheel: on");
+                }
+                break;
             case 16: checkForUpdates();break;
             default: if(!pickTheme(selected,picks)) pickSize(selected);break;
         }

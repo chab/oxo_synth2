@@ -3,6 +3,7 @@
 //   clang++ -std=c++20 -fobjc-arc -I. OxoSynth2AudioUnit/DSP/Synth2Bridge.mm tools/au_harness/main.mm \
 //     -framework AudioToolbox -framework CoreMIDI -lz -o build/au_harness && HOME=/tmp/s2h ./build/au_harness
 #include "OxoSynth2AudioUnit/DSP/Synth2Bridge.h"
+#include "EditorCore/Storage.hpp"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -98,6 +99,13 @@ int main() {
         void *later = Synth2Create("/tmp/oxo_s2_ios_harness_lib", nullptr, nullptr);
         OxoSynth2Hooks hl = Synth2MakeHooks(later);
         expect(hl.programChange(hl.ctx) == 1, "program change preference saved");
+        // menu > Invert mouse wheel: off by default, one value for every instance, saved
+        expect(h.invertWheel(h.ctx) == 0, "invert mouse wheel off by default");
+        h.setInvertWheel(h.ctx, 1);
+        expect(hl.invertWheel(hl.ctx) == 1, "invert mouse wheel shared by the instances");
+        expect(oxo::settings::LoadBool(oxo::storage::Root(), oxo::storage::kInvertWheelKey, false),
+               "invert mouse wheel preference saved");
+        h.setInvertWheel(h.ctx, 0);
         Synth2Destroy(later);
         pc.MIDI.data[1] = 5; // empty slot 006: ignored
         Synth2Render(inst, 512, abl, &pc, 0, 120, 0, 0);

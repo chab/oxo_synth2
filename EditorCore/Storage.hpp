@@ -8,6 +8,7 @@
 #include "EngineCore/MidiLearn.hpp"
 #include "EngineCore/PatchLibrary.hpp"
 
+#include <atomic>
 #include <cstdlib>
 #if defined(_WIN32)
 #include "Windows_Build/Source/WindowsStorage.hpp"
@@ -126,5 +127,21 @@ inline bool SaveMidiLearn(const s2::MidiLearnTable &cc) {
 inline constexpr const char *kProgramChangeKey = "programChange";
 inline bool LoadProgramChange() { return settings::LoadBool(Root(), kProgramChangeKey, false); }
 inline bool SaveProgramChange(bool on) { return settings::SaveBool(Root(), kProgramChangeKey, on); }
+
+// Menu > Invert mouse wheel: the wheel over a value control (knob, button,
+// display) turns it the other way; scrolled lists keep the desktop's
+// direction. For what the system cannot tell the editor: natural
+// scrolling on Windows / Linux, wheel reversers, VMs (the mac's editor
+// already undoes macOS's natural scrolling). Per user (settings.json),
+// read once per process: every open editor follows a change at once.
+inline constexpr const char *kInvertWheelKey = "invertMouseWheel";
+inline std::atomic<bool> &InvertWheelFlag() {
+    static std::atomic<bool> on{settings::LoadBool(Root(), kInvertWheelKey, false)};
+    return on;
+}
+inline bool InvertWheel() { return InvertWheelFlag().load(std::memory_order_relaxed); }
+inline void SetInvertWheel(bool on) {
+    if (InvertWheelFlag().exchange(on) != on) settings::SaveBool(Root(), kInvertWheelKey, on);
+}
 
 } // namespace oxo::storage

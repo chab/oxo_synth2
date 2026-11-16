@@ -92,7 +92,7 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   `Storage.hpp` (per-user files, mac library / factory paths), `Trash.hpp`,
   `Json.hpp` (small strict JSON reader), `Settings.hpp` (settings.json:
   independent top-level keys, a save edits only its value in place; Windows
-  zoom, program change; `EngineCoreTests/SettingsTests.cpp`), `Themes.hpp` (the C++ mirror of
+  zoom, program change, invert mouse wheel; `EngineCoreTests/SettingsTests.cpp`), `Themes.hpp` (the C++ mirror of
   `Shared/SynthTheme.swift` for C++ editors: 13 keys, factory themes,
   lenient hex map, `stateText`, the `themes.json` store;
   `EngineCoreTests/ThemesTests.cpp` PARSES the Swift file, so a key or a
@@ -595,9 +595,15 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   / EQ / Delay / Chorus / Voice right). Knobs: vertical drag (Shift fine),
   double-click = INIT value, wheel (full range = 1440 pt, Shift 6x finer;
   displays / radios 33 pt per step; one host gesture per burst, ends after
-  0.4 s idle). WHEEL RULES (mac + Windows; the iPad has no wheel): up =
+  0.4 s idle). WHEEL RULES (mac + Windows + Linux; the iPad has no wheel): up =
   value up, clamped, in the DEVICE's direction (mac `deviceDeltaY`:
-  natural scrolling ignored, browser lists keep it); ignored on toggles,
+  natural scrolling ignored, browser lists keep it). Windows / Linux get
+  no such flag (natural scrolling, driver / vendor reversers and VMs flip
+  the events before we see them), so Menu > "Invert mouse wheel" (after
+  Themes..., all three desktops, not the iPad) flips the VALUE wheels,
+  never the lists: `invertMouseWheel` in settings.json, one value per
+  process (`storage::InvertWheel`, hooks `invertWheel` / `setInvertWheel`:
+  every open editor follows at once). Ignored on toggles,
   type / dst / range buttons, the ctrl src / assign menus and the VERTICAL
   LED lists (filter / arp type / range, LFO dst, voice mode); horizontal
   LEDs (sub oct, m.env dest), wave grids and every display step.
