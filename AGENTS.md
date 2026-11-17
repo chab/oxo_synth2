@@ -36,10 +36,14 @@ on the Clavia Nord Lead 2; abandoned, its mac AU is x86_64-only and dies
 with Rosetta). Same 99 parameters (same indices), loads `.sy1` patches and
 zip banks, SOUNDS THE SAME (tuned against renders of the original). GUI =
 Synth1's layout, redrawn. MIT, free. Formats: mac VST3 + the SDK's AUv2
-wrapper, iPad AUv3 (App Store). Windows / Linux: welcome as ports.
-Stack: Steinberg VST3 SDK + header-only C++ engine + SwiftUI editor (no
-JUCE). Official builds ("Oxo Synth2", oxo-music.com / App Store) come from
-tagged commits of this repo.
+wrapper, iPad AUv3 (App Store), Windows x64 VST3, Linux x86_64 / aarch64
+VST3 (both started as contributed ports, README credits). Stack: Steinberg
+VST3 SDK + header-only C++ engine (no JUCE) + TWO editors drawing the same
+panel: SwiftUI (`Shared/`, mac + iPad) and C++ `DesktopEditor/` (Windows
+GDI+, Linux cairo): a panel change is made in both. Official builds ("Oxo
+Synth2", oxo-music.com / App Store) come from tagged commits of this repo:
+mac and iPad built here (signing, notarization), Windows and Linux by the
+manual GitHub Actions workflows.
 
 ## Identity
 
@@ -65,9 +69,12 @@ Synth2"; iPad (iOS 17, iPad only) app `com.oxo.music.oxosynth2`, appex
 Per-user settings: mac `~/Library/Application Support/Oxo Music/Oxo Synth2`
 (`midi_mappings.json`, `themes.json`, `settings.json`), iPad the appex's
 container, Windows `%APPDATA%\Oxo Music\Oxo Synth2` (+
-`preset_index.bin`, theme files `Themes\*.json`: one flat hex map each,
-listed after the saved themes, never written). Bank library: mac `~/Music/Oxo Music/Oxo Synth2`, iPad
-`<app group>/Synth2`, Windows `Documents\Oxo Music\Oxo Synth2`. Windows
+`preset_index.bin`), Linux `$XDG_CONFIG_HOME/Oxo Music/Oxo Synth2`
+(default `~/.config`); both + theme files `Themes/*.json` (one flat hex
+map each, listed after the saved themes, never written). Bank library: mac
+`~/Music/Oxo Music/Oxo Synth2`, iPad `<app group>/Synth2`, Windows
+`Documents\Oxo Music\Oxo Synth2`, Linux the desktop's Documents
+(`XDG_DOCUMENTS_DIR`, else `~/Documents`) `/Oxo Music/Oxo Synth2`. Windows
 portable mode: a `Synth2_Data` folder next to the `.vst3` bundle holds all
 of it (banks in `Synth2_Data\Presets`).
 VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
@@ -101,7 +108,7 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
 - `OxoSynth2VST3/` — processor / controller / entry / editor view, CMake
   (SDK + AUv2 wrapper with the auwrapper.mm patches, Swift
   static lib `OxoSynth2Editor`, links zlib).
-- `Shared/` — SwiftUI editor used by both formats: `SynthModel.swift`
+- `Shared/` — SwiftUI editor of the mac (VST3 / AUv2) and iPad (AUv3): `SynthModel.swift`
   (`SynthHost` protocol + model polling the host at 30 Hz; MIDI learn
   state, LCD readout, wheel gestures, browser keys), `HooksSynthHost.swift`
   (the C hooks as a `SynthHost`), `SynthControls.swift` (widgets: KnobView,
@@ -147,6 +154,9 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
 - `tools/prepare_mac_installer`, `tools/mac_installer/` — pkg / dmg.
 - `tools/prepare_linux_installer`, `tools/linux_installer/` (`install.sh`,
   `README.txt`), `.github/workflows/linux-release.yml` — Linux tar.gz.
+- `tools/prepare_win_installer.bat`, `tools/win_installer/` (`synth2.iss`,
+  `README.pdf`), `.github/workflows/windows-release.yml` — Windows exe +
+  zip. `tools/win_check/` — mingw compile check of the Windows sources.
 - `reference/meta/` — committed measurements (params.json, nativemap.txt,
   the tables' sources). `reference/renders/` + `reference/derived/`
   (download, README "Reference data") and `reference/presets/` are
@@ -385,21 +395,23 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   notarization is the default. Under a sandbox `pkgbuild` prints `write:
   Permission denied` lines but succeeds. While testing the pkg, remove the
   ~/Library dev copies (same UIDs twice).
-- UPDATE CHECK (mac + Windows): menu > "Check for updates…" (after a
+- UPDATE CHECK (mac + Windows + Linux): menu > "Check for updates…" (after a
   divider) fetches `https://<OXO_VENDOR_WEBSITE>/releases.json` (`{
   products: { <slug>: { page, mac: { version, build, url }, win: … } } }`),
   looks up `OXO_UPDATE_PRODUCT` (empty = no menu entry: forks, iPad, tools)
-  + its platform (`mac` / `win`), compares with this build: newer = higher
+  + its platform (`mac` / `win` / `linux`), compares with this build: newer = higher
   BUILD only (the version is only shown), absent entry = latest. Mac: Swift
   `UpdateCheck` (CFBundleShortVersionString / CFBundleVersion), in-panel
   `UpdateDialog`. Windows: `EditorCore/UpdateCheck.hpp` (same rules and
   texts, `UpdateCheckTests` compares them with the Swift file) +
   `Windows_Build/Source/WindowsHttp.hpp` (WinHTTP GET on a worker that
   closing the editor cancels and joins: no thread outlives the plugin), LCD
-  "Checking…", then a message box ("Open the download page?").
+  "Checking…", then a message box ("Open the download page?"). Linux:
+  the same DesktopEditor code, the GET = `curl` run by
+  `Linux_Build/Source/LinuxPlatform.hpp` (same cancel / join rule).
   RELEASES: one version line for every platform (Identity.xcconfig; one
   build number = one commit, tag it, never reused); releasing a platform =
-  set THAT platform's entry (`oxo_synth2: mac:` / `win:`) in the
+  set THAT platform's entry (`oxo_synth2: mac:` / `win:` / `linux:`) in the
   oxo-music.com site's `config/releases.yml`, leave the others: platforms
   may sit on different builds, each check reads only its own entry.
 
