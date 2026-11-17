@@ -10,6 +10,7 @@ rem                                    [--help]
 rem
 rem  Output: dist\win\<Product>-<version>-<build>-Windows-x64.{exe,zip}
 rem  (gitignored). VST3 only, x64.
+rem  Also run by .github/workflows/windows-release.yml (unsigned, --no-pause).
 rem
 rem  Steps: 1. build Release x64 (CMake + Visual Studio's clang-cl, like
 rem  build_windows.bat) into Windows_Build\build-dist-clang + run the

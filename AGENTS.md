@@ -368,6 +368,11 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   Identity / version from `Identity.xcconfig` (+ local), passed as `/D`.
   Signing optional, env `OXO_WIN_SIGN_SHA1` or `OXO_WIN_SIGN_PFX` (+
   `_PASSWORD`), `OXO_WIN_SIGN_TIMESTAMP_URL`; dll signed, then the exe.
+  CI: GitHub Actions > "Windows release" > Run workflow (manual only,
+  `windows-2025`, pinned: VS 2022 clang-cl + Inno Setup preinstalled) runs
+  the script with `--no-pause`, UNSIGNED → artifacts `<name>.zip` +
+  `.zip.sha256` + `.exe` (full build / validator logs on failure). Like the
+  Linux one, "Run workflow" lists it only once the file is on master.
 - MAC INSTALLER: `tools/prepare_mac_installer [--skip-build]
   [--skip-notarize]` → `dist/mac/OxoSynth2-<ver>-<build>-macOS.{pkg,dmg}`
   (gitignored). Components `auv2` + `vst3` (pkg ids

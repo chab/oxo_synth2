@@ -1,0 +1,64 @@
+# Windows release: the Inno Setup installer + the hosted zip (exe, README.pdf,
+# raw bundle), built by tools/prepare_win_installer.bat exactly as on a PC
+# (clang-cl, static CRT, validator, unsigned: no certificate on GitHub).
+# Started by hand: Actions > Windows release > Run workflow, on the release
+# tag. The zip, its .sha256 and the exe are the run's artifacts (not zipped).
+name: Windows release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build x64
+    # Pinned image: Visual Studio 2022 (clang-cl toolset) + Inno Setup 6.3+.
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Build, check, validate, package
+        shell: cmd
+        run: tools\prepare_win_installer.bat --no-pause
+      - name: Checksum
+        id: package
+        shell: bash
+        run: |
+          cd dist/win
+          exes=(*.exe)
+          [[ ${#exes[@]} == 1 && -f ${exes[0]} ]] || { echo "ERROR: expected one installer in dist/win" >&2; exit 1; }
+          name="${exes[0]%.exe}"
+          [[ -f "$name.zip" ]] || { echo "ERROR: $name.zip missing" >&2; exit 1; }
+          sha256sum "$name.zip" > "$name.zip.sha256"
+          cat "$name.zip.sha256"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: dist/win/${{ steps.package.outputs.name }}.zip
+          archive: false
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: dist/win/${{ steps.package.outputs.name }}.zip.sha256
+          archive: false
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: dist/win/${{ steps.package.outputs.name }}.exe
+          archive: false
+          if-no-files-found: error
+      # The script prints only the last errors: the full logs, on failure.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: logs
+          path: |
+            Windows_Build/build-dist-clang/build.log
+            dist/win/validator.log
+          if-no-files-found: ignore
+          retention-days: 7
