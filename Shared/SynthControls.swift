@@ -148,6 +148,7 @@ struct KnobView: View {
     /// (finger jitter, touch-up) must not put the old value back (iPad).
     @State private var resetHeld = false
     @State private var wheelRemainder: Double = 0
+    @Environment(\.renderProbes) private var probes
 
     var body: some View {
         let r = model.host.range(id)
@@ -163,14 +164,15 @@ struct KnobView: View {
                         .rotationEffect(.degrees(-140 + 28 * Double(i)))
                 }
                 ZStack {
-                    Circle().fill(RadialGradient(colors: [theme.knobGradient, theme.knobBody], center: .init(x: 0.35, y: 0.3),
-                                                 startRadius: 0, endRadius: size * 0.6))
+                    Circle().fill(probes.contains(.gradients) ? AnyShapeStyle(theme.knobBody)
+                        : AnyShapeStyle(RadialGradient(colors: [theme.knobGradient, theme.knobBody], center: .init(x: 0.35, y: 0.3),
+                                                       startRadius: 0, endRadius: size * 0.6)))
                     // soft rim: dim, slightly blurred edge instead of a hard ring
-                    Circle().strokeBorder(theme.knobRim.opacity(0.45), lineWidth: 1.6).blur(radius: 0.7)
+                    Circle().strokeBorder(theme.knobRim.opacity(0.45), lineWidth: 1.6).probeBlur(radius: 0.7)
                     Capsule().fill(theme.knobDial).frame(width: 2, height: size * 0.36).offset(y: -size * 0.24)
                         .rotationEffect(.degrees(-140 + 280 * frac))
                 }
-                .shadow(color: .black.opacity(0.3), radius: 1, x: 1, y: 1)
+                .probeShadow(color: .black.opacity(0.3), radius: 1, x: 1, y: 1)
             }
             .frame(width: size, height: size)
             .contentShape(Circle().scale(1.3))
@@ -212,9 +214,11 @@ struct KnobView: View {
             }
             #endif
             Text(label).font(Theme.labelFont).foregroundColor(theme.ink).lineLimit(1).fixedSize()
+                .probe(.labels)
                 .frame(height: 12)
         }
         .learnable(model, id)
+        .probe(.knobs)
     }
 }
 
@@ -233,7 +237,7 @@ struct ToggleButton: View {
         HStack(spacing: 3) {
             RoundedRectangle(cornerRadius: 1).fill(on ? theme.ledOn : theme.ledOff)
                 .frame(width: 5, height: 5)
-                .shadow(color: on ? theme.ledOn.opacity(0.9) : .clear, radius: 2)
+                .probeShadow(color: on ? theme.ledOn.opacity(0.9) : .clear, radius: 2)
             Text(title).font(Theme.buttonFont).foregroundColor(Theme.buttonText).lineLimit(1).fixedSize()
         }
         .frame(width: width, height: 17)
@@ -241,6 +245,7 @@ struct ToggleButton: View {
         .contentShape(Rectangle())
         .onTapGesture { model.setOnce(id, on ? 0 : 1) }
         .learnable(model, id)
+        .probe(.buttons)
     }
 }
 
@@ -260,17 +265,20 @@ struct CycleButton: View {
             .contentShape(Rectangle())
             .onTapGesture { model.cycle(id, shiftHeld() ? -1 : 1) }
             .learnable(model, id)
+            .probe(.buttons)
     }
 }
 
 struct ButtonFace: View {
     var fill: Color?
     @Environment(\.theme) private var theme
+    @Environment(\.renderProbes) private var probes
     var body: some View {
         RoundedRectangle(cornerRadius: 3)
-            .fill(LinearGradient(colors: [(fill ?? theme.button).opacity(0.85), fill ?? theme.button], startPoint: .top, endPoint: .bottom))
+            .fill(probes.contains(.gradients) ? AnyShapeStyle(fill ?? theme.button)
+                : AnyShapeStyle(LinearGradient(colors: [(fill ?? theme.button).opacity(0.85), fill ?? theme.button], startPoint: .top, endPoint: .bottom)))
             .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Color.black.opacity(0.6), lineWidth: 1))
-            .shadow(color: .black.opacity(0.3), radius: 0.5, x: 1, y: 1)
+            .probeShadow(color: .black.opacity(0.3), radius: 0.5, x: 1, y: 1)
     }
 }
 
@@ -294,6 +302,7 @@ struct PanelButton: View {
             .background(ButtonFace(fill: fill))
         }
         .buttonStyle(.plain)
+        .probe(.buttons)
     }
 }
 
@@ -315,8 +324,9 @@ struct Badge: View {
             face.contentShape(Rectangle())
                 .onTapGesture { model.setOnce(id, on ? 0 : 1) }
                 .learnable(model, id)
+                .probe(.buttons)
         } else {
-            face
+            face.probe(.buttons)
         }
     }
 }
@@ -343,7 +353,7 @@ struct LedRadio: View {
                 let on = model.values[id] == option.value
                 HStack(spacing: 3) {
                     if !ledTrailing { led(on) }
-                    if showLabels { Text(option.label).font(Theme.labelFont).foregroundColor(theme.ink).fixedSize() }
+                    if showLabels { Text(option.label).font(Theme.labelFont).foregroundColor(theme.ink).fixedSize().probe(.labels) }
                     if ledTrailing { led(on) }
                 }
                 .frame(height: rowHeight)
@@ -355,12 +365,13 @@ struct LedRadio: View {
         // wrong way); a horizontal pair / trio steps like a display
         .displayWheel(model, id, remainder: $wheelRemainder, enabled: horizontal)
         .learnable(model, id)
+        .probe(.leds)
     }
 
     private func led(_ on: Bool) -> some View {
         Circle().fill(on ? theme.radioOn : theme.radioOff)
             .overlay(Circle().strokeBorder(Color.black.opacity(0.5), lineWidth: 0.5))
-            .shadow(color: on ? theme.radioOn.opacity(0.9) : .clear, radius: 2.5)
+            .probeShadow(color: on ? theme.radioOn.opacity(0.9) : .clear, radius: 2.5)
             .frame(width: 7, height: 7)
     }
 }
@@ -442,7 +453,7 @@ private struct WaveCell: View {
         .frame(width: width, height: height)
         .background(RoundedRectangle(cornerRadius: 2).fill(on ? theme.waveOn : theme.button))
         .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(Color.black.opacity(0.6), lineWidth: 1))
-        .shadow(color: on ? theme.waveOn.opacity(0.6) : .clear, radius: 2)
+        .probeShadow(color: on ? theme.waveOn.opacity(0.6) : .clear, radius: 2)
     }
 }
 
@@ -468,6 +479,7 @@ struct WaveRadio: View {
         }
         .displayWheel(model, id, remainder: $wheelRemainder)
         .learnable(model, id)
+        .probe(.waves)
     }
 }
 
@@ -487,6 +499,7 @@ struct WaveDisplay: View {
             .onTapGesture { model.typeMenu = id }
             .displayWheel(model, id, remainder: $wheelRemainder)
             .learnable(model, id)
+            .probe(.waves)
     }
 }
 
@@ -507,16 +520,17 @@ struct ValueDisplay: View {
     @State private var dragStart: Int?
     @State private var moved = false
     @State private var wheelRemainder: Double = 0
+    @Environment(\.renderProbes) private var probes
 
     var body: some View {
         let v = model.values[id]
         Text(text?(v) ?? model.host.format(id, v))
             .font(.system(size: 11, weight: .bold, design: .monospaced))
             .foregroundColor(theme.displayText)
-            .shadow(color: theme.displayText.opacity(0.5), radius: 2)
+            .probeShadow(color: theme.displayText.opacity(0.5), radius: 2)
             .lineLimit(1).minimumScaleFactor(0.6)
             .frame(width: width, height: 17)
-            .background(RoundedRectangle(cornerRadius: 2).fill(theme.displayFill))
+            .background(RoundedRectangle(cornerRadius: 2).fill(probes.contains(.gradients) ? AnyShapeStyle(theme.display) : AnyShapeStyle(theme.displayFill)))
             .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)
@@ -540,6 +554,7 @@ struct ValueDisplay: View {
             .simultaneousGesture(TapGesture(count: 2).onEnded { if !tapCycles { model.setOnce(id, model.host.range(id).def) } })
             .displayWheel(model, id, remainder: $wheelRemainder)
             .learnable(model, id)
+            .probe(.displays)
     }
 }
 
@@ -551,6 +566,7 @@ struct MenuDisplay: View {
     let width: CGFloat
     let label: String
     let groups: [(title: String, items: [(value: Int, label: String)])]
+    @Environment(\.renderProbes) private var probes
 
     var body: some View {
         Menu {
@@ -571,8 +587,9 @@ struct MenuDisplay: View {
         .menuOrder(.fixed)
         .padding(.horizontal, 4)
         .frame(width: width, height: 16)
-        .background(RoundedRectangle(cornerRadius: 2).fill(theme.displayFill))
+        .background(RoundedRectangle(cornerRadius: 2).fill(probes.contains(.gradients) ? AnyShapeStyle(theme.display) : AnyShapeStyle(theme.displayFill)))
         .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
+        .probe(.displays)
     }
 
     private func items(_ list: [(value: Int, label: String)]) -> some View {
@@ -592,17 +609,20 @@ struct SectionBox<Content: View>: View {
     let width: CGFloat
     let height: CGFloat
     @ViewBuilder let content: Content
+    @Environment(\.renderProbes) private var probes
 
     var body: some View {
+        let boxes = !probes.contains(.boxes)
         ZStack(alignment: .topLeading) {
-            Rectangle().fill(theme.panel)
+            if boxes { Rectangle().fill(theme.panel) }
             Text(title).font(.system(size: 12, weight: .semibold)).foregroundColor(theme.headerText)
                 .padding(.leading, 5)
+                .probe(.labels)
                 .frame(width: width, height: 16, alignment: .leading)
-                .background(theme.header)
+                .background(boxes ? theme.header : Color.clear)
             content.frame(width: width, height: height)
         }
         .frame(width: width, height: height)
-        .overlay(Rectangle().strokeBorder(theme.edge, lineWidth: 1))
+        .overlay(Rectangle().strokeBorder(boxes ? theme.edge : Color.clear, lineWidth: 1))
     }
 }

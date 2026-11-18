@@ -13,13 +13,14 @@ struct BottomBar: View {
     @ObservedObject private var store = ThemeStore.shared
     @Environment(\.theme) private var theme
     @Environment(\.editorScale) private var scale
+    @Environment(\.renderProbes) private var probes
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             // Synth1's "vol": master volume, not part of the patch (session only).
             KnobView(model: model, id: SynthModel.volumeID, label: "vol", size: 26).place(0, 12, 38, 46)
             // write / menu end at the Wheel / MIDI section's right edge (x 542 on the panel)
-            lcd.place(44, 0, 432, 70)
+            lcd.probe(.lcd).place(44, 0, 432, 70)
             // write: opens the write dialog; a 2nd click (dialog open) writes
             // like its Write / Overwrite button; Alt-click writes straight
             // back to the loaded program (Synth1's quick save).
@@ -31,11 +32,12 @@ struct BottomBar: View {
                 }
             }
                 .place(486, 4, 50, 26)
-            mainMenu.place(486, 38, 50, 26)
+            mainMenu.probe(.buttons).place(486, 38, 50, 26)
             if !model.learnActive {
                 // Spans the Voice section above (x 548..764 on the panel),
                 // centred on the gap between write and menu.
                 VoiceGrid(activity: model.voices, polyphony: model.values[94])
+                    .probe(.voices)
                     .place(758 - VoiceGrid.size.width, 34 - VoiceGrid.size.height / 2, VoiceGrid.size.width, VoiceGrid.size.height)
             } else {
                 Button(action: { model.exitLearn() }) {
@@ -69,7 +71,8 @@ struct BottomBar: View {
         ZStack(alignment: .topLeading) {
             // Synth1: a click on the display opens the patch browser.
             RoundedRectangle(cornerRadius: 4)
-                .fill(LinearGradient(colors: [theme.lcdTop, theme.lcdBottom], startPoint: .top, endPoint: .bottom))
+                .fill(probes.contains(.gradients) ? AnyShapeStyle(theme.lcdBottom)
+                    : AnyShapeStyle(LinearGradient(colors: [theme.lcdTop, theme.lcdBottom], startPoint: .top, endPoint: .bottom)))
                 .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.black, lineWidth: 1.5))
                 .onTapGesture { toggleBrowser() }
             Text(programPrefix + model.patchName)
