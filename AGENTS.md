@@ -359,6 +359,17 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   run the same on any Linux box (`podman run -v $PWD:/src debian:12`).
   Actions pinned by commit SHA. "Run workflow" only lists workflows on the
   default branch; from there it runs on any branch or tag.
+- LINUX COMPILER BENCH (branch `compare_linux_compilers` only, not on
+  master): GitHub Actions "Compare Linux compilers", run by every push to
+  that branch (5 rounds) = `tools/bench/compare_compilers.sh`
+  (runs on any Linux box too): tools/bench built with g++ and clang++ with
+  the plugin's options, alternating rounds, best kept, markdown table
+  (clang / GCC per line) in each job's summary; x86_64 + aarch64, each in
+  debian:12 (the release's GCC 12 / clang 14) and debian:13. Shared VMs,
+  CPU model varies by run: compare within one job only. Question it
+  answers: should the Linux release switch to clang (clang-cl was ~1.7x
+  MSVC on Windows; a Linux user on a Core 2 measured 2x Synth1's CPU).
+  Results: pending.
 - WINDOWS INSTALLER: `tools\prepare_win_installer.bat [--skip-build]
   [--skip-validator] [--msvc] [--dynamic-crt] [--no-pause]` on Windows (+
   Inno Setup 6.3+, `winget install JRSoftware.InnoSetup`) →

@@ -37,7 +37,7 @@ static double Run(const char *name, PatchValues p) {
     const auto t0 = std::chrono::steady_clock::now();
     for (int b = 0; b < blocks; ++b) s.Render(l.data(), r.data(), 256);
     const double cpu = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-    std::printf("  %-28s x%.0f realtime\n", name, 10.0 / cpu);
+    std::printf("  %-28s x%.1f realtime\n", name, 10.0 / cpu);
     return cpu;
 }
 
@@ -143,6 +143,8 @@ int main(int argc, char **argv) {
     if (argc == 4 && std::string(argv[1]) == "--job") return PrintScrubJob(argv[2], argv[3]), 0;
 #if defined(__clang__)
     std::printf("compiler: clang %s\n", __clang_version__);
+#elif defined(__GNUC__)
+    std::printf("compiler: gcc %s\n", __VERSION__);
 #elif defined(_MSC_VER)
     std::printf("compiler: MSVC %d\n", _MSC_FULL_VER);
 #endif

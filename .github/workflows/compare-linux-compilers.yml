@@ -1,0 +1,47 @@
+# GCC vs clang on the engine, per Linux arch (which compiler the Linux
+# release should use): tools/bench/compare_compilers.sh in the release's
+# container (debian:12) and a newer one. Runs on every push to the
+# compare_linux_compilers branch (kept off master while we iterate; "Run
+# workflow" only lists workflows of the default branch). Results = each
+# job's summary. Shared VMs whose CPU model varies by run: compare GCC and
+# clang within one job only.
+name: Compare Linux compilers
+
+on:
+  push:
+    branches: [compare_linux_compilers]
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: Rounds per compiler (best kept)
+        default: "5"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: ${{ matrix.arch }} ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+        image: ["debian:12", "debian:13"]
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.image }}
+    timeout-minutes: 30
+    steps:
+      - name: Compilers
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends g++ clang ca-certificates
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Bench
+        env:
+          ROUNDS: ${{ inputs.rounds }}
+        run: tools/bench/compare_compilers.sh "$ROUNDS" | tee -a "$GITHUB_STEP_SUMMARY"
