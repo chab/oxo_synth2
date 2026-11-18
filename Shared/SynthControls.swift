@@ -148,33 +148,13 @@ struct KnobView: View {
     /// (finger jitter, touch-up) must not put the old value back (iPad).
     @State private var resetHeld = false
     @State private var wheelRemainder: Double = 0
-    @Environment(\.renderProbes) private var probes
 
     var body: some View {
         let r = model.host.range(id)
         let v = model.values[id]
         let frac = Double(v - r.min) / Double(max(1, r.max - r.min))
         VStack(spacing: 1) {
-            ZStack {
-                // Oxo Simple's 11-dot ring over the -140..+140 travel, at
-                // 1.3 x the body radius, pulled in 1.5 pt.
-                ForEach(0..<11, id: \.self) { i in
-                    Circle().fill(theme.knobTicks).frame(width: 1.6, height: 1.6)
-                        .offset(y: -size * 0.65 + 1.5)
-                        .rotationEffect(.degrees(-140 + 28 * Double(i)))
-                }
-                ZStack {
-                    Circle().fill(probes.contains(.gradients) ? AnyShapeStyle(theme.knobBody)
-                        : AnyShapeStyle(RadialGradient(colors: [theme.knobGradient, theme.knobBody], center: .init(x: 0.35, y: 0.3),
-                                                       startRadius: 0, endRadius: size * 0.6)))
-                    // soft rim: dim, slightly blurred edge instead of a hard ring
-                    Circle().strokeBorder(theme.knobRim.opacity(0.45), lineWidth: 1.6).probeBlur(radius: 0.7)
-                    Capsule().fill(theme.knobDial).frame(width: 2, height: size * 0.36).offset(y: -size * 0.24)
-                        .rotationEffect(.degrees(-140 + 280 * frac))
-                }
-                .probeShadow(color: .black.opacity(0.3), radius: 1, x: 1, y: 1)
-            }
-            .frame(width: size, height: size)
+            KnobFace(theme: theme, size: size, frac: frac)
             .contentShape(Circle().scale(1.3))
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { g in
@@ -222,6 +202,53 @@ struct KnobView: View {
     }
 }
 
+/// The knob drawn in ONE Canvas: one layer, its shadow and blurred rim
+/// rasterized with it. As separate shapes with `.shadow` / `.blur` it was
+/// ~12 layers + live CoreAnimation filters per knob, which Logic's
+/// out-of-process editor host composited again on every panel change (the
+/// voice grid while playing): Logic's own UI lagged.
+private struct KnobFace: View {
+    let theme: Theme
+    let size: CGFloat
+    let frac: Double
+
+    var body: some View {
+        // ticks reach 0.65 x size from the centre, the shadow ~3 pt past the body
+        let side = (size * 0.65 + 3) * 2
+        Canvas { ctx, box in
+            let c = CGPoint(x: box.width / 2, y: box.height / 2)
+            // Oxo Simple's 11-dot ring over the -140..+140 travel, at
+            // 1.3 x the body radius, pulled in 1.5 pt.
+            let tick = size * 0.65 - 1.5
+            for i in 0..<11 {
+                let a = (-140 + 28 * Double(i)) * .pi / 180
+                let p = CGPoint(x: c.x + tick * sin(a), y: c.y - tick * cos(a))
+                ctx.fill(Path(ellipseIn: CGRect(x: p.x - 0.8, y: p.y - 0.8, width: 1.6, height: 1.6)), with: .color(theme.knobTicks))
+            }
+            let body = CGRect(x: c.x - size / 2, y: c.y - size / 2, width: size, height: size)
+            ctx.drawLayer { k in
+                k.addFilter(.shadow(color: .black.opacity(0.3), radius: 1, x: 1, y: 1))
+                k.fill(Path(ellipseIn: body), with: .radialGradient(
+                    Gradient(colors: [theme.knobGradient, theme.knobBody]),
+                    center: CGPoint(x: body.minX + 0.35 * size, y: body.minY + 0.3 * size), startRadius: 0, endRadius: size * 0.6))
+                // soft rim: dim, slightly blurred edge instead of a hard ring
+                k.drawLayer { rim in
+                    rim.addFilter(.blur(radius: 0.7))
+                    rim.stroke(Path(ellipseIn: body.insetBy(dx: 0.8, dy: 0.8)), with: .color(theme.knobRim.opacity(0.45)), lineWidth: 1.6)
+                }
+                var dial = k
+                dial.translateBy(x: c.x, y: c.y)
+                dial.rotate(by: .degrees(-140 + 280 * frac))
+                let h = size * 0.36
+                dial.fill(Path(roundedRect: CGRect(x: -1, y: -size * 0.24 - h / 2, width: 2, height: h), cornerRadius: 1),
+                          with: .color(theme.knobDial))
+            }
+        }
+        .frame(width: side, height: side)
+        .frame(width: size, height: size)
+    }
+}
+
 // MARK: - Buttons
 
 /// Dark push button with a LED: a parameter switch (on / off).
@@ -235,9 +262,12 @@ struct ToggleButton: View {
     var body: some View {
         let on = model.values[id] != 0
         HStack(spacing: 3) {
-            RoundedRectangle(cornerRadius: 1).fill(on ? theme.ledOn : theme.ledOff)
-                .frame(width: 5, height: 5)
-                .probeShadow(color: on ? theme.ledOn.opacity(0.9) : .clear, radius: 2)
+            FlatCanvas(bleed: 4) { ctx, r in
+                let led = Path(roundedRect: r, cornerRadius: 1)
+                if on { ctx.glow(led, theme.ledOn.opacity(0.9), radius: 2) }
+                ctx.fill(led, with: .color(on ? theme.ledOn : theme.ledOff))
+            }
+            .frame(width: 5, height: 5)
             Text(title).font(Theme.buttonFont).foregroundColor(Theme.buttonText).lineLimit(1).fixedSize()
         }
         .frame(width: width, height: 17)
@@ -272,13 +302,16 @@ struct CycleButton: View {
 struct ButtonFace: View {
     var fill: Color?
     @Environment(\.theme) private var theme
-    @Environment(\.renderProbes) private var probes
     var body: some View {
-        RoundedRectangle(cornerRadius: 3)
-            .fill(probes.contains(.gradients) ? AnyShapeStyle(fill ?? theme.button)
-                : AnyShapeStyle(LinearGradient(colors: [(fill ?? theme.button).opacity(0.85), fill ?? theme.button], startPoint: .top, endPoint: .bottom)))
-            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Color.black.opacity(0.6), lineWidth: 1))
-            .probeShadow(color: .black.opacity(0.3), radius: 0.5, x: 1, y: 1)
+        let base = fill ?? theme.button
+        FlatCanvas(bleed: 3) { ctx, r in
+            let face = Path(roundedRect: r, cornerRadius: 3)
+            var shadow = ctx
+            shadow.addFilter(.shadow(color: .black.opacity(0.3), radius: 0.5, x: 1, y: 1))
+            shadow.fill(face, with: .linearGradient(Gradient(colors: [base.opacity(0.85), base]),
+                                                    startPoint: CGPoint(x: 0, y: r.minY), endPoint: CGPoint(x: 0, y: r.maxY)))
+            ctx.strokeBorder(r, cornerRadius: 3, .black.opacity(0.6), lineWidth: 1)
+        }
     }
 }
 
@@ -369,10 +402,48 @@ struct LedRadio: View {
     }
 
     private func led(_ on: Bool) -> some View {
-        Circle().fill(on ? theme.radioOn : theme.radioOff)
-            .overlay(Circle().strokeBorder(Color.black.opacity(0.5), lineWidth: 0.5))
-            .probeShadow(color: on ? theme.radioOn.opacity(0.9) : .clear, radius: 2.5)
-            .frame(width: 7, height: 7)
+        FlatCanvas(bleed: 5) { ctx, r in
+            let led = Path(ellipseIn: r)
+            if on { ctx.glow(led, theme.radioOn.opacity(0.9), radius: 2.5) }
+            ctx.fill(led, with: .color(on ? theme.radioOn : theme.radioOff))
+            ctx.stroke(Path(ellipseIn: r.insetBy(dx: 0.25, dy: 0.25)), with: .color(.black.opacity(0.5)), lineWidth: 0.5)
+        }
+        .frame(width: 7, height: 7)
+    }
+}
+
+// MARK: - Flat drawing
+
+/// A widget drawn in ONE Canvas = one layer, its glow / shadow rasterized
+/// with it. SwiftUI `.shadow` / `.blur` are live CoreAnimation filters on
+/// their own layers (even with a clear colour); Logic's out-of-process
+/// editor host composited all of them again on every panel change (the
+/// voice grid while playing) and its own UI lagged. `bleed`: room drawn
+/// past the frame on each side for the glow; `draw` gets the frame's rect.
+struct FlatCanvas: View {
+    let bleed: CGFloat
+    let draw: (inout GraphicsContext, CGRect) -> Void
+
+    var body: some View {
+        Canvas { ctx, size in
+            draw(&ctx, CGRect(origin: .zero, size: size).insetBy(dx: bleed, dy: bleed))
+        }
+        .padding(-bleed)
+    }
+}
+
+extension GraphicsContext {
+    /// SwiftUI's `.shadow(color:radius:)` glow under `path`.
+    func glow(_ path: Path, _ color: Color, radius: CGFloat) {
+        var g = self
+        g.addFilter(.shadow(color: color, radius: radius))
+        g.fill(path, with: .color(color))
+    }
+
+    /// `strokeBorder` of a rounded rectangle: the line inside `r`.
+    func strokeBorder(_ r: CGRect, cornerRadius: CGFloat, _ color: Color, lineWidth: CGFloat) {
+        let h = lineWidth / 2
+        stroke(Path(roundedRect: r.insetBy(dx: h, dy: h), cornerRadius: max(0, cornerRadius - h)), with: .color(color), lineWidth: lineWidth)
     }
 }
 
@@ -445,15 +516,15 @@ private struct WaveCell: View {
     var height: CGFloat = 14
 
     var body: some View {
-        Canvas { ctx, size in
-            let r = CGRect(origin: .zero, size: size).insetBy(dx: 4, dy: 3.5)
-            ctx.stroke(icon.path(in: r), with: .color(on ? Color.black : Color(white: 0.85)),
+        FlatCanvas(bleed: 4) { ctx, cell in
+            let face = Path(roundedRect: cell, cornerRadius: 2)
+            if on { ctx.glow(face, theme.waveOn.opacity(0.6), radius: 2) }
+            ctx.fill(face, with: .color(on ? theme.waveOn : theme.button))
+            ctx.strokeBorder(cell, cornerRadius: 2, .black.opacity(0.6), lineWidth: 1)
+            ctx.stroke(icon.path(in: cell.insetBy(dx: 4, dy: 3.5)), with: .color(on ? Color.black : Color(white: 0.85)),
                        style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round))
         }
         .frame(width: width, height: height)
-        .background(RoundedRectangle(cornerRadius: 2).fill(on ? theme.waveOn : theme.button))
-        .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(Color.black.opacity(0.6), lineWidth: 1))
-        .probeShadow(color: on ? theme.waveOn.opacity(0.6) : .clear, radius: 2)
     }
 }
 
@@ -520,18 +591,27 @@ struct ValueDisplay: View {
     @State private var dragStart: Int?
     @State private var moved = false
     @State private var wheelRemainder: Double = 0
-    @Environment(\.renderProbes) private var probes
 
     var body: some View {
         let v = model.values[id]
-        Text(text?(v) ?? model.host.format(id, v))
+        let label = Text(text?(v) ?? model.host.format(id, v))
             .font(.system(size: 11, weight: .bold, design: .monospaced))
             .foregroundColor(theme.displayText)
-            .probeShadow(color: theme.displayText.opacity(0.5), radius: 2)
-            .lineLimit(1).minimumScaleFactor(0.6)
+        FlatCanvas(bleed: 0) { ctx, r in
+            ctx.fill(Path(roundedRect: r, cornerRadius: 2), with: .linearGradient(
+                Gradient(colors: [theme.lcdTop, theme.lcdBottom]), startPoint: CGPoint(x: 0, y: r.minY), endPoint: CGPoint(x: 0, y: r.maxY)))
+            ctx.strokeBorder(r, cornerRadius: 2, .black.opacity(0.7), lineWidth: 1)
+            // the text's glow; long values shrink to fit (down to 60 %)
+            let t = ctx.resolve(label)
+            let w = t.measure(in: CGSize(width: CGFloat.infinity, height: .infinity)).width
+            let k = min(1, max(0.6, r.width / max(1, w)))
+            var g = ctx
+            g.addFilter(.shadow(color: theme.displayText.opacity(0.5), radius: 2))
+            g.translateBy(x: r.midX, y: r.midY)
+            g.scaleBy(x: k, y: k)
+            g.draw(t, at: .zero, anchor: .center)
+        }
             .frame(width: width, height: 17)
-            .background(RoundedRectangle(cornerRadius: 2).fill(probes.contains(.gradients) ? AnyShapeStyle(theme.display) : AnyShapeStyle(theme.displayFill)))
-            .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { g in
