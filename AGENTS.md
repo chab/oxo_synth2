@@ -303,7 +303,19 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   truncate by cast. Delay / chorus indices wrap by compare (`% size` = a
   64-bit division). Everything the loop calls is `OXO_INLINE` (forced).
   Per-chunk exps are cached (`Adsr::Configure`, detune ratios).
-  `Synth::Render` flushes denormals (FTZ / DAZ, x86). Keep the voice in
+  `Synth::Render` flushes denormals (FTZ / DAZ, x86). EFFECTS' SILENCE
+  GATE (`Effects.hpp` `kQuiet`, `Silent`): an effect (unit, EQ, delay,
+  chorus) whose input block is exactly 0 and whose state faded under
+  -180 dB skips the block (delay / chorus: every sample their reads can
+  reach written under it, then emptied); clocks move on (chorus LFO, ring
+  phase, decimator hold, delay glide). Measured on the original: its
+  effects cost ~nothing in silence (Harmony Pad idle 0.09 % of a core,
+  ours 0.42 % before the gate, 0.06 % after; x86_64 Rosetta, render
+  only). No trig in the chorus loop (sin / cos rotated per sample), no
+  exp2 in the phaser's (ratio steps). Playing, Harmony Pad 4 notes: ours
+  1.17 %, Synth1 0.98 %; without fx 1.0 % vs 0.58 %: the gap left is the
+  VOICE (~1.6-1.75x Synth1 per voice; idle without fx 0.044 % vs 0.005
+  %: voice loop / LFOs). Keep the voice in
   ONE per-sample loop (splitting the filter into its own pass made it
   latency-bound). A value the original plays as exactly 0 must be 0, not
   a fit's residue (FM 0, LFO depth 0): the residue is inaudible but

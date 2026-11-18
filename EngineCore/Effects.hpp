@@ -37,6 +37,21 @@ inline constexpr double kDelayBeats[20] = {0.0,    1.0 / 24, 1.0 / 12, 1.0 / 8, 
 // is a 64-bit division, tens of cycles each on older x86).
 inline size_t WrapIndex(size_t i, size_t size) { return i >= size ? i - size : i; }
 
+// SILENCE GATE: an effect whose input block is exactly 0 and whose state
+// has faded under kQuiet (-180 dB) skips the block (its output: exact 0),
+// as the original does (silence costs it nothing); clocks move on.
+inline constexpr double kQuiet = 1e-9;
+inline bool Silent(const float *l, const float *r, int n) {
+    for (int i = 0; i < n; ++i)
+        if (l[i] != 0.0f || r[i] != 0.0f) return false;
+    return true;
+}
+inline bool Tiny(const double *v, int n) {
+    for (int i = 0; i < n; ++i)
+        if (std::fabs(v[i]) >= kQuiet) return false;
+    return true;
+}
+
 // Bilinear one-pole (analog cutoff, NO prewarp): the EQ / delay tone
 // (measured, measure_eq_tone.py, kEqToneHz).
 class BilinearOnePole {
@@ -57,6 +72,7 @@ public:
         return y;
     }
     void Reset() { x1_ = y1_ = 0; }
+    bool Quiet() const { return std::fabs(x1_) < kQuiet && std::fabs(y1_) < kQuiet; }
 
 private:
     bool hp_ = false, bypass_ = false;
@@ -76,10 +92,12 @@ public:
         glide_ = 1.0 - std::exp(-1.0 / (kGlideSeconds * sr));
         fadeOut_ = 0;
         Empty();
+        idle_ = false, quiet_ = 0;
     }
     void Reset() {
         fadeOut_ = 0;
         Empty();
+        idle_ = false, quiet_ = 0;
     }
     // A patch change: the echoes fade out, then the line empties and its
     // input fades back in (no click either way), so the switch's transient
@@ -119,6 +137,15 @@ public:
             else f.Set(tables::kDelayToneHz[std::clamp(t, 0, 127)], t > 64, sr_);
         }
         const size_t size = buf_[0].size();
+        if (idle_) { // (silence gate) an empty line: the glide moves on, silence stays silence
+            if (!fadeOut_ && Silent(l, r, n)) {
+                const double k = std::pow(1.0 - glide_, n);
+                smoothL_ = tl + (smoothL_ - tl) * k, smoothR_ = tr + (smoothR_ - tr) * k;
+                if (wetL) std::fill_n(wetL, n, 0.0f), std::fill_n(wetR, n, 0.0f);
+                return;
+            }
+            idle_ = false;
+        }
         const double fadeStep = 1.0 / fadeLen_;
         for (int i = 0; i < n; ++i) {
             double out = 1;
@@ -140,6 +167,7 @@ public:
             }
             buf_[0][pos_] = float(wl);
             buf_[1][pos_] = float(wr);
+            quiet_ = std::fabs(wl) < kQuiet && std::fabs(wr) < kQuiet ? quiet_ + 1 : 0;
             if (++pos_ == size) pos_ = 0;
             if (written_ < size) ++written_;
             if (wetL) {
@@ -150,6 +178,8 @@ public:
                 r[i] = float(dry * dryR + wet * out * er);
             }
         }
+        // every sample the reads can reach (older ones: dropped) under kQuiet
+        if (!fadeOut_ && quiet_ > size_t(std::max({smoothL_, smoothR_, tl, tr})) + 2) idle_ = true, quiet_ = 0, Empty();
     }
 
 private:
@@ -184,6 +214,8 @@ private:
     int fadeLen_ = 1, fadeOut_ = 0;
     double inGain_ = 1;
     BilinearOnePole tone_[2];
+    bool idle_ = false;
+    size_t quiet_ = 0; // samples written under kQuiet in a row
 };
 
 // Chorus (measured, measure_chorus.py: identical-noise IRs + sine phase
@@ -204,10 +236,12 @@ public:
         sr_ = sr;
         for (auto &b : buf_) b.assign(size_t(sr * 0.08) + 4, 0.0f);
         pos_ = 0;
+        idle_ = false, quiet_ = 0;
     }
     void Reset() {
         for (auto &b : buf_) std::fill(b.begin(), b.end(), 0.0f);
         echoes_ = false;
+        idle_ = false, quiet_ = 0;
     }
 
     // (measured, single-tap impulse responses at depth 0) wet base delay
@@ -245,7 +279,7 @@ public:
     // echoL / echoR: the delay's echoes (nullptr: delay off)
     void Process(float *l, float *r, int n, const PatchValues &p, const float *echoL = nullptr, const float *echoR = nullptr) {
         const bool quad = p[kChorusType] >= 4;
-        const double thetaR = p[kChorusType] == 1 ? 0.0 : 0.25; // cycles
+        const bool sameR = p[kChorusType] == 1; // R voice theta 0 (type 1), else 90 degrees
         const double base = TimeSamples(p[kChorusTime], sr_);
         const double depth = base * Depth(p[kChorusDepth]) * RateSwing(RateHz(p[kChorusRate]));
         // 0.99: the manual's -99 % / +97 % labels; echo decay vs ours (same
@@ -260,12 +294,22 @@ public:
             echoes_ = false;
         }
         echoes_ = echoL != nullptr;
+        if (idle_) { // (silence gate) zeroed lines
+            if (Silent(l, r, n) && (!echoL || Silent(echoL, echoR, n))) return Advance(n, p);
+            idle_ = false;
+        }
         const size_t size = buf_[0].size();
+        // the LFO's sin / cos rotated per sample (no trig call in the loop),
+        // anchored on the phase at each block; the taps lag 0 / 90 / 180 /
+        // 270 degrees: sin, -cos, -sin, cos
+        const double rc = std::cos(2 * M_PI * inc), rs = std::sin(2 * M_PI * inc);
+        double sn = std::sin(2 * M_PI * lfoPhase_), cs = std::cos(2 * M_PI * lfoPhase_);
         for (int i = 0; i < n; ++i) {
+            bool loud = false; // a line sample written at or above kQuiet
             double d[4] = {}; // tap delays: L voice, R voice (types 1-3) / LL RL LR RR (type 4); {} for GCC 12's -Wmaybe-uninitialized
-            const auto at = [&](double theta) { return std::clamp(base + depth * std::sin(2 * M_PI * (lfoPhase_ - theta)), 0.0, maxD); };
-            if (quad) d[0] = at(0.0), d[1] = at(0.25), d[2] = at(0.5), d[3] = at(0.75);
-            else d[0] = at(0.0), d[1] = at(thetaR);
+            const auto at = [&](double s) { return std::clamp(base + depth * s, 0.0, maxD); };
+            if (quad) d[0] = at(sn), d[1] = at(-cs), d[2] = at(-sn), d[3] = at(cs);
+            else d[0] = at(sn), d[1] = at(sameR ? sn : -cs);
             // write first (delays down to 0 read the current input); the comb
             // adds the tap read now (measured: echoes every base delay, no
             // extra sample)
@@ -280,8 +324,10 @@ public:
                     wetL = fbl = Read(line, d[0]);
                     wetR = fbr = Read(line + 1, d[1]);
                 }
-                buf_[line][pos_] = float(inL + fb * fbl);
-                buf_[line + 1][pos_] = float(inR + fb * fbr);
+                const float wl = float(inL + fb * fbl), wr = float(inR + fb * fbr);
+                buf_[line][pos_] = wl;
+                buf_[line + 1][pos_] = wr;
+                loud = loud || std::fabs(wl) >= kQuiet || std::fabs(wr) >= kQuiet;
             };
             double wetL, wetR;
             voices(0, l[i], r[i], wetL, wetR);
@@ -290,11 +336,18 @@ public:
                 voices(2, echoL[i], echoR[i], wetL, wetR);
                 outL += wetL, outR += wetR;
             }
+            quiet_ = loud ? 0 : quiet_ + 1;
             if (++pos_ == size) pos_ = 0;
             lfoPhase_ += inc;
             if (lfoPhase_ >= 1.0) lfoPhase_ -= std::floor(lfoPhase_);
+            const double next = sn * rc + cs * rs;
+            cs = cs * rc - sn * rs, sn = next;
             l[i] = float(outL);
             r[i] = float(outR);
+        }
+        if (quiet_ >= size) { // every line sample under kQuiet: zeroed, idle
+            for (auto &b : buf_) std::fill(b.begin(), b.end(), 0.0f);
+            idle_ = true, quiet_ = 0;
         }
     }
 
@@ -320,7 +373,8 @@ private:
     std::vector<float> buf_[4]; // L R lines, then the delay echoes' L R
     size_t pos_ = 0;
     double lfoPhase_ = 0;
-    bool echoes_ = false;
+    bool echoes_ = false, idle_ = false;
+    size_t quiet_ = 0; // samples written under kQuiet in a row
 };
 
 } // namespace oxo::s2
@@ -360,6 +414,7 @@ public:
         return y;
     }
     void Reset() { z_[0][0] = z_[0][1] = z_[1][0] = z_[1][1] = 0; }
+    bool Quiet() const { return Tiny(&z_[0][0], 4); }
 
 private:
     double b0_ = 1, b1_ = 0, b2_ = 0, a1_ = 0, a2_ = 0, z_[2][2] = {{0, 0}, {0, 0}};
@@ -385,6 +440,7 @@ public:
     }
     void Process(float *l, float *r, int n, const PatchValues &p) {
         const bool peakOn = p[kEqLevel] != 64;
+        if (Silent(l, r, n) && (!peakOn || peak_.Quiet()) && tone_[0].Quiet() && tone_[1].Quiet()) return Reset(); // (silence gate)
         const double gain = std::pow(10.0, (p[kEqLevel] - 64) * 50.0 / 127.0 / 20.0);
         const double q = 3.18 * std::exp2((p[kEqQ] - 64) / 38.16);
         peak_.Set(50.0 * std::pow(320.0, p[kEqFreq] / 127.0), gain < 1 ? q * gain : q, gain, sr_);
@@ -420,6 +476,7 @@ public:
         return y;
     }
     void Reset() { z_[0][0] = z_[0][1] = z_[1][0] = z_[1][1] = 0; }
+    bool Quiet() const { return Tiny(&z_[0][0], 4); }
 
 private:
     double b0_ = 1, b1_ = 0, b2_ = 0, a1_ = 0, a2_ = 0, z_[2][2] = {{0, 0}, {0, 0}};
@@ -509,12 +566,13 @@ public:
     }
     void Process(float *l, float *r, int n, const PatchValues &p) {
         const int type = p[kEffectType];
+        if (Silent(l, r, n) && Rest(type, n, p)) return;
         if (type == 0) return Ad1(l, r, n, p);
         if (type <= 2) return Distort(l, r, n, p);
         if (type == 3) return Decimate(l, r, n, p);
         if (type == 5) return Compress(l, r, n, p);
         if (type >= 6) return Phase(l, r, n, p);
-        const double m = p[kEffectLevel] / 127.0, inc = std::pow(8000.0, p[kEffectCtrl1] / 127.0) / sr_;
+        const double m = p[kEffectLevel] / 127.0, inc = RingInc(p, sr_);
         for (int i = 0; i < n; ++i) {
             const double s = std::sin(2 * M_PI * phase_);
             phase_ += inc;
@@ -525,6 +583,31 @@ public:
     }
 
 private:
+    static double RingInc(const PatchValues &p, double sr) { return std::pow(8000.0, p[kEffectCtrl1] / 127.0) / sr; }
+
+    // (silence gate) a silent block: when this type's state has faded, it
+    // is zeroed and only the clocks run (ring phase, decimator hold; the
+    // phaser's sweep stops on silence anyway). False: process it.
+    bool Rest(int type, int n, const PatchValues &p) {
+        const bool quiet = type == 0   ? Tiny(fb_, 2) && Tiny(&ad1Hp_[0][0], 8) && hp2_.Quiet() && lp2_.Quiet()
+                           : type <= 2 ? hp2_.Quiet() && lp2_.Quiet()
+                           : type == 3 ? Tiny(hold_, 2) && Tiny(held_, 2) && Tiny(apFb_, 2)
+                           : type == 4 ? true
+                           : type == 5 ? Tiny(env_, 2)
+                                       : Tiny(&ap_[0][0], 24) && Tiny(apFb_, 2);
+        if (!quiet) return false;
+        hp2_.Reset(), lp2_.Reset();
+        fb_[0] = fb_[1] = apFb_[0] = apFb_[1] = env_[0] = env_[1] = 0;
+        hold_[0] = hold_[1] = held_[0] = held_[1] = 0;
+        for (auto &c : ad1Hp_)
+            for (double &v : c) v = 0;
+        for (auto &c : ap_)
+            for (double &v : c) v = 0;
+        if (type == 3) holdCount_ = (holdCount_ + n) % (p[kEffectCtrl1] + 1);
+        if (type == 4) phase_ += RingInc(p, sr_) * n, phase_ -= std::floor(phase_);
+        return true;
+    }
+
     // (fit_ad1.py) per channel
     void Ad1(float *l, float *r, int n, const PatchValues &p) {
         static constexpr double kBias1 = 0.724662338, kLoopGain = 7.76408919, kGain2 = 1.46001006, kBias2 = 0.233492458;
@@ -637,15 +720,19 @@ private:
         const double h = 0.02625 * p[kEffectCtrl1];
         const double step = 4.0 * h * 0.6418 * std::exp2((p[kEffectCtrl2] - 64) / 12.9) / sr_;
         const double k = 0.99 * (p[kEffectLevel] - 64) / 64.0;
-        bool live = false;
-        for (int i = 0; i < n && !live; ++i) live = l[i] != 0.0f || r[i] != 0.0f;
+        const bool sweep = h > 0 && !Silent(l, r, n);
+        // 2^pos stepped by its ratio (exact at each block and turn: no
+        // exp2 call per sample)
+        const double up = std::exp2(step), down = std::exp2(-step), scale = M_PI * 254.6 / sr_;
+        double g = std::exp2(pos_);
         for (int i = 0; i < n; ++i) {
-            if (live && h > 0) {
+            if (sweep) {
                 pos_ += dir_ * step;
-                if (pos_ > 2.32 + h) dir_ = -1, pos_ = 2.0 * (2.32 + h) - pos_;
-                else if (pos_ < 2.32 - h && dir_ < 0) dir_ = 1, pos_ = 2.0 * (2.32 - h) - pos_;
+                if (pos_ > 2.32 + h) dir_ = -1, pos_ = 2.0 * (2.32 + h) - pos_, g = std::exp2(pos_);
+                else if (pos_ < 2.32 - h && dir_ < 0) dir_ = 1, pos_ = 2.0 * (2.32 - h) - pos_, g = std::exp2(pos_);
+                else g *= dir_ > 0 ? up : down;
             }
-            const double t = M_PI * 254.6 * std::exp2(pos_) / sr_, a = (t - 1) / (t + 1);
+            const double t = scale * g, a = (t - 1) / (t + 1);
             float *s[2] = {l + i, r + i};
             for (int ch = 0; ch < 2; ++ch) {
                 const double x = *s[ch];
