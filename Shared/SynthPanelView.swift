@@ -68,7 +68,6 @@ struct SynthPanelView: View {
         #endif
         .modifier(FileActions(model: model))
         .environment(\.theme, theme)
-        .environment(\.renderProbes, model.renderOff)
     }
 
     /// The design canvas + its overlays, scaled (top-left anchored).
@@ -80,7 +79,7 @@ struct SynthPanelView: View {
             }
             .environment(\.editorScale, scale)
             // tips over everything at the canvas' scale (SynthTooltip.swift)
-            .probeTooltipHost()
+            .oxoTooltipHost()
             if model.showThemes {
                 ThemeDialog(model: model, position: $themeDialogPos, canvas: Self.designSize)
             }
@@ -108,7 +107,6 @@ struct SynthPanelView: View {
         .frame(width: Self.designSize.width, height: Self.designSize.height, alignment: .topLeading)
         .coordinateSpace(name: Self.canvasSpace)
         .scaleEffect(scale, anchor: .topLeading)
-        .probeCompositingGroup()
     }
 
     static let lfoShapes: [WaveIcon] = [.sawDown, .tri, .square, .sampleHold, .smooth, .sine]
@@ -130,26 +128,18 @@ struct SynthPanelView: View {
         ZStack(alignment: .topLeading) {
             theme.panel
             titleBand
-            if RenderProbe.chipsEnabled {
-                RenderProbeChips(model: model)
-                    .place(184, 5, RenderProbeChips.size.width, RenderProbeChips.size.height)
-            }
-            ZStack(alignment: .topLeading) {
-                oscillators.place(6, 34, 312, 240)
-                lfo.place(6, 278, 312, 130)
-                wheelMidi.place(6, 412, 536, 66)
-                amplifier.place(324, 34, 218, 80)
-                filter.place(324, 118, 218, 156)
-                arpeggiator.place(324, 278, 218, 130)
-                effect.place(548, 34, 216, 80)
-                equalizer.place(548, 118, 216, 58)
-                delay.place(548, 180, 216, 58)
-                chorus.place(548, 242, 216, 58)
-                voice.place(548, 304, 216, 174)
-                BottomBar(model: model).place(6, 484, 758, 70)
-            }
-            .frame(width: Self.designSize.width, height: Self.designSize.height)
-            .probe(.all)
+            oscillators.place(6, 34, 312, 240)
+            lfo.place(6, 278, 312, 130)
+            wheelMidi.place(6, 412, 536, 66)
+            amplifier.place(324, 34, 218, 80)
+            filter.place(324, 118, 218, 156)
+            arpeggiator.place(324, 278, 218, 130)
+            effect.place(548, 34, 216, 80)
+            equalizer.place(548, 118, 216, 58)
+            delay.place(548, 180, 216, 58)
+            chorus.place(548, 242, 216, 58)
+            voice.place(548, 304, 216, 174)
+            BottomBar(model: model).place(6, 484, 758, 70)
         }
         .frame(width: Self.designSize.width, height: Self.designSize.height)
     }
@@ -179,13 +169,12 @@ struct SynthPanelView: View {
     private func divider(_ x1: CGFloat, _ y1: CGFloat, _ x2: CGFloat, _ y2: CGFloat) -> some View {
         Rectangle().fill(theme.header.opacity(0.55))
             .frame(width: max(1, x2 - x1), height: max(1, y2 - y1))
-            .probe(.boxes)
             .position(x: (x1 + x2) / 2, y: (y1 + y2) / 2)
             .allowsHitTesting(false)
     }
 
     private func label(_ text: String, _ x: CGFloat, _ y: CGFloat) -> some View {
-        Text(text).font(Theme.labelFont).foregroundColor(theme.ink).fixedSize().probe(.labels).position(x: x, y: y)
+        Text(text).font(Theme.labelFont).foregroundColor(theme.ink).fixedSize().position(x: x, y: y)
     }
 
     private func radio(_ id: Int, _ labels: [String], from: Int = 0) -> [(value: Int, label: String)] {
@@ -289,7 +278,6 @@ struct SynthPanelView: View {
                 VStack(spacing: 0) {
                     ForEach(dests, id: \.value) { Text($0.label).font(Theme.labelFont).foregroundColor(theme.ink).frame(height: 13) }
                 }
-                .probe(.labels)
                 .position(x: 156, y: 72)
                 LedRadio(model: model, id: 46, options: radio(46, dests.map(\.label), from: 1), ledTrailing: true, showLabels: false)
                     .position(x: 188, y: 72)
@@ -604,7 +592,7 @@ struct TypeMenu: View {
         .fixedSize()
         .background(theme.displayFill)
         .overlay(Rectangle().strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
-        .probeShadow(color: .black.opacity(0.5), radius: 6, y: 3)
+        .shadow(color: .black.opacity(0.5), radius: 6, y: 3)
         #if os(macOS)
         .background(WheelShield())
         #endif

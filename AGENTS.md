@@ -732,6 +732,34 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
 - TOOLTIPS: only `.oxoTruncationTooltip` on cut patch / bank names in the
   browser (first 0.5 s, then instant while warm); no help tips, no
   `.help()`; hover via `onContinuousHover`.
+- RENDER COST (2026-11-18, user report: Logic's playhead and mouse lagged
+  while the editor was on screen, fine once hidden / moved off-screen; never
+  seen in Live). Logic hosts the editor OUT OF PROCESS
+  (`AUHostingServiceXPC_arrow`) and composites its layer tree again on
+  every panel change; the voice grid changes up to 30x/s while playing.
+  Live loads it in-process: the same cost lands on the GPU and Live never
+  waits for it. Measured: the panel was 1621 CALayers, 361 live `.shadow`
+  layers (a `.shadow` with a CLEAR colour still makes one) and 59 `.blur`
+  filters (knob rims); ~1100 of the layers were knobs (~12 each). Now
+  750 layers, 0 shadow / filter layers, local CPU with the grid at 30 Hz
+  22 % -> 11 %, same pixels. RULES for the panel (SwiftUI): no `.shadow` /
+  `.blur` on anything that is always on screen; a widget with a shadow /
+  glow / blur draws in ONE Canvas with the effect rasterized in
+  (`KnobFace`, `FlatCanvas` + `GraphicsContext.glow` / `strokeBorder` in
+  SynthControls.swift: knobs, button faces, LEDs, wave cells, value
+  displays); prefer one Canvas over a stack of shapes for repeated widgets.
+  Dialogs / menus shown on demand may keep `.shadow`. No `.drawingGroup()`
+  (Metal layers cannot be remoted, Oxo Steps), `.compositingGroup()` did
+  nothing here. How it was found (reuse it): temporary title-band chips each
+  removing one kind of drawing, tested in Logic (culprits: VOI = the
+  trigger, KNB / FX = the cost, POLL = no updates at all; WHL, TXT, BOX,
+  GRAD, LED, compositing group: no effect), then a local bench: the
+  snapshot tool's mock host in an on-screen window, `voiceStates` changed
+  every 33 ms, process CPU via `getrusage` + a walk of the hosting view's
+  layer tree counting layers / `shadowOpacity > 0` / `filters`. Still
+  open, if Logic ever lags again: each grid change makes SwiftUI diff the
+  whole panel (~11 % CPU, 0.4 % without the grid); a native view for
+  the grid (own layer, redraws itself) would remove that.
 - iPad: same panel scaled to fit, centred (HEIGHT MODE). UI WIDTH MODE
   (toggle left of the version box, `UIModeToggle`, lit arrow = the leading
   side): the width leads minus two 40 pt invisible side strips

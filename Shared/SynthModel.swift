@@ -211,8 +211,6 @@ final class SynthModel: ObservableObject {
     @Published private(set) var learnActive = false
     @Published private(set) var learnSelection: Int?
     @Published private(set) var learnTable: [Int]
-    /// TEMPORARY render diagnosis (SynthRenderProbe.swift).
-    @Published private(set) var renderOff = RenderProbe.saved
 
     let host: SynthHost
     let voices = VoiceActivity()
@@ -255,13 +253,7 @@ final class SynthModel: ObservableObject {
         timer = nil
     }
 
-    func toggleProbe(_ p: RenderProbe) {
-        if renderOff.contains(p) { renderOff.remove(p) } else { renderOff.insert(p) }
-        RenderProbe.saved = renderOff
-    }
-
     private func poll() {
-        if renderOff.contains(.poll) { return }
         var fresh = values
         var changed = false
         for id in 0..<Self.hostParamCount {

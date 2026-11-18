@@ -91,10 +91,9 @@ private struct WheelProbe: NSViewRepresentable {
 private struct WheelModifier: ViewModifier {
     let onWheel: (NSEvent) -> Bool
     @StateObject private var monitor = WheelMonitor()
-    @Environment(\.renderProbes) private var probes
 
     func body(content: Content) -> some View {
-        if probes.contains(.wheel) { content } else { content.background(WheelProbe(monitor: monitor, onWheel: onWheel)) }
+        content.background(WheelProbe(monitor: monitor, onWheel: onWheel))
     }
 }
 

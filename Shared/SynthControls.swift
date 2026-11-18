@@ -194,11 +194,9 @@ struct KnobView: View {
             }
             #endif
             Text(label).font(Theme.labelFont).foregroundColor(theme.ink).lineLimit(1).fixedSize()
-                .probe(.labels)
                 .frame(height: 12)
         }
         .learnable(model, id)
-        .probe(.knobs)
     }
 }
 
@@ -275,7 +273,6 @@ struct ToggleButton: View {
         .contentShape(Rectangle())
         .onTapGesture { model.setOnce(id, on ? 0 : 1) }
         .learnable(model, id)
-        .probe(.buttons)
     }
 }
 
@@ -295,7 +292,6 @@ struct CycleButton: View {
             .contentShape(Rectangle())
             .onTapGesture { model.cycle(id, shiftHeld() ? -1 : 1) }
             .learnable(model, id)
-            .probe(.buttons)
     }
 }
 
@@ -335,7 +331,6 @@ struct PanelButton: View {
             .background(ButtonFace(fill: fill))
         }
         .buttonStyle(.plain)
-        .probe(.buttons)
     }
 }
 
@@ -357,9 +352,8 @@ struct Badge: View {
             face.contentShape(Rectangle())
                 .onTapGesture { model.setOnce(id, on ? 0 : 1) }
                 .learnable(model, id)
-                .probe(.buttons)
         } else {
-            face.probe(.buttons)
+            face
         }
     }
 }
@@ -386,7 +380,7 @@ struct LedRadio: View {
                 let on = model.values[id] == option.value
                 HStack(spacing: 3) {
                     if !ledTrailing { led(on) }
-                    if showLabels { Text(option.label).font(Theme.labelFont).foregroundColor(theme.ink).fixedSize().probe(.labels) }
+                    if showLabels { Text(option.label).font(Theme.labelFont).foregroundColor(theme.ink).fixedSize() }
                     if ledTrailing { led(on) }
                 }
                 .frame(height: rowHeight)
@@ -398,7 +392,6 @@ struct LedRadio: View {
         // wrong way); a horizontal pair / trio steps like a display
         .displayWheel(model, id, remainder: $wheelRemainder, enabled: horizontal)
         .learnable(model, id)
-        .probe(.leds)
     }
 
     private func led(_ on: Bool) -> some View {
@@ -550,7 +543,6 @@ struct WaveRadio: View {
         }
         .displayWheel(model, id, remainder: $wheelRemainder)
         .learnable(model, id)
-        .probe(.waves)
     }
 }
 
@@ -570,7 +562,6 @@ struct WaveDisplay: View {
             .onTapGesture { model.typeMenu = id }
             .displayWheel(model, id, remainder: $wheelRemainder)
             .learnable(model, id)
-            .probe(.waves)
     }
 }
 
@@ -634,7 +625,6 @@ struct ValueDisplay: View {
             .simultaneousGesture(TapGesture(count: 2).onEnded { if !tapCycles { model.setOnce(id, model.host.range(id).def) } })
             .displayWheel(model, id, remainder: $wheelRemainder)
             .learnable(model, id)
-            .probe(.displays)
     }
 }
 
@@ -646,7 +636,6 @@ struct MenuDisplay: View {
     let width: CGFloat
     let label: String
     let groups: [(title: String, items: [(value: Int, label: String)])]
-    @Environment(\.renderProbes) private var probes
 
     var body: some View {
         Menu {
@@ -667,9 +656,8 @@ struct MenuDisplay: View {
         .menuOrder(.fixed)
         .padding(.horizontal, 4)
         .frame(width: width, height: 16)
-        .background(RoundedRectangle(cornerRadius: 2).fill(probes.contains(.gradients) ? AnyShapeStyle(theme.display) : AnyShapeStyle(theme.displayFill)))
+        .background(RoundedRectangle(cornerRadius: 2).fill(theme.displayFill))
         .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
-        .probe(.displays)
     }
 
     private func items(_ list: [(value: Int, label: String)]) -> some View {
@@ -689,20 +677,17 @@ struct SectionBox<Content: View>: View {
     let width: CGFloat
     let height: CGFloat
     @ViewBuilder let content: Content
-    @Environment(\.renderProbes) private var probes
 
     var body: some View {
-        let boxes = !probes.contains(.boxes)
         ZStack(alignment: .topLeading) {
-            if boxes { Rectangle().fill(theme.panel) }
+            Rectangle().fill(theme.panel)
             Text(title).font(.system(size: 12, weight: .semibold)).foregroundColor(theme.headerText)
                 .padding(.leading, 5)
-                .probe(.labels)
                 .frame(width: width, height: 16, alignment: .leading)
-                .background(boxes ? theme.header : Color.clear)
+                .background(theme.header)
             content.frame(width: width, height: height)
         }
         .frame(width: width, height: height)
-        .overlay(Rectangle().strokeBorder(boxes ? theme.edge : Color.clear, lineWidth: 1))
+        .overlay(Rectangle().strokeBorder(theme.edge, lineWidth: 1))
     }
 }
