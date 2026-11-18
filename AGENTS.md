@@ -359,6 +359,15 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   run the same on any Linux box (`podman run -v $PWD:/src debian:12`).
   Actions pinned by commit SHA. "Run workflow" only lists workflows on the
   default branch; from there it runs on any branch or tag.
+  GCC vs CLANG (2026-11-18, branch `compare_linux_compilers`: workflow
+  "Compare Linux compilers" + `tools/bench/compare_compilers.sh`, tools/bench
+  with the plugin's options, best of 5, alternating, same VM): the release
+  STAYS ON GCC. x86_64 (Xeon 6975P), debian:12 and :13: clang / GCC 0.92
+  .. 1.07 per scenario, chords / scrubs 0.96 .. 1.05 = a tie (a Linux
+  user's "2x Synth1" on a Core 2 is not the compiler). aarch64 (Neoverse
+  N2): clang +9..18 % on detune + sub, chords and the 010 scrub, +22..34 %
+  on LPDL, but -7..10 % on simple patches with the release's clang 14
+  (a tie with clang 19). Revisit for aarch64 if ARM users report CPU.
 - WINDOWS INSTALLER: `tools\prepare_win_installer.bat [--skip-build]
   [--skip-validator] [--msvc] [--dynamic-crt] [--no-pause]` on Windows (+
   Inno Setup 6.3+, `winget install JRSoftware.InnoSetup`) →
