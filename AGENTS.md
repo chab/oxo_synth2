@@ -290,7 +290,11 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   12, amp env 10 (arm64 alike).
   REGRESSION: `make -C tools/regress [ARCH=x86_64]`, `build/regress/
   regress-<arch> save|check <dir> <patches or folders>` (fixed phrase,
-  bit-identical or residual dB, `--tolerance`); baselines per arch. Scale:
+  bit-identical or residual dB, `--tolerance`); baselines per arch. Its
+  phrase moves NO knob: changes gated on a still knob or on silence need
+  knob / switch sweeps too (the 1.1.8 check: master vs HEAD, 1001
+  patches, sweeps at 44.1 / 96 kHz, random block sizes; NEON, SSE2,
+  scalar all under -130 dBFS). Scale:
   FMA off alone (arm64) leaves 271 / 313 patches under -100 dB but
   chaotic ones (ME 050, 113, 095) at -60..-80 dB.
   TRIED, REJECTED (2026-11-19, the limiter): its gain at control rate
@@ -357,7 +361,10 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   chorus) whose input block is exactly 0 and whose state faded under
   -180 dB skips the block (delay / chorus: every sample their reads can
   reach written under it, then emptied); clocks move on (chorus LFO, ring
-  phase, decimator hold, delay glide). Measured on the original: its
+  phase, decimator hold, delay glide). The effect unit zeroes only the
+  CURRENT type's state (`Rest`): another type's stays frozen for a switch
+  back (zeroing all of them cost up to -18 dBFS on a type switch during
+  silence, 1.1.8 build 15 before release). Measured on the original: its
   effects cost ~nothing in silence (Harmony Pad idle 0.09 % of a core,
   ours 0.42 % before the gate, 0.06 % after; x86_64 Rosetta, render
   only). No trig in the chorus loop (sin / cos rotated per sample), no

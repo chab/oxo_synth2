@@ -587,7 +587,9 @@ private:
 
     // (silence gate) a silent block: when this type's state has faded, it
     // is zeroed and only the clocks run (ring phase, decimator hold; the
-    // phaser's sweep stops on silence anyway). False: process it.
+    // phaser's sweep stops on silence anyway). False: process it. Only
+    // THIS type's state: another type's stays frozen as it was left (a
+    // type switch back finds it, as when every block is processed).
     bool Rest(int type, int n, const PatchValues &p) {
         const bool quiet = type == 0   ? Tiny(fb_, 2) && Tiny(&ad1Hp_[0][0], 8) && hp2_.Quiet() && lp2_.Quiet()
                            : type <= 2 ? hp2_.Quiet() && lp2_.Quiet()
@@ -596,15 +598,13 @@ private:
                            : type == 5 ? Tiny(env_, 2)
                                        : Tiny(&ap_[0][0], 24) && Tiny(apFb_, 2);
         if (!quiet) return false;
-        hp2_.Reset(), lp2_.Reset();
-        fb_[0] = fb_[1] = apFb_[0] = apFb_[1] = env_[0] = env_[1] = 0;
-        hold_[0] = hold_[1] = held_[0] = held_[1] = 0;
-        for (auto &c : ad1Hp_)
-            for (double &v : c) v = 0;
-        for (auto &c : ap_)
-            for (double &v : c) v = 0;
-        if (type == 3) holdCount_ = (holdCount_ + n) % (p[kEffectCtrl1] + 1);
+        if (type <= 2) hp2_.Reset(), lp2_.Reset();
+        if (type == 0) std::fill_n(fb_, 2, 0.0), std::fill_n(&ad1Hp_[0][0], 8, 0.0);
+        if (type == 3) std::fill_n(hold_, 2, 0.0), std::fill_n(held_, 2, 0.0), holdCount_ = (holdCount_ + n) % (p[kEffectCtrl1] + 1);
+        if (type == 3 || type >= 6) std::fill_n(apFb_, 2, 0.0);
         if (type == 4) phase_ += RingInc(p, sr_) * n, phase_ -= std::floor(phase_);
+        if (type == 5) std::fill_n(env_, 2, 0.0);
+        if (type >= 6) std::fill_n(&ap_[0][0], 24, 0.0);
         return true;
     }
 
