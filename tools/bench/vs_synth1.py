@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Synth2 vs the original Synth1: CPU per scenario, same jobs, same session.
 
-  tools/bench/vs_synth1.py [--runs N] [--only substr] [--no-s1]
+  tools/bench/vs_synth1.py [--features] [--runs N] [--only substr] [--no-s1]
 
 Both run as x86_64 under Rosetta (Synth1 = build/s1ref/s1ref, ours =
 build/vs_synth1/bench-x86_64, the plugin's -O3), runs alternated, best and
 median kept; ours also native arm64 (build/vs_synth1/bench-arm64). Builds the
 benches and s1ref first. Prints % of one core per scenario (render only:
 s1ref's S1REF_TIME, our RenderJob's renderSeconds) and the cost per voice
-over idle. Rosetta is a proxy for a PC (AGENTS.md "VS THE ORIGINAL").
+over idle. --features: INIT with 16 held voices, one change at a time
+(what each feature costs on each side). Rosetta is a proxy for a PC (AGENTS.md "VS THE ORIGINAL").
 """
 import os
 import re
@@ -71,6 +72,29 @@ def scenarios():
     ]
 
 
+# --features: INIT, 16 held voices, one change at a time (param id: value)
+FEATURES = [
+    ('osc mix 64', {5: 64}), ('osc mix 127', {5: 127}),
+    ('osc1 sine', {0: 0}), ('osc1 pulse', {0: 2}), ('osc1 triangle', {0: 3}),
+    ('osc2 saw', {1: 1}), ('osc2 noise', {1: 4}),
+    ('detune 10', {76: 10}), ('detune 64', {76: 64}), ('sub 64 (sine)', {95: 64, 96: 0}),
+    ('sub 64 square', {95: 64, 96: 3}), ('detune 64 + sub 64', {76: 64, 95: 64}),
+    ('LP12 cutoff 64', {19: 64}), ('LP12 res 100', {19: 64, 20: 100}),
+    ('LP24', {14: 1}), ('LP24 cutoff 64 res 100', {14: 1, 19: 64, 20: 100}),
+    ('HP12', {14: 2}), ('BP12', {14: 3}), ('LPDL', {14: 4}), ('LPDL cutoff 64 res 100', {14: 4, 19: 64, 20: 100}),
+    ('filter env amt 100', {21: 100}), ('filter sat 64', {23: 64}),
+    ('LFOs off', {57: 0, 58: 0}), ('LFO1 pitch 20', {41: 1, 44: 20}), ('LFO2 cutoff 40', {44: 0, 46: 3, 49: 40}),
+    ('mod env pitch', {10: 1, 11: 90, 13: 60}), ('osc2 FM 40', {45: 40}), ('osc2 sync', {6: 1, 2: 76}),
+    ('osc2 ring', {7: 1}), ('vel sens 64', {30: 64}), ('pan 20', {86: 20}),
+]
+
+
+def features():
+    init = sy1(INIT)
+    keys = held(KEYS16)
+    return [('INIT 16 voices', init, 16, keys)] + [(n, {**init, **ch}, 16, keys) for n, ch in FEATURES]
+
+
 def write_jobs(path, scens):
     os.makedirs(os.path.join(OUT, 'wav'), exist_ok=True)
     with open(path, 'w') as f:
@@ -104,8 +128,9 @@ def main():
     runs = int(args[args.index('--runs') + 1]) if '--runs' in args else 5
     only = args[args.index('--only') + 1] if '--only' in args else ''
     s1 = '--no-s1' not in args
+    feat = '--features' in args
     build()
-    scens = [s for s in scenarios() if only.lower() in s[0].lower()]
+    scens = [s for s in (features() if feat else scenarios()) if only.lower() in s[0].lower()]
     jobs = os.path.join(OUT, 'vs_synth1_jobs.txt')
     write_jobs(jobs, scens)
     t = {k: [[] for _ in scens] for k in ('s1', 'x64', 'arm')}
@@ -132,6 +157,13 @@ def main():
         ratio = best('x64', i) / best('s1', i) if s1 else float('nan')
         print(f'{name:26} {best("s1", i):6.3f} ({med("s1", i):6.3f}) {best("x64", i):6.3f} ({med("x64", i):6.3f})'
               f' {ratio:6.2f} {best("arm", i):6.3f} ({med("arm", i):6.3f})')
+    if feat:
+        print('per voice, change vs INIT (% of one core / voice; Synth2 - Synth1 = what the change adds to the gap)')
+        print(f'{"change":26} {"Synth1":>8} {"Synth2":>8} {"gap":>8} {"arm64":>8}')
+        d = {k: [(best(k, i) - best(k, 0)) / 16 for i in range(len(scens))] for k in ('s1', 'x64', 'arm')}
+        for i, (name, *_r) in enumerate(scens[1:], 1):
+            print(f'{name:26} {d["s1"][i]:8.4f} {d["x64"][i]:8.4f} {d["x64"][i] - d["s1"][i]:8.4f} {d["arm"][i]:8.4f}')
+        return
     idle = {}
     for i, (name, _, voices, _n) in enumerate(scens):
         if voices == 0:
