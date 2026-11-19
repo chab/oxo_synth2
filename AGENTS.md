@@ -289,12 +289,17 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   (coefficient per sample 29, limiter 22), osc2 23, osc1 19, filter env
   12, amp env 10 (arm64 alike).
   REGRESSION: `make -C tools/regress [ARCH=x86_64]`, `build/regress/
-  regress-<arch> save|check <dir> <patches or folders>` (fixed phrase,
-  bit-identical or residual dB, `--tolerance`); baselines per arch. Its
-  phrase moves NO knob: changes gated on a still knob or on silence need
-  knob / switch sweeps too (the 1.1.8 check: master vs HEAD, 1001
-  patches, sweeps at 44.1 / 96 kHz, random block sizes; NEON, SSE2,
-  scalar all under -130 dBFS). Scale:
+  regress-<arch> save|check <dir> <patches or folders>` (bit-identical
+  or residual dB, `--tolerance`, `--phrase` = the phrase only); baselines
+  per arch. 4 scenarios per patch: the phrase; knob / switch SWEEPS (one
+  param after the other over a held chord: what a still-knob or silence
+  shortcut breaks; a difference names the param swept when it starts) at
+  44.1 kHz and 96 kHz / 64-frame blocks; the phrase after 3 s of silence
+  at 48 kHz in random 1..1100-frame blocks. ~0.08 s per patch (arm64),
+  baselines ~19 MB per patch. The phrase alone missed the 1.1.8
+  effect-type bug, the sweeps caught it (-18 dBFS, effect_type). The 1.1.8
+  check (master vs HEAD, 1001 patches, NEON / SSE2 / scalar): all under
+  -130 dBFS. Scale:
   FMA off alone (arm64) leaves 271 / 313 patches under -100 dB but
   chaotic ones (ME 050, 113, 095) at -60..-80 dB.
   TRIED, REJECTED (2026-11-19, the limiter): its gain at control rate
