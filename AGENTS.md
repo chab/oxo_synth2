@@ -278,7 +278,8 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   (before 9a38dae): per voice ours 1.6-1.7x Synth1 on INIT, detune, D-50,
   1.4x Harmony Pad; ours CHEAPER on FM (0.6x) and LPDL (0.9x), and idle
   with fx (Synth1 0.16 %, ours 0.04 %); INIT idle 0.036 % vs 0.007 %.
-  Detune is NOT the gap (+0.009 %/voice over Synth1's own +0.007). The
+  Detune was +0.012 %/voice over INIT vs Synth1's +0.007; since 1e552b0
+  +0.005 (cheaper than Synth1). The
   gap adds up from: the SVF / ladder OUTPUT LIMITER (~25 % of an INIT
   voice, both archs: gain lookup ~60 %, follower ~40 %; level-dependent,
   hence HP12 / res / mix 64 cheaper than INIT for us, not for Synth1),
@@ -310,7 +311,12 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   copies (`copyPhase_`, sub octave = half rate, osc1's = `<< 1`),
   stepped through `EngineCore/Simd.hpp` `P4` (SSE2 / NEON / plain C++,
   `-DOXO_SIMD_SCALAR` forces the latter: clang builds that from scalar
-  source, MSVC does not). THE VOICE LOOP IS COMPILED PER CASE: `Voice::RenderChunk` picks
+  source, MSVC does not). Without FM (osc static / moving) the copies'
+  sums are computed AHEAD per chunk (`Voice::CopiesRun`, a tight loop per
+  run of one osc1 step; a voice ending mid-chunk replays the phases): in
+  the voice loop they cost 4x (4.3 vs ~1.1 ns per voice-sample, Rosetta;
+  1e552b0); cross (FM / sync / ring) keeps them inline (osc2 per sample).
+  THE VOICE LOOP IS COMPILED PER CASE: `Voice::RenderChunk` picks
   one of 18 `RenderChunkAs<kOsc, kDetune, kFilter>` (osc static / moving
   / cross = FM, ring, sync; detune; SVF / ladder / diode), same
   statements in each (`if constexpr`), so they render bit-identically.
