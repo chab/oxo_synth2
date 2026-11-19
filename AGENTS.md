@@ -285,6 +285,9 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   hence HP12 / res / mix 64 cheaper than INIT for us, not for Synth1),
   osc2 sync +0.021, mod env pitch +0.017, ring +0.013, sub +0.010, LP24
   +0.010, osc2 pulse vs saw +0.010 (two reads; Synth1's costs the same).
+  INIT VOICE (16 voices, before 9901329), ablation shares: filter 46 %
+  (coefficient per sample 29, limiter 22), osc2 23, osc1 19, filter env
+  12, amp env 10 (arm64 alike).
   REGRESSION: `make -C tools/regress [ARCH=x86_64]`, `build/regress/
   regress-<arch> save|check <dir> <patches or folders>` (fixed phrase,
   bit-identical or residual dB, `--tolerance`); baselines per arch. Scale:
@@ -316,6 +319,13 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   run of one osc1 step; a voice ending mid-chunk replays the phases): in
   the voice loop they cost 4x (4.3 vs ~1.1 ns per voice-sample, Rosetta;
   1e552b0); cross (FM / sync / ring) keeps them inline (osc2 per sample).
+  A HELD CUTOFF (filter env `Adsr::Holding`, no LFO on cutoff, knob
+  still) sets its coefficients once per chunk; osc2 at mix 0 is not read
+  (static oscillators only) (9901329: INIT voice 1.6x -> 1.06x Synth1).
+  Ahead loops pay only for chain-free work: the cutoff + env computed
+  ahead was 25 % SLOWER (the env's recurrence alone is latency-bound,
+  free in the voice loop); per-sample checks in the loop are not free
+  either (~2 % each on a moving-osc patch), keep them per case.
   THE VOICE LOOP IS COMPILED PER CASE: `Voice::RenderChunk` picks
   one of 18 `RenderChunkAs<kOsc, kDetune, kFilter>` (osc static / moving
   / cross = FM, ring, sync; detune; SVF / ladder / diode), same
