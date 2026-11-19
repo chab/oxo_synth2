@@ -13,9 +13,11 @@
 #include "Params.hpp"
 #include "WaveTables.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 
 namespace oxo::s2 {
 
@@ -261,7 +263,11 @@ private:
         for (int k = 0; k < 2; ++k) {
             const int dest = LfoDest(p, lfo, k);
             cross |= dest == 6;
-            moving |= dest == 1 || dest == 2 || dest == 5;
+            // an LFO on pitch moves the oscillators only when its whole steps
+            // change within the chunk (a square, a slow LFO: mostly not)
+            moving |= dest == 5 || ((dest == 1 || dest == 2) &&
+                                    std::adjacent_find(lfoSteps[k], lfoSteps[k] + frames, std::not_equal_to<>()) !=
+                                        lfoSteps[k] + frames);
         }
         using Chunk = void (Voice::*)(float *, float *, int, int64_t, int64_t, const PatchValues &, double,
                                       const double *const[2], const int32_t *const[2], double, double);
@@ -375,8 +381,18 @@ private:
         // (measured, measure_pw_limits.py) the final duty never reaches 0 / 1:
         // pw 0 = pw 1 = 1.25 / 254, modulation tops out at 1 - 1.375 / 254
         static constexpr double kWidthMin = 1.25 / 254.0, kWidthMax = 1.0 - 1.375 / 254.0;
-        // a static oscillator section's steps and width (else per sample, below)
-        const double staticIncA = PhaseStep(inc1 * bendRatio), staticIncB = inc2 * bendRatio;
+        // a static oscillator section's steps and width (else per sample,
+        // below). Static with LFOs on pitch: their steps hold over the chunk
+        // (RenderChunk), the same ratios as the moving case's.
+        double ratioA = bendRatio, ratioB = bendRatio;
+        if constexpr (kOsc == kOscStatic) {
+            if (r[1] || r[2]) {
+                const int lfoAll = r[2] ? pitchSteps(r[2], 0) : 0;
+                if (r[2]) ratioA = PitchRatio{}(bendSteps + lfoAll);
+                ratioB = r[1] ? PitchRatio{}(bendSteps + lfoAll + pitchSteps(r[1], 0)) : ratioA;
+            }
+        }
+        const double staticIncA = PhaseStep(inc1 * ratioA), staticIncB = inc2 * ratioB;
         const double staticWidth = std::clamp(width, kWidthMin, kWidthMax);
         double curWidth = staticWidth;
         uint32_t curWidthPoints = CopyWidth(staticWidth);
