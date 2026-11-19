@@ -289,6 +289,12 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   bit-identical or residual dB, `--tolerance`); baselines per arch. Scale:
   FMA off alone (arm64) leaves 271 / 313 patches under -100 dB but
   chaotic ones (ME 050, 113, 095) at -60..-80 dB.
+  TRIED, REJECTED (2026-11-19, the limiter): its gain at control rate
+  (held 8 samples, or predicted to the segment's middle): INIT 16 voices
+  -14 %, but D-50 / Harmony Pad / detune unchanged or worse, and residuals
+  up to -44 dB (6 dB per doubling of N: the gain RIPPLES within the
+  waveform's cycle, part of the sound); its table cell cached (exact):
+  within noise in the full loop. `--also` compares builds in one session.
   TRIED, NO GAIN (2026-11-10): linear interpolation for the copies (-2.5
   ..5 % instructions: an interpolated read costs its gather, not its
   order); skipping the filter's coefficient lookup when the cutoff did
