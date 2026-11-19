@@ -270,6 +270,25 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   A/B over the line profile). Timing the ORIGINAL per feature tells how
   it works (its pulse copies cost 2x its saw copies = two reads; its sub
   copies cost the same for the four sub shapes = one read each).
+  `tools/bench/vs_synth1.py [--features]` = THE comparison (both x86_64
+  Rosetta + ours arm64, runs alternated, best / median, render time only):
+  INIT 1 / 4 / 16 voices, INIT + osc1 detune 10, Madame Eljay 010 "Roland
+  D-50" / 035 "Harmony Pad" (idle, held, scrub); `--features` = INIT 16
+  voices, one change at a time, cost per voice on each side. 2026-11-19
+  (before 9a38dae): per voice ours 1.6-1.7x Synth1 on INIT, detune, D-50,
+  1.4x Harmony Pad; ours CHEAPER on FM (0.6x) and LPDL (0.9x), and idle
+  with fx (Synth1 0.16 %, ours 0.04 %); INIT idle 0.036 % vs 0.007 %.
+  Detune is NOT the gap (+0.009 %/voice over Synth1's own +0.007). The
+  gap adds up from: the SVF / ladder OUTPUT LIMITER (~25 % of an INIT
+  voice, both archs: gain lookup ~60 %, follower ~40 %; level-dependent,
+  hence HP12 / res / mix 64 cheaper than INIT for us, not for Synth1),
+  osc2 sync +0.021, mod env pitch +0.017, ring +0.013, sub +0.010, LP24
+  +0.010, osc2 pulse vs saw +0.010 (two reads; Synth1's costs the same).
+  REGRESSION: `make -C tools/regress [ARCH=x86_64]`, `build/regress/
+  regress-<arch> save|check <dir> <patches or folders>` (fixed phrase,
+  bit-identical or residual dB, `--tolerance`); baselines per arch. Scale:
+  FMA off alone (arm64) leaves 271 / 313 patches under -100 dB but
+  chaotic ones (ME 050, 113, 095) at -60..-80 dB.
   TRIED, NO GAIN (2026-11-10): linear interpolation for the copies (-2.5
   ..5 % instructions: an interpolated read costs its gather, not its
   order); skipping the filter's coefficient lookup when the cutoff did
