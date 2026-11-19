@@ -64,6 +64,8 @@ public:
     }
     const double *LimitTable() const { return limit_.data(); }
     const double *SvfTable() const { return svfF_.data(); }
+    const double *LadderATable() const { return ladderA_.data(); }
+    const double *CompTable() const { return comp_.data(); }
     static OXO_INLINE double At(const double *table, double knob) {
         const double x = std::clamp(knob, 0.0, 127.0) * kSteps;
         const int i = std::min(int(x), kSize - 2);
@@ -108,6 +110,8 @@ public:
         sampleRate_ = sampleRate;
         tables_ = FilterTables::ForSampleRate(sampleRate);
         limitTable_ = tables_->LimitTable(), svfTable_ = tables_->SvfTable();
+        ladderATable_ = tables_->LadderATable(), compTable_ = tables_->CompTable();
+        svfCell_ = ladderCell_ = -2;
         agcAttack_ = 1.0 - std::exp(-1.0 / (0.0012 * sampleRate));
         agcRelease_ = 1.0 - std::exp(-1.0 / (0.2017 * sampleRate));
         limitAttack_ = 1.0 - std::exp(-1.0 / (0.003714 * sampleRate));
@@ -115,6 +119,7 @@ public:
     }
 
     void Reset() {
+        svfCell_ = ladderCell_ = -2;
         low_ = band_ = 0;
         for (double &s : stage_) s = 0;
         fb_ = 0;
@@ -144,7 +149,17 @@ public:
         SetSvfCutoff(cutoffKnob);
     }
     // the same in two steps (the voice sets type / res once per chunk)
-    OXO_INLINE void SetSvfCutoff(double cutoffKnob) { svfF_ = FilterTables::At(svfTable_, cutoffKnob); }
+    // The cutoff's table cell (FilterTables::At's point i, same arithmetic,
+    // bit for bit) is re-read only when the cutoff leaves it: a moving cutoff
+    // (filter env, LFO) mostly stays in one for many samples.
+    OXO_INLINE void SetSvfCutoff(double cutoffKnob) {
+        const double x = std::clamp(cutoffKnob, 0.0, 127.0) * FilterTables::kSteps;
+        if (!(x >= svfCell_ && x < svfCell_ + 1.0)) {
+            const int i = std::min(int(x), FilterTables::kSize - 2);
+            svfCell_ = i, svfBase_ = svfTable_[i], svfSlope_ = svfTable_[i + 1] - svfTable_[i];
+        }
+        svfF_ = svfBase_ + svfSlope_ * (x - svfCell_);
+    }
     OXO_INLINE void SetSvfRes(int type, int res) {
         type_ = type;
         if (res != svfRes_) {
@@ -157,8 +172,14 @@ public:
     // LP24
     OXO_INLINE void SetLadder(double cutoffKnob, int res) {
         type_ = 1;
-        double comp;
-        tables_->Ladder(cutoffKnob, ladderA_, comp);
+        const double x = std::clamp(cutoffKnob, 0.0, 127.0) * FilterTables::kSteps;
+        if (!(x >= ladderCell_ && x < ladderCell_ + 1.0)) {
+            const int i = std::min(int(x), FilterTables::kSize - 2);
+            ladderCell_ = i, ladderABase_ = ladderATable_[i], ladderASlope_ = ladderATable_[i + 1] - ladderATable_[i];
+            compBase_ = compTable_[i], compSlope_ = compTable_[i + 1] - compTable_[i];
+        }
+        const double t = x - ladderCell_, comp = compBase_ + compSlope_ * t;
+        ladderA_ = ladderABase_ + ladderASlope_ * t;
         ladderK_ = std::max(0.0, 0.0297 * res - 0.076) * comp;
     }
     // LPDL
@@ -328,6 +349,9 @@ private:
     double sampleRate_ = 44100;
     std::shared_ptr<const FilterTables> tables_;
     const double *limitTable_ = nullptr, *svfTable_ = nullptr; // tables_'s, read per sample
+    const double *ladderATable_ = nullptr, *compTable_ = nullptr;
+    double svfCell_ = -2, svfBase_ = 0, svfSlope_ = 0; // the cutoff's table cell (SetSvfCutoff)
+    double ladderCell_ = -2, ladderABase_ = 0, ladderASlope_ = 0, compBase_ = 0, compSlope_ = 0;
     int type_ = 1;
     double svfF_ = 0.1, svfD_ = 1, svfG_ = 1;
     int svfRes_ = 0; // the res svfD_ / svfG_ hold
