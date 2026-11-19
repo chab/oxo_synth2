@@ -584,9 +584,18 @@ private:
         // the copies' phases stay in registers over the chunk (stored back below)
         simd::P4 copyPh[2] = {simd::LoadPhases(copyPhase_.data()), simd::LoadPhases(copyPhase_.data() + 4)};
         // the cutoff (knob units) at sample i for the filter env's value env
+        // (knob still: its clamped target is the same all chunk, hoisted)
+        const bool knobStill = cutoffStep == 0;
+        const double stillBase = cutoffBase + cutoffStep * 0, stillLow = stillBase - 2.1;
+        const double stillSpan = std::clamp(stillBase + envDepth, -2.0, 125.0) - stillLow;
         const auto cutoffAt = [&](int i, double env) {
-            const double base = cutoffBase + cutoffStep * i, low = base - 2.1;
-            double cutoff = low + (std::clamp(base + envDepth, -2.0, 125.0) - low) * env;
+            double cutoff;
+            if (knobStill) {
+                cutoff = stillLow + stillSpan * env;
+            } else {
+                const double base = cutoffBase + cutoffStep * i, low = base - 2.1;
+                cutoff = low + (std::clamp(base + envDepth, -2.0, 125.0) - low) * env;
+            }
             if (r[3]) cutoff += std::max(0.0, 125.0 - cutoff) * std::min(1.0, r[3].Unipolar(i)); // tops out (measured)
             return cutoff;
         };
