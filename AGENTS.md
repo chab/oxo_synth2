@@ -1040,7 +1040,10 @@ original AU; keeps both renders for listening).
   mouse drag jumps several steps per UI tick (MIDI CC: one) and zippered.
   It snaps unless a voice sounded at the end of the previous Render (a
   patch then its first note in one block: no glide; mono notes start
-  their voice at once, before the render). Cost ~1 % (bench).
+  their voice at once, before the render). Still: the voices take the
+  knob's gain as before (bit-identical, no cost); gliding: they render
+  at gain 1 and Synth ramps their mix (a per-voice ramp in the voice
+  loop cost ~1 % ALL the time, still knob included).
 - Filter: LP12/HP12/BP12 = Chamberlin SVF ×2 iterations (input held),
   f = 2 sin(pi fc/2fs), fc = 16.7·2^(c/12.624) (c ≤ 125), d = 1-r,
   in gain 1-0.7r. LP24 = 4 bilinear one-poles + unit-delay feedback, fc

@@ -474,8 +474,16 @@ public:
             const bool sounding = std::any_of(voices_.begin(), voices_.end(), [](const Voice &v) { return v.Active(); });
             const KnobRamp cutoff = cutoff_.Ramp(values_[kFilterFreq], n, kCutoffGlideSeconds * sampleRate_, sounding);
             const KnobRamp gain = gain_.Ramp(tables::kAmpGain[values_[kAmpGain]], n, kGainGlideSeconds * sampleRate_, heard_);
+            // the gain knob: in the voices while still (as without a glide),
+            // here on their mix while it glides (one ramp for all voices)
+            const bool gainMoving = gain.step != 0;
             for (Voice &v : voices_)
-                v.Render(left + pos, right + pos, n, blockPos_ + pos, blockEnd_, values_, bendSemis, lfo, lfoSteps, cutoff, gain);
+                v.Render(left + pos, right + pos, n, blockPos_ + pos, blockEnd_, values_, bendSemis, lfo, lfoSteps, cutoff,
+                         gainMoving ? 1.0 : gain.start);
+            for (int i = 0; i < n && gainMoving; ++i) {
+                const double g = gain.start + gain.step * i;
+                left[pos + i] = float(left[pos + i] * g), right[pos + i] = float(right[pos + i] * g);
+            }
             if (switch_ != Switch::None) SwitchFade(left + pos, right + pos, n);
             panLfo = LfoPanGains(pos, n, lfo);
             toArp = ArpAdvance(n);
