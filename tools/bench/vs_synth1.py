@@ -2,6 +2,7 @@
 """Synth2 vs the original Synth1: CPU per scenario, same jobs, same session.
 
   tools/bench/vs_synth1.py [--features] [--runs N] [--only substr] [--no-s1]
+                           [--also LABEL=bench_binary]...
 
 Both run as x86_64 under Rosetta (Synth1 = build/s1ref/s1ref, ours =
 build/vs_synth1/bench-x86_64, the plugin's -O3), runs alternated, best and
@@ -9,7 +10,8 @@ median kept; ours also native arm64 (build/vs_synth1/bench-arm64). Builds the
 benches and s1ref first. Prints % of one core per scenario (render only:
 s1ref's S1REF_TIME, our RenderJob's renderSeconds) and the cost per voice
 over idle. --features: INIT with 16 held voices, one change at a time
-(what each feature costs on each side). Rosetta is a proxy for a PC (AGENTS.md "VS THE ORIGINAL").
+(what each feature costs on each side). --also: other x86_64 builds of
+tools/bench (e.g. before a change), alternated too, as extra columns. Rosetta is a proxy for a PC (AGENTS.md "VS THE ORIGINAL").
 """
 import os
 import re
@@ -129,16 +131,18 @@ def main():
     only = args[args.index('--only') + 1] if '--only' in args else ''
     s1 = '--no-s1' not in args
     feat = '--features' in args
+    also = [args[i + 1].split('=', 1) for i, a in enumerate(args) if a == '--also']
     build()
     scens = [s for s in (features() if feat else scenarios()) if only.lower() in s[0].lower()]
     jobs = os.path.join(OUT, 'vs_synth1_jobs.txt')
     write_jobs(jobs, scens)
-    t = {k: [[] for _ in scens] for k in ('s1', 'x64', 'arm')}
+    t = {k: [[] for _ in scens] for k in ['s1', 'x64', 'arm'] + [label for label, _ in also]}
     env = dict(os.environ, S1REF_TIME='1')
     for r in range(runs):
         print(f'run {r + 1}/{runs}', file=sys.stderr)
         sides = [('x64', [os.path.join(OUT, 'bench-x86_64'), jobs], None),
                  ('arm', [os.path.join(OUT, 'bench-arm64'), jobs], None)]
+        sides[1:1] = [(label, [path, jobs], None) for label, path in also]
         if s1:
             sides.insert(r % 2, ('s1', [os.path.join(ROOT, 'build', 's1ref', 's1ref'), 'batch', jobs], env))
         for key, cmd, e in sides:
@@ -152,11 +156,14 @@ def main():
         return statistics.median(t[key][i]) if t[key][i] else float('nan')
 
     print(f'% of one core (best of {runs}; median in brackets), x86_64 under Rosetta unless arm64')
-    print(f'{"scenario":26} {"Synth1":>15} {"Synth2":>15} {"ratio":>6} {"Synth2 arm64":>15}')
+    print(f'{"scenario":26} {"Synth1":>15}' + ''.join(f' {label[:15]:>15} {"ratio":>6}' for label, _ in also) +
+          f' {"Synth2":>15} {"ratio":>6} {"Synth2 arm64":>15}')
     for i, (name, *_rest) in enumerate(scens):
-        ratio = best('x64', i) / best('s1', i) if s1 else float('nan')
-        print(f'{name:26} {best("s1", i):6.3f} ({med("s1", i):6.3f}) {best("x64", i):6.3f} ({med("x64", i):6.3f})'
-              f' {ratio:6.2f} {best("arm", i):6.3f} ({med("arm", i):6.3f})')
+        def col(k):
+            ratio = best(k, i) / best('s1', i) if s1 else float('nan')
+            return f' {best(k, i):6.3f} ({med(k, i):6.3f}) {ratio:6.2f}'
+        print(f'{name:26} {best("s1", i):6.3f} ({med("s1", i):6.3f})' + ''.join(col(label) for label, _ in also) +
+              col('x64') + f' {best("arm", i):6.3f} ({med("arm", i):6.3f})')
     if feat:
         print('per voice, change vs INIT (% of one core / voice; Synth2 - Synth1 = what the change adds to the gap)')
         print(f'{"change":26} {"Synth1":>8} {"Synth2":>8} {"gap":>8} {"arm64":>8}')
