@@ -55,10 +55,20 @@ public:
     double SvfF(double knob) const { return At(svfF_, knob); }
     // the output limiter's gain for its envelope e (> 0), (1 + (e / T)^k)^(-p / k)
     static constexpr double kLimitMax = 64.0, kLimitSteps = 32.0;
-    double LimitGain(double e) const {
+    double LimitGain(double e) const { return LimitGain(limit_.data(), e); }
+    // the table's points (size kLimitMax * kLimitSteps + 2)
+    static OXO_INLINE double LimitGain(const double *limit, double e) {
         const double x = std::min(e, kLimitMax) * kLimitSteps;
-        const int i = std::min(int(x), int(limit_.size()) - 2);
-        return limit_[i] + (limit_[i + 1] - limit_[i]) * (x - i);
+        const int i = int(x);
+        return limit[i] + (limit[i + 1] - limit[i]) * (x - i);
+    }
+    const double *LimitTable() const { return limit_.data(); }
+    const double *SvfTable() const { return svfF_.data(); }
+    static OXO_INLINE double At(const double *table, double knob) {
+        const double x = std::clamp(knob, 0.0, 127.0) * kSteps;
+        const int i = std::min(int(x), kSize - 2);
+        const double t = x - i;
+        return table[i] + (table[i + 1] - table[i]) * t;
     }
     void Ladder(double knob, double &ladderA, double &ladderComp) const {
         ladderA = At(ladderA_, knob);
@@ -66,12 +76,7 @@ public:
     }
 
 private:
-    static double At(const std::vector<double> &table, double knob) {
-        const double x = std::clamp(knob, 0.0, 127.0) * kSteps;
-        const int i = std::min(int(x), kSize - 2);
-        const double t = x - i;
-        return table[i] + (table[i + 1] - table[i]) * t;
-    }
+    static double At(const std::vector<double> &table, double knob) { return At(table.data(), knob); }
 
     explicit FilterTables(double sr)
         : sampleRate_(sr), svfF_(kSize), ladderA_(kSize), comp_(kSize), limit_(size_t(kLimitMax * kLimitSteps) + 2) {
@@ -102,6 +107,7 @@ public:
     void Prepare(double sampleRate) {
         sampleRate_ = sampleRate;
         tables_ = FilterTables::ForSampleRate(sampleRate);
+        limitTable_ = tables_->LimitTable(), svfTable_ = tables_->SvfTable();
         agcAttack_ = 1.0 - std::exp(-1.0 / (0.0012 * sampleRate));
         agcRelease_ = 1.0 - std::exp(-1.0 / (0.2017 * sampleRate));
         limitAttack_ = 1.0 - std::exp(-1.0 / (0.003714 * sampleRate));
@@ -135,7 +141,7 @@ public:
     // LP12 / HP12 / BP12 (type 0 / 2 / 3)
     OXO_INLINE void SetSvf(int type, double cutoffKnob, int res) {
         type_ = type;
-        svfF_ = tables_->SvfF(cutoffKnob);
+        svfF_ = FilterTables::At(svfTable_, cutoffKnob);
         if (res != svfRes_) {
             const double r = res / 127.0;
             svfRes_ = res;
@@ -197,12 +203,19 @@ private:
 #ifdef OXO_FILTER_LINEAR // measurement builds (measure_filter_limiter.py)
         return y;
 #else
-        const double a = std::fabs(y);
-        limitEnv_ += (a > limitEnv_ ? limitAttack_ : limitRelease_) * (a - limitEnv_);
-        return limitEnv_ > kLimitFloor ? y * tables_->LimitGain(limitEnv_) : y;
+        const double a = std::fabs(y), d = a - limitEnv_;
+        limitEnv_ = Follow(limitEnv_, a, d, limitAttack_, limitRelease_);
+        return limitEnv_ > kLimitFloor ? y * FilterTables::LimitGain(limitTable_, limitEnv_) : y;
 #endif
     }
     static constexpr double kLimitFloor = 0.39;
+    // env + (a > env ? up : down) * (a - env), selected as a VALUE: picking
+    // the coefficient made the compiler load it by the comparison's result,
+    // a load in the per-sample chain (same result, bit for bit)
+    static OXO_INLINE double Follow(double env, double a, double d, double up, double down) {
+        const double rise = env + up * d, fall = env + down * d;
+        return a > env ? rise : fall;
+    }
 
     // LPDL (fitted, tools/s1ref/fit_lpdl.py): linear 303-style diode ladder,
     // dy1 = w(-2 y1 + y2 + u), dy2 = w(y1 - 2 y2 + y3), dy3 = w(y2 - 2 y3 +
@@ -309,6 +322,7 @@ private:
 
     double sampleRate_ = 44100;
     std::shared_ptr<const FilterTables> tables_;
+    const double *limitTable_ = nullptr, *svfTable_ = nullptr; // tables_'s, read per sample
     int type_ = 1;
     double svfF_ = 0.1, svfD_ = 1, svfG_ = 1;
     int svfRes_ = 0; // the res svfD_ / svfG_ hold
