@@ -72,6 +72,13 @@ OXO_INLINE double Sin2Pi(double ph) {
     for (const double c : {1.0 / 362880.0, -1.0 / 5040.0, 1.0 / 120.0, -1.0 / 6.0, 1.0}) s = s * r2 + c;
     return std::copysign(s * r, -x);
 }
+// A smoothed knob over a render call: its value at the first sample and its
+// per-sample step (Synth's knob glides; step 0 = still).
+struct KnobRamp {
+    double start = 0, step = 0;
+    KnobRamp From(int off) const { return {start + step * off, step}; }
+};
+
 class Voice {
 public:
     // The longest run rendered in one go (Synth renders in chunks of it:
@@ -207,13 +214,13 @@ public:
 
     // lfo[k] = LFO k's per-sample value (nullptr when that LFO is off);
     // lfoSteps[k] = its pitch steps when it is routed to pitch (Lfo.hpp).
-    // cutoffKnob / cutoffStep: the smoothed cutoff knob at the block start and
-    // its per-sample ramp (Synth's 50 ms glide, measured).
+    // cutoff / gain: the smoothed cutoff knob (knob units) and gain knob
+    // (linear gain) over the call (Synth's knob glides).
     // pos: the chunk's first sample in the host block; blockEnd: the host
     // block's length.
     void Render(float *left, float *right, int frames, int64_t pos, int64_t blockEnd, const PatchValues &p,
-                double bendSemis, const double *const lfo[2], const int32_t *const lfoSteps[2], double cutoffKnob,
-                double cutoffStep) {
+                double bendSemis, const double *const lfo[2], const int32_t *const lfoSteps[2], KnobRamp cutoff,
+                KnobRamp gain) {
         if (!Active()) return;
         if (p[kPortaTime] <= 0) glide_ = note_;
         // (measured, measure_porta.py) a glide moves every 16 samples
@@ -222,8 +229,8 @@ public:
             const int n = std::min(gliding ? std::min(frames - off, glideTick_) : frames - off, kMaxChunk);
             const double *at[2] = {lfo[0] ? lfo[0] + off : nullptr, lfo[1] ? lfo[1] + off : nullptr};
             const int32_t *stepsAt[2] = {lfoSteps[0] ? lfoSteps[0] + off : nullptr, lfoSteps[1] ? lfoSteps[1] + off : nullptr};
-            RenderChunk(left + off, right + off, n, pos + off, blockEnd, p, bendSemis, at, stepsAt, cutoffKnob + cutoffStep * off,
-                        cutoffStep);
+            RenderChunk(left + off, right + off, n, pos + off, blockEnd, p, bendSemis, at, stepsAt, cutoff.From(off),
+                        gain.From(off));
             off += n;
             if (gliding && (glideTick_ -= n) == 0) {
                 glideTick_ = 16;
@@ -256,8 +263,8 @@ private:
         kOscCross,  // FM, ring or sync (osc1 and osc2 depend on each other), anything else too
     };
     void RenderChunk(float *left, float *right, int frames, int64_t pos, int64_t blockEnd, const PatchValues &p,
-                     double bendSemis, const double *const lfo[2], const int32_t *const lfoSteps[2], double cutoffKnob,
-                     double cutoffStep) {
+                     double bendSemis, const double *const lfo[2], const int32_t *const lfoSteps[2], KnobRamp cutoff,
+                     KnobRamp gain) {
         const bool modEnv = p[kModEnvOn] != 0;
         bool cross = p[kOsc2Ring] || p[kOsc2Sync] || p[kOsc1FM] > 0 || (modEnv && p[kModEnvDest] == 1), moving = modEnv;
         for (int k = 0; k < 2; ++k) {
@@ -270,7 +277,7 @@ private:
                                         lfoSteps[k] + frames);
         }
         using Chunk = void (Voice::*)(float *, float *, int, int64_t, int64_t, const PatchValues &, double,
-                                      const double *const[2], const int32_t *const[2], double, double);
+                                      const double *const[2], const int32_t *const[2], KnobRamp, KnobRamp);
 #define OXO_CHUNKS(osc, detune) \
     {&Voice::RenderChunkAs<osc, detune, VoiceFilter::kSvf>, &Voice::RenderChunkAs<osc, detune, VoiceFilter::kLadder>, \
      &Voice::RenderChunkAs<osc, detune, VoiceFilter::kDiode>}
@@ -280,13 +287,14 @@ private:
 #undef OXO_CHUNKS
         (this->*kChunk[cross ? kOscCross : moving ? kOscMoving : kOscStatic][p[kOsc1Detune] > 0]
                       [VoiceFilter::KindOf(p[kFilterType])])(left, right, frames, pos, blockEnd, p, bendSemis, lfo,
-                                                              lfoSteps, cutoffKnob, cutoffStep);
+                                                              lfoSteps, cutoff, gain);
     }
 
     template <int kOsc, bool kDetune, int kFilter>
     void RenderChunkAs(float *left, float *right, int frames, int64_t pos, int64_t blockEnd, const PatchValues &p,
-                       double bendSemis, const double *const lfo[2], const int32_t *const lfoSteps[2], double cutoffKnob,
-                     double cutoffStep) {
+                       double bendSemis, const double *const lfo[2], const int32_t *const lfoSteps[2], KnobRamp cutoff,
+                       KnobRamp gain) {
+        const double cutoffKnob = cutoff.start, cutoffStep = cutoff.step;
         // ---- LFO routing (measured depth laws per destination). Both LFOs on
         // one destination (measured, measure_lfo_sum.py): pitch = sum of each
         // LFO's cents; cutoff / FM / pw / pan = the law applied to the
@@ -375,8 +383,9 @@ private:
         // (measured) amount -> -1..+1: (amt - 64) / 63 above 64, / 64 below
         const double modAmt = (p[kModEnvAmount] - 64) / (p[kModEnvAmount] > 64 ? 63.0 : 64.0);
 
-        const double ampGain = kOscAmplitude * tables::kAmpGain[p[kAmpGain]] *
-                               std::pow(10.0, -15.0 * (p[kAmpVelSens] / 64.0) * (127 - velocity_) / 126.0 / 20.0);
+        // the gain knob at sample i: ampGain + ampStep * i (still: step 0)
+        const double velGain = std::pow(10.0, -15.0 * (p[kAmpVelSens] / 64.0) * (127 - velocity_) / 126.0 / 20.0);
+        const double ampGain = kOscAmplitude * gain.start * velGain, ampStep = kOscAmplitude * gain.step * velGain;
 
         // (measured, measure_pw_limits.py) the final duty never reaches 0 / 1:
         // pw 0 = pw 1 = 1.25 / 254, modulation tops out at 1 - 1.375 / 254
@@ -702,7 +711,7 @@ private:
             const double env = AmpGain(amp_.Next(), pos + i, blockEnd);
             double gainMod = 1.0;
             for (int k = 0; k < r[4].n; ++k) gainMod *= 1.0 - r[4].scale[k] * 0.5 * (1.0 - r[4].v[k][i]);
-            const double x = filtered * env * ampGain * gainMod;
+            const double x = filtered * env * (ampGain + ampStep * i) * gainMod;
             const double y = x; // (the original's 22 kHz output lowpass = the EQ tone stage)
             left[i] += float(y * panL);
             right[i] += float(y * panR);

@@ -471,11 +471,11 @@ public:
                 if (values_[k ? kLfo2On : kLfo1On]) lfo[k] = lfoBuf_[k];
                 lfoSteps[k] = pitch ? lfoSteps_[k] : nullptr;
             }
-            double cutoffStart = 0;
-            const double cutoffStep = CutoffRamp(n, cutoffStart);
+            const bool sounding = std::any_of(voices_.begin(), voices_.end(), [](const Voice &v) { return v.Active(); });
+            const KnobRamp cutoff = cutoff_.Ramp(values_[kFilterFreq], n, kCutoffGlideSeconds * sampleRate_, sounding);
+            const KnobRamp gain = gain_.Ramp(tables::kAmpGain[values_[kAmpGain]], n, kGainGlideSeconds * sampleRate_, heard_);
             for (Voice &v : voices_)
-                v.Render(left + pos, right + pos, n, blockPos_ + pos, blockEnd_, values_, bendSemis, lfo, lfoSteps, cutoffStart,
-                         cutoffStep);
+                v.Render(left + pos, right + pos, n, blockPos_ + pos, blockEnd_, values_, bendSemis, lfo, lfoSteps, cutoff, gain);
             if (switch_ != Switch::None) SwitchFade(left + pos, right + pos, n);
             panLfo = LfoPanGains(pos, n, lfo);
             toArp = ArpAdvance(n);
@@ -506,6 +506,7 @@ public:
             }
         }
         volume_ = volumeTarget_;
+        heard_ = std::any_of(voices_.begin(), voices_.end(), [](const Voice &v) { return v.Active(); });
         now_ += uint64_t(std::max(frames, 0));
         blockPos_ += std::max(frames, 0);
     }
@@ -548,31 +549,37 @@ private:
         }
     }
 
+    // A knob that GLIDES to a new value: a linear ramp over a fixed time
+    // whatever the step, both ways. Ramp: the knob over the next n samples
+    // (moved to their end); snaps while no voice sounds (nothing to hear).
+    // The gain: while none sounded at the end of the last Render call (a
+    // patch's gain then its first note, in one block: no glide from the
+    // old gain; mono notes start their voice at once, not at the render).
     // (measured, cutoff jumps through the AU parameter at 44.1 / 96 kHz) the
-    // cutoff knob GLIDES to a new value: a linear ramp over 50 ms whatever
-    // the step (40 -> 41 and 40 -> 100 alike), both ways. Without it, fast
-    // mouse moves step audibly. Returns the per-sample step for the next n
-    // samples (`start` = the knob at the block start) and moves cutoff_ to
-    // the block end; snaps while no voice sounds (nothing to hear).
-    static constexpr double kCutoffGlideSeconds = 0.05;
-    double CutoffRamp(int n, double &start) {
-        const double target = values_[kFilterFreq];
-        if (target != cutoffTarget_) {
-            cutoffTarget_ = target;
-            cutoffRate_ = std::abs(target - cutoff_) / (kCutoffGlideSeconds * sampleRate_);
+    // CUTOFF knob glides over 50 ms (40 -> 41 and 40 -> 100 alike). The GAIN
+    // knob (linear gain) over 20 ms: ours (the original's measured ~instant
+    // steps zipper under a mouse drag, several knob steps per UI tick).
+    // Without them, fast mouse moves step audibly.
+    static constexpr double kCutoffGlideSeconds = 0.05, kGainGlideSeconds = 0.02;
+    struct Glide {
+        double value, target = value, rate = 0;
+        KnobRamp Ramp(double to, int n, double samples, bool sounding) {
+            if (to != target) {
+                target = to;
+                rate = std::abs(to - value) / samples;
+            }
+            if (!sounding) value = target;
+            const double start = value, left = target - value;
+            if (std::abs(left) <= rate * n) { // lands within this block
+                value = target;
+                return {start, left / n};
+            }
+            const double step = left > 0 ? rate : -rate;
+            value += step * n;
+            return {start, step};
         }
-        const bool sounding = std::any_of(voices_.begin(), voices_.end(), [](const Voice &v) { return v.Active(); });
-        if (!sounding) cutoff_ = cutoffTarget_;
-        start = cutoff_;
-        const double left = cutoffTarget_ - cutoff_;
-        if (std::abs(left) <= cutoffRate_ * n) { // lands within this block
-            cutoff_ = cutoffTarget_;
-            return left / n;
-        }
-        const double step = left > 0 ? cutoffRate_ : -cutoffRate_;
-        cutoff_ += step * n;
-        return step;
-    }
+        void Snap(double to) { value = target = to; }
+    };
 
     // (measured, pan with each effect type, delay / chorus types that cross
     // the channels) the patch pan and the LFOs on pan act on the voice mix
@@ -637,7 +644,7 @@ private:
             if ((switchQuiet_ >= kQuietSec * sampleRate_ && switchHeld_ >= kQuietSec * sampleRate_) ||
                 switchHeld_ >= kMaxHoldSec * sampleRate_) {
                 for (Voice &v : voices_) v.ClearFilters();
-                cutoff_ = cutoffTarget_ = values_[kFilterFreq]; // no knob glide across a switch
+                cutoff_.Snap(values_[kFilterFreq]), gain_.Snap(tables::kAmpGain[values_[kAmpGain]]); // no knob glide across a switch
                 switch_ = Switch::In;
             }
         } else if (switch_ == Switch::In && switchX_ >= 1) {
@@ -684,7 +691,8 @@ private:
     int lastVoice_ = -1; // round robin
     std::array<std::pair<uint8_t, uint8_t>, 32> noteOns_{}; // poly note ons of this sub-block (key, velocity)
     int noteOnCount_ = 0;
-    double cutoff_ = kParams[kFilterFreq].def, cutoffTarget_ = kParams[kFilterFreq].def, cutoffRate_ = 0; // knob glide
+    Glide cutoff_{double(kParams[kFilterFreq].def)}, gain_{double(tables::kAmpGain[kParams[kAmpGain].def])}; // knob glides
+    bool heard_ = false; // a voice sounded at the end of the last Render (gain glide)
     double volume_ = 1.0, volumeTarget_ = 1.0; // VolumeGain, ramped per Render
     Lfo lfo_[2];
     TempoDelay delay_;

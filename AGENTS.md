@@ -1034,8 +1034,13 @@ original AU; keeps both renders for listening).
   LINEAR sustain. Velocity: dB = -15 (sens/64)(127-vel)/126.
 - Cutoff knob GLIDE (`measure_cutoff_glide.py`, job line `pt <s> <id>
   <norm>` = timed AU param): a new cutoff value ramps LINEARLY over 50 ms
-  whatever the step (`CutoffRamp`, snaps while silent). Other knobs: gain
-  ~instant, res / pw / mix not measured cleanly yet.
+  whatever the step (`Synth::Glide`, snaps while silent). Other knobs: gain
+  ~instant, res / pw / mix not measured cleanly yet. OURS, not measured:
+  the GAIN knob glides too (linear gain, 20 ms, `kGainGlideSeconds`): a
+  mouse drag jumps several steps per UI tick (MIDI CC: one) and zippered.
+  It snaps unless a voice sounded at the end of the previous Render (a
+  patch then its first note in one block: no glide; mono notes start
+  their voice at once, before the render). Cost ~1 % (bench).
 - Filter: LP12/HP12/BP12 = Chamberlin SVF ×2 iterations (input held),
   f = 2 sin(pi fc/2fs), fc = 16.7·2^(c/12.624) (c ≤ 125), d = 1-r,
   in gain 1-0.7r. LP24 = 4 bilinear one-poles + unit-delay feedback, fc

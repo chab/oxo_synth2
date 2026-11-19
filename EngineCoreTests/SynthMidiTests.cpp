@@ -510,6 +510,38 @@ OXO_TEST(CutoffKnobGlides) {
     OXO_EXPECT_NEAR(gain[2] / gain[3], 1.0f, 0.05);
 }
 
+// The gain knob glides (linear gain) over 20 ms while a voice sounds (a mouse
+// drag jumps several steps per UI tick: zipper without it); it snaps while
+// silent.
+OXO_TEST(GainKnobGlides) {
+    const auto render = [](int gain, bool beforeNote) {
+        Synth s;
+        s.SetSampleRate(48000);
+        s.SetParam(kAmpSustain, 127);
+        if (beforeNote && gain) s.SetParam(kAmpGain, gain);
+        s.NoteOn(60, 127);
+        std::vector<float> l(4800), r(4800), out;
+        s.Render(l.data(), r.data(), 4800);
+        if (!beforeNote && gain) s.SetParam(kAmpGain, gain);
+        for (int b = 0; b < 6; ++b) { // 6 x 5 ms
+            s.Render(l.data(), r.data(), 240);
+            float e = 0;
+            for (int i = 0; i < 240; ++i) e += l[size_t(i)] * l[size_t(i)];
+            out.push_back(std::sqrt(e));
+        }
+        return out;
+    };
+    const float target = tables::kAmpGain[127] / tables::kAmpGain[kParams[kAmpGain].def];
+    const auto still = render(0, false), moved = render(127, false), early = render(127, true);
+    std::vector<float> ratio;
+    for (size_t b = 0; b < 6; ++b) ratio.push_back(moved[b] / still[b]);
+    OXO_EXPECT(ratio[0] > 1.05f && ratio[0] < target * 0.6f); // on its way
+    OXO_EXPECT(ratio[1] > ratio[0] && ratio[2] > ratio[1] && ratio[3] > ratio[2]);
+    OXO_EXPECT_NEAR(ratio[4] / target, 1.0f, 0.01); // after 20 ms: there
+    OXO_EXPECT_NEAR(ratio[5] / target, 1.0f, 0.01);
+    OXO_EXPECT_NEAR(early[0] / still[0] / target, 1.0f, 0.01); // set while silent: no glide
+}
+
 // Patch changes while keys are held (the browser keeps notes playing): the
 // mono key stack must follow every key, whatever the play mode was when it
 // went down / up, or a released key comes back as a stuck note.
