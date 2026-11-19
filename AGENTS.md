@@ -326,6 +326,14 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   ahead was 25 % SLOWER (the env's recurrence alone is latency-bound,
   free in the voice loop); per-sample checks in the loop are not free
   either (~2 % each on a moving-osc patch), keep them per case.
+  A MOVING CUTOFF keeps its table cell (`VoiceFilter::SetSvfCutoff` /
+  `SetLadder`: value + slope, re-read when the cutoff leaves the cell, At's
+  arithmetic) and, knob still, its clamped env target per chunk; an LFO on
+  pitch whose steps hold over the chunk takes the STATIC case (49ce6d1,
+  479a635, 9e81fb6: Harmony Pad 1.16x -> 1.02x, its scrub 1.37x -> 1.14x;
+  the approximate option, coefficients every N samples, was not needed).
+  `vs_synth1.py --split <patch>` = a patch's features one by one (Harmony
+  Pad: our fx 0.6x Synth1's hid voices at 1.54x).
   THE VOICE LOOP IS COMPILED PER CASE: `Voice::RenderChunk` picks
   one of 18 `RenderChunkAs<kOsc, kDetune, kFilter>` (osc static / moving
   / cross = FM, ring, sync; detune; SVF / ladder / diode), same
