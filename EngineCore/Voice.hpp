@@ -500,6 +500,69 @@ private:
         const double ringFmGain = shape2 == 2 ? 2.0 : shape2 == 4 ? 1.0 / kNoiseLevel : 1.0;
         double copyStep = NAN, copyIncA = NAN; // the osc1 steps copyInc holds (the copies' steps, recomputed when they change)
         simd::P4 copyInc[2] = {};
+        Phase64 copyIncs[kDetuneOscs] = {};
+        // (measured, sync + FM: the copies' spread in Hz stays the unmodulated
+        // one while sync's FM offset moves the pitch) every copy takes osc1's
+        // FM deviation as it is, added to its own detuned step, not scaled by
+        // its detune ratio. A step under one cycle either way converts
+        // directly (two's complement = mod 1)
+        const auto copySteps = [&](double incA, double step) {
+            if (step == copyStep && incA == copyIncA) return;
+            copyStep = step, copyIncA = incA;
+            const double deviation = step - incA;
+            if (std::fabs(step) < kFastStepLimit) {
+                for (int d = 0; d < kDetuneOscs; ++d)
+                    copyIncs[d] = Phase64(int64_t((incA * detuneRatio[d] + deviation) * copyScale)) << 1;
+            } else {
+                for (int d = 0; d < kDetuneOscs; ++d)
+                    copyIncs[d] = ToPhase64((incA * detuneRatio[d] + deviation) * copyRatio);
+            }
+            copyInc[0] = simd::Phases(copyIncs[0], copyIncs[1], copyIncs[2], copyIncs[3]);
+            copyInc[1] = simd::Phases(copyIncs[4], copyIncs[5], copyIncs[6], copyIncs[7]);
+        };
+        // Without FM (osc static / moving) the copies' sums are computed AHEAD
+        // for the chunk (CopiesRun, its own tight loop: a quarter of their cost
+        // in the voice loop, where they shared the registers and ports with
+        // everything else). FM / sync / ring (cross) need osc2 per sample:
+        // inline below. A voice ending mid-chunk replays the phases up to
+        // there (a slot's phases carry on to its next note).
+        static constexpr bool kCopiesAhead = kDetune && kOsc != kOscCross;
+        float copies1[kCopiesAhead ? kMaxChunk : 1], copiesSub[kCopiesAhead ? kMaxChunk : 1];
+        const auto copiesAhead = [&](int n, bool sums) {
+            Phase64 ph[kDetuneOscs];
+            std::copy_n(copyPhase_.data(), kDetuneOscs, ph);
+            uint32_t widthPts[kMaxChunk];
+            if (sums && shape1 == 2) {
+                if constexpr (kOsc == kOscStatic) std::fill_n(widthPts, n, curWidthPoints);
+                else
+                    for (int i = 0; i < n; ++i) widthPts[i] = CopyWidth(widths[i]);
+            }
+            for (int i = 0; i < n;) {
+                // a run of samples on one osc1 step
+                const double incA = kOsc == kOscStatic ? staticIncA : incAs[i];
+                int end = i + 1;
+                if constexpr (kOsc != kOscStatic)
+                    while (end < n && incAs[end] == incA) ++end;
+                else end = n;
+                copySteps(incA, incA); // (no FM: osc1's step incA x 1.0)
+                if (!sums) CopiesRun<false, false, false>(end - i, ph, copyIncs, 0, nullptr, nullptr, nullptr, nullptr, nullptr);
+                else if (shape1 == 2) {
+                    if (subOn) CopiesRun<true, true, true>(end - i, ph, copyIncs, copyShift, copy1, copySub, widthPts + i, copies1 + i, copiesSub + i);
+                    else CopiesRun<true, true, false>(end - i, ph, copyIncs, copyShift, copy1, copySub, widthPts + i, copies1 + i, copiesSub + i);
+                } else {
+                    if (subOn) CopiesRun<true, false, true>(end - i, ph, copyIncs, copyShift, copy1, copySub, nullptr, copies1 + i, copiesSub + i);
+                    else CopiesRun<true, false, false>(end - i, ph, copyIncs, copyShift, copy1, copySub, nullptr, copies1 + i, copiesSub + i);
+                }
+                i = end;
+            }
+            std::array<Phase64, kDetuneOscs> end;
+            std::copy_n(ph, kDetuneOscs, end.begin());
+            return end;
+        };
+        std::array<Phase64, kDetuneOscs> copyEnd{};
+        if constexpr (kCopiesAhead) copyEnd = copiesAhead(frames, true);
+        // the copies' phases stay in registers over the chunk (stored back below)
+        simd::P4 copyPh[2] = {simd::LoadPhases(copyPhase_.data()), simd::LoadPhases(copyPhase_.data() + 4)};
         for (int i = 0; i < frames; ++i) {
             double incA = staticIncA, incB = staticIncB, w = staticWidth;
             if constexpr (kOsc != kOscStatic) {
@@ -534,32 +597,19 @@ private:
             double o1 = OscRead(shape1, saw1, tri1, osc1Phase_, curWidth);
             double sub = subOn ? OscRead(subAs1, sawSub, triSub, subPhase_, 0.5) : 0.0;
             if (detuneOn) {
-                const Phase64 *const ph = copyPhase_.data();
-                const double acc = o1 + (shape1 == 2 ? 0.5f * (CopiesSum(copy1, ph, copyShift, 0) - CopiesSum(copy1, ph, copyShift, curWidthPoints))
-                                                     : CopiesSum(copy1, ph, copyShift, 0));
-                const double subAcc = subOn ? sub + CopiesSum(copySub, ph, 0, 0) : sub;
-                // (measured, sync + FM: the copies' spread in Hz stays the
-                // unmodulated one while sync's FM offset moves the pitch) every
-                // copy takes osc1's FM deviation as it is, added to its own
-                // detuned step, not scaled by its detune ratio.
-                // A step under one cycle either way converts directly (two's
-                // complement = mod 1)
-                if (const double step = incA * fm; step != copyStep || incA != copyIncA) {
-                    copyStep = step, copyIncA = incA;
-                    const double deviation = step - incA;
-                    Phase64 inc[kDetuneOscs];
-                    if (std::fabs(step) < kFastStepLimit) {
-                        for (int d = 0; d < kDetuneOscs; ++d)
-                            inc[d] = Phase64(int64_t((incA * detuneRatio[d] + deviation) * copyScale)) << 1;
-                    } else {
-                        for (int d = 0; d < kDetuneOscs; ++d)
-                            inc[d] = ToPhase64((incA * detuneRatio[d] + deviation) * copyRatio);
-                    }
-                    copyInc[0] = simd::Phases(inc[0], inc[1], inc[2], inc[3]);
-                    copyInc[1] = simd::Phases(inc[4], inc[5], inc[6], inc[7]);
+                double acc, subAcc;
+                if constexpr (kCopiesAhead) {
+                    acc = o1 + copies1[i], subAcc = subOn ? sub + copiesSub[i] : sub;
+                } else {
+                    uint32_t idx[kDetuneOscs], idxSub[kDetuneOscs];
+                    CopyIndices(copyPh, copyShift, idx);
+                    acc = o1 + (shape1 == 2 ? 0.5f * (CopiesSum(copy1, idx, 0) - CopiesSum(copy1, idx, curWidthPoints))
+                                            : CopiesSum(copy1, idx, 0));
+                    if (subOn) CopyIndices(copyPh, 0, idxSub);
+                    subAcc = subOn ? sub + CopiesSum(copySub, idxSub, 0) : sub;
+                    copySteps(incA, incA * fm);
+                    copyPh[0] = copyPh[0] + copyInc[0], copyPh[1] = copyPh[1] + copyInc[1];
                 }
-                simd::StorePhases(copyPhase_.data(), simd::LoadPhases(copyPhase_.data()) + copyInc[0]);
-                simd::StorePhases(copyPhase_.data() + 4, simd::LoadPhases(copyPhase_.data() + 4) + copyInc[1]);
                 o1 = acc * detuneGain;
                 // (measured, measure_ring_detune.py) ring on: the sub copies
                 // skip the copy gain (~+10 dB). The original bounds that loud
@@ -619,6 +669,7 @@ private:
             right[i] += float(y * panR);
             if (!amp_.Active() && (((pos + i + 1) & 255) == 0 || pos + i + 1 >= blockEnd)) {
                 tail_ = false;
+                if constexpr (kCopiesAhead) copyEnd = copiesAhead(i + 1, false);
                 // the voice ends here: the mod env stops with it (it ran ahead)
                 if constexpr (kOsc != kOscStatic) {
                     if (modOn) {
@@ -630,6 +681,8 @@ private:
             }
             tail_ = !amp_.Active();
         }
+        if constexpr (kCopiesAhead) copyPhase_ = copyEnd;
+        else if (detuneOn) simd::StorePhases(copyPhase_.data(), copyPh[0]), simd::StorePhases(copyPhase_.data() + 4, copyPh[1]);
     }
 
     // (measured: a locked synced-noise DC through the amp env, whole
@@ -675,13 +728,48 @@ private:
         default: return tri.Read(ph);
         }
     }
-    // the 8 detune copies' sum: the table's points at the phases ph << shift,
-    // truncated (no interpolation, see WaveTableSet::CopyTable), `offset`
-    // points further (a pulse's second saw)
-    static OXO_INLINE float CopiesSum(const float *table, const Phase64 *ph, int shift, uint32_t offset) {
+    // n samples of the copies on fixed steps (CopiesSum's arithmetic, bit for
+    // bit): osc1's sums (a pulse: two points, widthPts apart) and the sub's;
+    // kSums false = the phases only
+    template <bool kSums, bool kPulse, bool kSub>
+    static void CopiesRun(int n, Phase64 ph[kDetuneOscs], const Phase64 inc[kDetuneOscs], int shift, const float *t1,
+                          const float *tSub, const uint32_t *widthPts, float *out1, float *outSub) {
+        constexpr int kTop = 64 - WaveTableSet::kCopyBits;
+        constexpr uint32_t kMask = WaveTableSet::kCopyPoints - 1;
+        Phase64 p[kDetuneOscs];
+        for (int d = 0; d < kDetuneOscs; ++d) p[d] = ph[d];
+        for (int i = 0; i < n; ++i) {
+            if constexpr (kSums) {
+                uint32_t idx[kDetuneOscs];
+                float v[kDetuneOscs];
+                for (int d = 0; d < kDetuneOscs; ++d) idx[d] = uint32_t((p[d] << shift) >> kTop), v[d] = t1[idx[d]];
+                const float a = ((v[0] + v[1]) + (v[2] + v[3])) + ((v[4] + v[5]) + (v[6] + v[7]));
+                if constexpr (kPulse) {
+                    const uint32_t w = widthPts[i];
+                    for (int d = 0; d < kDetuneOscs; ++d) v[d] = t1[(idx[d] + w) & kMask];
+                    out1[i] = 0.5f * (a - (((v[0] + v[1]) + (v[2] + v[3])) + ((v[4] + v[5]) + (v[6] + v[7]))));
+                } else {
+                    out1[i] = a;
+                }
+                if constexpr (kSub) {
+                    for (int d = 0; d < kDetuneOscs; ++d) v[d] = tSub[uint32_t(p[d] >> kTop)];
+                    outSub[i] = ((v[0] + v[1]) + (v[2] + v[3])) + ((v[4] + v[5]) + (v[6] + v[7]));
+                }
+            }
+            for (int d = 0; d < kDetuneOscs; ++d) p[d] += inc[d];
+        }
+        for (int d = 0; d < kDetuneOscs; ++d) ph[d] = p[d];
+    }
+    // the 8 detune copies' sum: the table's points at their phases' top bits
+    // (CopyIndices: of the phases << shift), truncated (no interpolation, see
+    // WaveTableSet::CopyTable), `offset` points further (a pulse's second saw)
+    static OXO_INLINE void CopyIndices(const simd::P4 ph[2], int shift, uint32_t idx[kDetuneOscs]) {
+        simd::TopBits<WaveTableSet::kCopyBits>(ph[0], shift, idx);
+        simd::TopBits<WaveTableSet::kCopyBits>(ph[1], shift, idx + 4);
+    }
+    static OXO_INLINE float CopiesSum(const float *table, const uint32_t idx[kDetuneOscs], uint32_t offset) {
         float v[kDetuneOscs];
-        for (int d = 0; d < kDetuneOscs; ++d)
-            v[d] = table[(uint32_t((ph[d] << shift) >> (64 - WaveTableSet::kCopyBits)) + offset) & (WaveTableSet::kCopyPoints - 1)];
+        for (int d = 0; d < kDetuneOscs; ++d) v[d] = table[(idx[d] + offset) & (WaveTableSet::kCopyPoints - 1)];
         return ((v[0] + v[1]) + (v[2] + v[3])) + ((v[4] + v[5]) + (v[6] + v[7]));
     }
     // a pulse width in whole table points: (measured) the copies' pulse is

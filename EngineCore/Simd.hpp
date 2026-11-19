@@ -3,7 +3,8 @@
 // Four 64-bit oscillator phases (fractions of a cycle, WaveTables.hpp
 // Phase64) in two registers: SSE2 (every x86-64), NEON (every arm64), plain
 // C++ elsewhere (OXO_SIMD_SCALAR forces it). The detune copies' phases step
-// through it: Phases (from four values), Load / StorePhases, +. clang builds
+// through it: Phases (from four values), Load / StorePhases, +, TopBits
+// (their table indices). clang builds
 // the same code from scalar source on its own, MSVC does not.
 
 #include <cstdint>
@@ -44,6 +45,13 @@ inline P4 Phases(uint64_t a, uint64_t b, uint64_t c, uint64_t d) {
     return {_mm_set_epi64x(int64_t(b), int64_t(a)), _mm_set_epi64x(int64_t(d), int64_t(c))};
 }
 inline P4 operator+(P4 x, P4 y) { return {_mm_add_epi64(x.a, y.a), _mm_add_epi64(x.b, y.b)}; }
+// the top kBits (<= 16) of each phase << shift (0 / 1)
+template <int kBits> OXO_INLINE void TopBits(P4 x, int shift, uint32_t out[4]) {
+    const __m128i n = _mm_cvtsi32_si128(shift);
+    const __m128i a = _mm_srli_epi64(_mm_sll_epi64(x.a, n), 64 - kBits), b = _mm_srli_epi64(_mm_sll_epi64(x.b, n), 64 - kBits);
+    out[0] = uint32_t(_mm_cvtsi128_si32(a)), out[1] = uint32_t(_mm_extract_epi16(a, 4));
+    out[2] = uint32_t(_mm_cvtsi128_si32(b)), out[3] = uint32_t(_mm_extract_epi16(b, 4));
+}
 
 #elif OXO_SIMD_NEON
 
@@ -59,6 +67,12 @@ inline P4 Phases(uint64_t a, uint64_t b, uint64_t c, uint64_t d) {
     return {vcombine_u64(vcreate_u64(a), vcreate_u64(b)), vcombine_u64(vcreate_u64(c), vcreate_u64(d))};
 }
 inline P4 operator+(P4 x, P4 y) { return {vaddq_u64(x.a, y.a), vaddq_u64(x.b, y.b)}; }
+template <int kBits> OXO_INLINE void TopBits(P4 x, int shift, uint32_t out[4]) {
+    const int64x2_t n = vdupq_n_s64(shift);
+    const uint64x2_t a = vshrq_n_u64(vshlq_u64(x.a, n), 64 - kBits), b = vshrq_n_u64(vshlq_u64(x.b, n), 64 - kBits);
+    out[0] = uint32_t(vgetq_lane_u64(a, 0)), out[1] = uint32_t(vgetq_lane_u64(a, 1));
+    out[2] = uint32_t(vgetq_lane_u64(b, 0)), out[3] = uint32_t(vgetq_lane_u64(b, 1));
+}
 
 #else
 
@@ -71,6 +85,9 @@ inline void StorePhases(uint64_t *p, P4 x) {
 }
 inline P4 Phases(uint64_t a, uint64_t b, uint64_t c, uint64_t d) { return {{a, b, c, d}}; }
 inline P4 operator+(P4 x, P4 y) { return {{x.v[0] + y.v[0], x.v[1] + y.v[1], x.v[2] + y.v[2], x.v[3] + y.v[3]}}; }
+template <int kBits> OXO_INLINE void TopBits(P4 x, int shift, uint32_t out[4]) {
+    for (int k = 0; k < 4; ++k) out[k] = uint32_t((x.v[k] << shift) >> (64 - kBits));
+}
 
 #endif
 
