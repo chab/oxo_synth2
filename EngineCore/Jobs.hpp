@@ -6,6 +6,7 @@
 #include "Synth.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <sstream>
@@ -98,8 +99,10 @@ inline void Dispatch(Synth &synth, const JobEvent &e) {
 
 // Renders like s1ref: fresh engine, natives applied, silent pre-roll dropped,
 // events at exact sample offsets (notes on the original's 16-sample grid,
-// NoteEventOffset), fixed 512-frame blocks.
-inline void RenderJob(const Job &job, std::vector<float> &left, std::vector<float> &right) {
+// NoteEventOffset), fixed 512-frame blocks. renderSeconds: the time spent
+// after the pre-roll (what s1ref's S1REF_TIME measures).
+inline void RenderJob(const Job &job, std::vector<float> &left, std::vector<float> &right,
+                      double *renderSeconds = nullptr) {
     constexpr int kBlock = 512;
     Synth synth;
     synth.SetSampleRate(job.sampleRate);
@@ -124,6 +127,7 @@ inline void RenderJob(const Job &job, std::vector<float> &left, std::vector<floa
     left.assign(total, 0.0f);
     right.assign(total, 0.0f);
     size_t pos = 0, ev = 0;
+    const auto t0 = std::chrono::steady_clock::now();
     while (pos < total) {
         const size_t block = pos, end = std::min(total, pos + kBlock);
         synth.BeginBlock(int(end - block));
@@ -146,6 +150,7 @@ inline void RenderJob(const Job &job, std::vector<float> &left, std::vector<floa
         samplePos += double(end - pos);
         pos = end;
     }
+    if (renderSeconds) *renderSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 }
 
 inline bool WriteWavFloat(const std::string &path, const std::vector<float> &l, const std::vector<float> &r,
