@@ -140,8 +140,13 @@ public:
 
     // LP12 / HP12 / BP12 (type 0 / 2 / 3)
     OXO_INLINE void SetSvf(int type, double cutoffKnob, int res) {
+        SetSvfRes(type, res);
+        SetSvfCutoff(cutoffKnob);
+    }
+    // the same in two steps (the voice sets type / res once per chunk)
+    OXO_INLINE void SetSvfCutoff(double cutoffKnob) { svfF_ = FilterTables::At(svfTable_, cutoffKnob); }
+    OXO_INLINE void SetSvfRes(int type, int res) {
         type_ = type;
-        svfF_ = FilterTables::At(svfTable_, cutoffKnob);
         if (res != svfRes_) {
             const double r = res / 127.0;
             svfRes_ = res;

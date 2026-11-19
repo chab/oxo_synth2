@@ -498,6 +498,10 @@ private:
         // offset is above 0 (9.2 taus into the decay)
         const bool ringFmSource = p[kOsc1FM] > 0 || r[6] || (modOn && modDest == 1 && p[kModEnvAmount] >= 67);
         const double ringFmGain = shape2 == 2 ? 2.0 : shape2 == 4 ? 1.0 / kNoiseLevel : 1.0;
+        // osc2 silenced by the mix (osc mix 0) is not read: without FM / ring /
+        // sync that is its only use (its phase and the noise run on). Static
+        // oscillators only: the check per sample cost the moving ones ~2 %.
+        const bool osc2On = kOsc != kOscStatic || mixB != 0 || shape2 == 4;
         double copyStep = NAN, copyIncA = NAN; // the osc1 steps copyInc holds (the copies' steps, recomputed when they change)
         simd::P4 copyInc[2] = {};
         Phase64 copyIncs[kDetuneOscs] = {};
@@ -563,6 +567,25 @@ private:
         if constexpr (kCopiesAhead) copyEnd = copiesAhead(frames, true);
         // the copies' phases stay in registers over the chunk (stored back below)
         simd::P4 copyPh[2] = {simd::LoadPhases(copyPhase_.data()), simd::LoadPhases(copyPhase_.data() + 4)};
+        // the cutoff (knob units) at sample i for the filter env's value env
+        const auto cutoffAt = [&](int i, double env) {
+            const double base = cutoffBase + cutoffStep * i, low = base - 2.1;
+            double cutoff = low + (std::clamp(base + envDepth, -2.0, 125.0) - low) * env;
+            if (r[3]) cutoff += std::max(0.0, 125.0 - cutoff) * std::min(1.0, r[3].Unipolar(i)); // tops out (measured)
+            return cutoff;
+        };
+        const auto setCutoff = [&](double cutoff) {
+            if constexpr (kFilter == VoiceFilter::kSvf) filter_.SetSvfCutoff(cutoff);
+            else if constexpr (kFilter == VoiceFilter::kLadder) filter_.SetLadder(cutoff, filterRes);
+            else filter_.SetDiode(cutoff, filterRes);
+        };
+        if constexpr (kFilter == VoiceFilter::kSvf) filter_.SetSvfRes(filterType, filterRes);
+        // A HELD cutoff (filter env holding its sustain, no LFO on it, knob
+        // not moving: a held note) is the same every sample: its coefficients
+        // once per chunk (bit for bit the per-sample ones). Per sample they
+        // were ~25 % of a simple voice.
+        const bool cutoffHeld = cutoffStep == 0 && !r[3] && filterEnv_.Holding();
+        if (cutoffHeld) setCutoff(cutoffAt(0, filterEnv_.Level()));
         for (int i = 0; i < frames; ++i) {
             double incA = staticIncA, incB = staticIncB, w = staticWidth;
             if constexpr (kOsc != kOscStatic) {
@@ -572,7 +595,7 @@ private:
             }
             // ---- osc2 ----
             double o2 = 0;
-            switch (shape2) {
+            if (osc2On) switch (shape2) {
             case 1: o2 = saw2.Read(osc2Phase_); break;
             case 2: o2 = 0.5 * (saw2.Read(osc2Phase_) - saw2.Read(WrapNext(osc2Phase_ + w))); break;
             case 3: o2 = tri2.Read(osc2Phase_); break;
@@ -645,20 +668,11 @@ private:
 
             const double mixed = mixA * osc1Out + mixB * o2;
             // ---- filter -> saturation -> amp (measured order) ----
-            const double base = cutoffBase + cutoffStep * i, low = base - 2.1;
-            double cutoff = low + (std::clamp(base + envDepth, -2.0, 125.0) - low) * filterEnv_.Next();
-            if (r[3]) cutoff += std::max(0.0, 125.0 - cutoff) * std::min(1.0, r[3].Unipolar(i)); // tops out (measured)
+            if (!cutoffHeld) setCutoff(cutoffAt(i, filterEnv_.Next()));
             double filterOut;
-            if constexpr (kFilter == VoiceFilter::kSvf) {
-                filter_.SetSvf(filterType, cutoff, filterRes);
-                filterOut = filter_.ProcessSvf(mixed);
-            } else if constexpr (kFilter == VoiceFilter::kLadder) {
-                filter_.SetLadder(cutoff, filterRes);
-                filterOut = filter_.ProcessLadder(mixed);
-            } else {
-                filter_.SetDiode(cutoff, filterRes);
-                filterOut = filter_.ProcessDiode(mixed);
-            }
+            if constexpr (kFilter == VoiceFilter::kSvf) filterOut = filter_.ProcessSvf(mixed);
+            else if constexpr (kFilter == VoiceFilter::kLadder) filterOut = filter_.ProcessLadder(mixed);
+            else filterOut = filter_.ProcessDiode(mixed);
             const double filtered = Saturate(filterOut, satA);
             const double env = AmpGain(amp_.Next(), pos + i, blockEnd);
             double gainMod = 1.0;
