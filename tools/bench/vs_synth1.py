@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Synth2 vs the original Synth1: CPU per scenario, same jobs, same session.
 
-  tools/bench/vs_synth1.py [--features] [--runs N] [--only substr] [--no-s1]
+  tools/bench/vs_synth1.py [--features | --split patch.sy1] [--runs N] [--only substr] [--no-s1]
                            [--also LABEL=bench_binary]...
 
 Both run as x86_64 under Rosetta (Synth1 = build/s1ref/s1ref, ours =
@@ -10,7 +10,8 @@ median kept; ours also native arm64 (build/vs_synth1/bench-arm64). Builds the
 benches and s1ref first. Prints % of one core per scenario (render only:
 s1ref's S1REF_TIME, our RenderJob's renderSeconds) and the cost per voice
 over idle. --features: INIT with 16 held voices, one change at a time
-(what each feature costs on each side). --also: other x86_64 builds of
+(what each feature costs on each side). --split: a patch, 4 held keys,
+one feature taken out at a time. --also: other x86_64 builds of
 tools/bench (e.g. before a change), alternated too, as extra columns. Rosetta is a proxy for a PC (AGENTS.md "VS THE ORIGINAL").
 """
 import os
@@ -91,6 +92,25 @@ FEATURES = [
 ]
 
 
+# --split <patch.sy1>: the patch, 4 held keys, one feature taken out at a time
+SPLIT = [
+    ('effects off (EQ stays)', {77: 0, 65: 0, 66: 0}), ('EQ flat', {60: 64, 61: 64, 62: 64, 63: 64}),
+    ('all fx off + EQ flat', {77: 0, 65: 0, 66: 0, 60: 64, 61: 64, 62: 64, 63: 64}),
+    ('LFO1 off', {57: 0}), ('LFO2 off', {58: 0}), ('LFOs off', {57: 0, 58: 0}),
+    ('unison off', {73: 0}), ('sub off', {95: 0}), ('detune 0', {76: 0}),
+    ('osc mix 0', {5: 0}), ('osc mix 127', {5: 127}), ('osc1 saw', {0: 1}),
+    ('LP12', {14: 0}), ('res 0', {20: 0}), ('filter env A0 D0', {15: 0, 16: 0}),
+    ('filter vel switch off', {24: 0}), ('amp attack 0', {25: 0}), ('amp vel sens 0', {30: 0}),
+    ('voice simple: LFOs, sub off, LP12, env A0 D0', {57: 0, 58: 0, 95: 0, 14: 0, 15: 0, 16: 0}),
+]
+
+
+def split(path):
+    base = sy1(path)
+    keys = held(CHORD4)
+    return [(os.path.basename(path), base, None, keys)] + [(n, {**base, **ch}, None, keys) for n, ch in SPLIT]
+
+
 def features():
     init = sy1(INIT)
     keys = held(KEYS16)
@@ -131,9 +151,11 @@ def main():
     only = args[args.index('--only') + 1] if '--only' in args else ''
     s1 = '--no-s1' not in args
     feat = '--features' in args
+    split_patch = args[args.index('--split') + 1] if '--split' in args else None
     also = [args[i + 1].split('=', 1) for i, a in enumerate(args) if a == '--also']
     build()
-    scens = [s for s in (features() if feat else scenarios()) if only.lower() in s[0].lower()]
+    scens = [s for s in (split(split_patch) if split_patch else features() if feat else scenarios())
+             if only.lower() in s[0].lower()]
     jobs = os.path.join(OUT, 'vs_synth1_jobs.txt')
     write_jobs(jobs, scens)
     t = {k: [[] for _ in scens] for k in ['s1', 'x64', 'arm'] + [label for label, _ in also]}
@@ -164,6 +186,13 @@ def main():
             return f' {best(k, i):6.3f} ({med(k, i):6.3f}) {ratio:6.2f}'
         print(f'{name:26} {best("s1", i):6.3f} ({med("s1", i):6.3f})' + ''.join(col(label) for label, _ in also) +
               col('x64') + f' {best("arm", i):6.3f} ({med("arm", i):6.3f})')
+    if split_patch:
+        print('change vs the patch (% of one core; gap = what the change removes from Synth2 minus from Synth1)')
+        print(f'{"change":44} {"Synth1":>8} {"Synth2":>8} {"gap":>8} {"arm64":>8}')
+        d = {k: [best(k, i) - best(k, 0) for i in range(len(scens))] for k in ('s1', 'x64', 'arm')}
+        for i, (name, *_r) in enumerate(scens[1:], 1):
+            print(f'{name:44} {d["s1"][i]:8.3f} {d["x64"][i]:8.3f} {d["x64"][i] - d["s1"][i]:8.3f} {d["arm"][i]:8.3f}')
+        return
     if feat:
         print('per voice, change vs INIT (% of one core / voice; Synth2 - Synth1 = what the change adds to the gap)')
         print(f'{"change":26} {"Synth1":>8} {"Synth2":>8} {"gap":>8} {"arm64":>8}')
