@@ -238,6 +238,23 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO
   build` (0 warnings in our code; `CLANG_WARN_COMMA = NO` — the engine's
   compact comma style). Then `tools/au_harness`.
+- ENGINE BUILD FLAGS = THE BENCH'S, ON EVERY PRODUCT: `-O2` (MSVC /
+  clang-cl `/O2`), IEEE math (no fast-math: the engine uses NaN as a "not
+  computed" mark), the flags `tools/bench` and `tools/regress` use, so
+  what we measure and check is what ships. Where each comes from: iPad =
+  project-level Release `GCC_OPTIMIZATION_LEVEL = 2` (Xcode's default is
+  `-Os`); mac VST3 / AUv2 = `OxoSynth2VST3/CMakeLists.txt` (the Xcode
+  generator gave our target `-O1`, from Swift's `-O`, and the SDK adds
+  `-ffast-math -ffp-contract=fast`: both overridden); Windows = CMake
+  Release `/O2` + our `/fp:precise` after the SDK's `/fp:fast`; Linux =
+  `-O2 -fno-fast-math` on the target. Check after a toolchain / CMake /
+  project change: the `-O` in the compile's `*-common-args.resp` (Xcode)
+  or `xcodebuild -showBuildSettings`. Found 2026-11-20 (1.1.6 and this
+  branch until then had them): chords load (M4, % of one core) `-O2`
+  2.46, `-Os` 4.57, `-O1` fast-math 4.47; `-Os` also made the branch's
+  optimizations SLOWER than 1.1.6 (3.71): the per-case / ahead loops need
+  `-O2`. `-O3` = `-O2`; fast-math gains nothing and moves chaotic
+  patches up to -45 dBFS (regress).
 - `make -C EngineCoreTests test`, `make -C tools/s2render`, CPU bench
   `clang++ -std=c++20 -O2 tools/bench/main.cpp -o build/bench && ./build/bench`
   (16 voices, one core, Apple M4: LP12 x135, LP24 x109, LPDL x35,

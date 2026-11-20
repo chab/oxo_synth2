@@ -53,9 +53,12 @@ add_subdirectory(${vst3sdk_SOURCE_DIR} ${PROJECT_BINARY_DIR}/vst3sdk)
 smtg_enable_vst3_sdk()
 
 # The SDK adds bare compile options (-Werror=return-type etc.) at directory
-# scope; scope them to C-family languages so they don't reach swiftc.
+# scope; scope them to C-family languages so they don't reach swiftc. Its
+# -ffast-math -ffp-contract=fast are dropped: the engine is built like on
+# every platform (-O2, IEEE math; it uses NaN as a "not computed" mark).
 get_directory_property(OXO_SDK_COMPILE_OPTIONS COMPILE_OPTIONS)
 set_directory_properties(PROPERTIES COMPILE_OPTIONS "")
+list(REMOVE_ITEM OXO_SDK_COMPILE_OPTIONS -ffast-math -ffp-contract=fast)
 foreach(OXO_OPT IN LISTS OXO_SDK_COMPILE_OPTIONS)
     add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:${OXO_OPT}>")
 endforeach()
@@ -112,7 +115,11 @@ target_link_libraries(OxoSynth2VST3 PRIVATE sdk OxoSynth2Editor z
     "-framework UniformTypeIdentifiers"
 )
 # Swift runtime search paths for linking the Swift static lib into the C++ module.
+# Release -O2: CMake's Xcode generator gives this target (it links Swift)
+# GCC_OPTIMIZATION_LEVEL 1, from Swift's -O (the engine at
+# -O1 cost ~1.8x the CPU of -O2).
 set_target_properties(OxoSynth2VST3 PROPERTIES
+    "XCODE_ATTRIBUTE_GCC_OPTIMIZATION_LEVEL[variant=Release]" 2
     XCODE_ATTRIBUTE_LIBRARY_SEARCH_PATHS "$(TOOLCHAIN_DIR)/usr/lib/swift/macosx /usr/lib/swift $(inherited)"
     XCODE_ATTRIBUTE_ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES "NO"
 )
