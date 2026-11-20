@@ -109,6 +109,12 @@ struct PatchBankInfo: Decodable, Identifiable, Equatable {
         readOnly = try c.decodeIfPresent(Bool.self, forKey: .readOnly) ?? false
     }
     var count: Int { slots.filter { !$0.isEmpty }.count }
+    /// Its own folder's name ("Sets / A" -> "A", PatchLibrary.hpp's
+    /// BankLeafName): what the browser lists.
+    var leafName: String {
+        guard let r = name.range(of: " / ", options: .backwards) else { return name }
+        return String(name[r.upperBound...])
+    }
 }
 
 private struct LibraryInfo: Decodable {

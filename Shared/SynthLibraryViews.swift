@@ -361,10 +361,11 @@ struct PatchBrowserView: View {
         .background(theme.lcdBottom)
     }
 
-    private func bankLabel(_ label: String, count: String, selected: Bool) -> some View {
+    /// `tip`: the full name when `label` shows less (a nested bank's own name).
+    private func bankLabel(_ label: String, tip: String? = nil, count: String, selected: Bool) -> some View {
         HStack(spacing: 4) {
             Text(label).lineLimit(1)
-                .oxoTruncationTooltip(label, size: 11, monospaced: true, optional: false)
+                .oxoTruncationTooltip(tip ?? label, shown: label, size: 11, monospaced: true, optional: false)
             Spacer(minLength: 2)
             Text(count).opacity(0.6)
         }
@@ -390,7 +391,8 @@ struct PatchBrowserView: View {
         let info = model.banks[b]
         let selected = !newUserBank && b == model.currentBank
         let locked = model.writing && info.readOnly // the write dialog can't pick it
-        return bankLabel(String(format: "%02d:", b) + info.name, count: "\(info.count)", selected: selected)
+        let number = String(format: "%02d:", b)
+        return bankLabel(number + info.leafName, tip: number + info.name, count: "\(info.count)", selected: selected)
         .overlay(Rectangle().strokeBorder(theme.displayText, lineWidth: dropBank == b ? 1.5 : 0))
         .opacity(locked ? 0.35 : 1)
         .contentShape(Rectangle())

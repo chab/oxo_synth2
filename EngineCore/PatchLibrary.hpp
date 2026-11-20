@@ -221,6 +221,15 @@ inline constexpr const char *kFactoryBankName = "Synth2 Factory";
 // proposes to save a patch out of a read-only bank (created by that write
 // when the user deleted it). Swift mirror: SynthModel.userBankName.
 inline constexpr const char *kUserBankName = "User";
+// A sub-folder bank's name = its folders from the root joined by this
+// ("Sets / A"); folder names never hold a '/'. Swift mirror:
+// PatchBankInfo.leafName.
+inline constexpr const char *kBankPathSeparator = " / ";
+// The bank's own folder name ("Sets / A" -> "A"): what the browser lists.
+inline std::string BankLeafName(const std::string &name) {
+    const size_t at = name.rfind(kBankPathSeparator);
+    return at == std::string::npos ? name : name.substr(at + std::char_traits<char>::length(kBankPathSeparator));
+}
 // Its LibraryProgram::bank (sessions): not a path, so it survives the
 // bundle moving. ':' can't come from Finder in a folder name.
 inline constexpr const char *kFactoryProgramBank = ":factory";
@@ -452,7 +461,7 @@ private:
                 hasDir |= c.is_directory(ec);
             }
             if (hasSy1 || !hasDir) AddFolderBank(e.path(), prefix + fn, children);
-            if (hasDir) ScanEntries(e.path(), children, prefix + fn + " / ", false);
+            if (hasDir) ScanEntries(e.path(), children, prefix + fn + kBankPathSeparator, false);
         }
     }
 

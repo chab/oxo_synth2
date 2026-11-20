@@ -105,6 +105,7 @@ public:
         std::unique_ptr<GraphicsPath> path; // at the origin; null = nothing fits
         RectF ink;                          // its ink bounds
         float refY = 0, refH = 0;           // the line's reference ink ("Agjpqy")
+        bool cut = false;                   // ellipsized to fit
     };
     TextCache() : segoe_(L"Segoe UI"), consolas_(L"Consolas") {
         format_.SetFormatFlags(StringFormatFlagsNoWrap | StringFormatFlagsNoClip);
@@ -149,6 +150,7 @@ private:
                 shortened.pop_back();
             path->Reset();
             if(!make(shortened+ellipsis,size,mono,*path,shape.ink)) return shape;
+            shape.cut=true;
         }
         GraphicsPath reference;
         RectF metrics{};
@@ -164,6 +166,11 @@ private:
 };
 
 namespace {
+// Font size is chosen by the control, NEVER reduced to fit the string.
+float textFontSize(float size) { return size<13.f ? std::max(10.8f,size*1.08f) : size; }
+// The browser's bank names (drawBrowser, the tooltip's cut test).
+constexpr float kBankNameW=116.f, kBankNameSize=10.5f;
+constexpr float kTipTextSize=10.f, kTipPad=6.f, kTipH=17.f, kTipMargin=4.f;
 Color blend(const Color& background, const Color& foreground, float amount) {
     amount=std::clamp(amount,0.f,1.f);
     auto part=[&](BYTE back, BYTE front) {
@@ -609,9 +616,7 @@ bool DesktopEditor::pickTheme(int command,const std::vector<themes::Palette>& pi
 void DesktopEditor::text(Graphics& g,const std::wstring& s,float x,float y,float w,float h,float size,
                          Color c,bool,bool centred,bool mono) {
     if(s.empty() || w<=2.f || h<=1.f || !textCache_ || !visible(RectF(x,y,w,h))) return;
-    // Font size is chosen by the control, NEVER reduced to fit the string.
-    const float fontSize=size<13.f ? std::max(10.8f,size*1.08f) : size;
-    const auto& shape=textCache_->get(s,fontSize,w-2.f,mono);
+    const auto& shape=textCache_->get(s,textFontSize(size),w-2.f,mono);
     if(!shape.path) return;
     const float left=centred ? x+(w-shape.ink.Width)*.5f : x+1.f;
     const float top=y+(h-shape.refH)*.5f;
@@ -1179,6 +1184,7 @@ void DesktopEditor::drawDynamic(Graphics& g) {
         g.FillPath(&face,&box);
         text(g,press_.label,r.X+3,r.Y,r.Width-6,r.Height,10.2f,rgb(kLcdText),false,false,true);
     }
+    drawBankTip(g);
 }
 
 void DesktopEditor::refreshBanks() {
@@ -1216,7 +1222,11 @@ void DesktopEditor::refreshBanks() {
         banks_[size_t(selectedBank_)].source : std::string();
     libraryRoot_=std::move(libraryRoot);
     banks_=std::move(scanned);
-    for(auto& b:banks_) b.wideName=toWide(b.name.c_str()); // once per refresh, not per painted row
+    for(auto& b:banks_) { // once per refresh, not per painted row
+        b.wideName=toWide(b.name.c_str());
+        b.leaf=toWide(s2::BankLeafName(b.name).c_str());
+    }
+    resetBankTip(); // its bank index may be another bank now
     if(!previousSelection.empty()) {
         selectedBank_=bankBySource(previousSelection);
         if(selectedBank_<0) selectedSlot_=-1;
@@ -1317,6 +1327,7 @@ void DesktopEditor::openBrowser(bool writing) {
 }
 void DesktopEditor::closeBrowser() {
     browser_=writing_=false;
+    resetBankTip();
     if(selectedBank_==kNewUserBank) selectedBank_=-1; // the next refresh selects the loaded bank
     releaseKeyFocus(); // before the name field goes
     updateEditControl();
@@ -1346,6 +1357,7 @@ int DesktopEditor::slotAt(float x,float y) const {
 // Explorer [/ Delete]; nothing on read-only banks' deletes, nothing on
 // banks the write dialog cannot pick. Elsewhere in the browser: no menu.
 bool DesktopEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
+    dismissBankTip();
     if(!browser_ || !kBrowserRect.Contains(x,y)) return false;
     enum {kExport=1,kReveal,kDeleteBank,kDelete};
     // What the menu acts on, taken NOW: the menu and the message boxes
@@ -1497,8 +1509,8 @@ void DesktopEditor::drawBrowser(Graphics& g) {
         // the bank to be made has no number yet
         text(g,isNewUser?L"--:":prefix,12,ry,27,18,10.5f,
              bi==selectedBank_?selectedNumberInk:numberInk,false,false,true);
-        text(g,isNewUser?toWide(s2::kUserBankName):toWide(banks_[size_t(bi)].name.c_str()),
-             39,ry,116,18,10.5f,bankText,false,false,true);
+        text(g,isNewUser?toWide(s2::kUserBankName):banks_[size_t(bi)].leaf,
+             39,ry,kBankNameW,18,kBankNameSize,bankText,false,false,true);
         text(g,isNewUser?L"new":std::to_wstring(count),164,ry,30,18,10.5f,bankText,false,true,true);
         if(bi>=0 && bi==dropBank_) stroke(g,p[kDisplayText],8.75f,ry+.75f,185.5f,17.5f,1.5f); // copy target
     }
@@ -1620,6 +1632,7 @@ void DesktopEditor::commitWrite() {
 // Enter write. With Ctrl / Alt / Win held, and the arrows with the browser
 // closed (as the mac): the host's. False = not ours.
 bool DesktopEditor::keyDown(UINT key) {
+    dismissBankTip();
     if((GetKeyState(VK_CONTROL)|GetKeyState(VK_MENU)|GetKeyState(VK_LWIN)|GetKeyState(VK_RWIN))&0x8000) return false;
     if(key==VK_ESCAPE) {
         if(typeMenu_>=0) closeTypeMenu();
@@ -1839,9 +1852,75 @@ HCURSOR DesktopEditor::dragCursor() {
     return LoadCursorW(nullptr,dropSlot_>=0 || dropBank_>=0 ? IDC_ARROW : IDC_NO);
 }
 
+void DesktopEditor::bankTipHover(float x,float y) {
+    const int bank=browser_ && !press_.active && typeMenu_<0 ? bankRowAt(x,y) : -1;
+    if(bank==bankTip_.bank) return; // the same row: the tip stays where it opened
+    hideBankTip();
+    bankTip_=BankTip{};
+    bankTip_.bank=bank;
+    if(bank<0 || bank>=int(banks_.size()) || !textCache_) return;
+    const Bank& b=banks_[size_t(bank)];
+    const bool nested=b.leaf!=b.wideName;
+    if(!nested && !textCache_->get(b.leaf,textFontSize(kBankNameSize),kBankNameW-2.f,true).cut) return;
+    wchar_t prefix[12];std::swprintf(prefix,12,L"%02d:",displayBankNumber(bank));
+    bankTip_.text=prefix+b.wideName;
+    bankTip_.x=x;bankTip_.y=y;
+    const uint64_t now=GetTickCount64();
+    if(now<bankTipWarmUntil_) {bankTip_.shown=true;invalidate(bankTipRect());}
+    else bankTip_.dueAt=now+500;
+}
+void DesktopEditor::hideBankTip() {
+    bankTip_.dueAt=0;
+    if(!bankTip_.shown) return;
+    invalidate(bankTipRect());
+    bankTip_.shown=false;
+    bankTipWarmUntil_=GetTickCount64()+5000;
+}
+void DesktopEditor::dismissBankTip() {
+    hideBankTip();
+    bankTip_.text.clear(); // bank kept: quiet until the pointer leaves the row
+}
+void DesktopEditor::resetBankTip() {
+    hideBankTip();
+    bankTip_=BankTip{};
+}
+// Below-right of the pointer, kept inside the panel (above the pointer
+// when there is no room below); the shadow's margin included.
+RectF DesktopEditor::bankTipRect() const {
+    if(bankTip_.text.empty() || !textCache_) return RectF();
+    const float w=textCache_->get(bankTip_.text,textFontSize(kTipTextSize),kDesignWidth,false).ink.Width+2*kTipPad+2;
+    const float x=std::max(kTipMargin,std::min(bankTip_.x+10.f,kDesignWidth-w-kTipMargin));
+    float y=bankTip_.y+18.f;
+    if(y+kTipH>kDesignHeight-kTipMargin) y=bankTip_.y-kTipH-6.f;
+    return RectF(x-3.f,std::max(kTipMargin,y)-3.f,w+6.f,kTipH+8.f);
+}
+// SynthTooltip's bubble: the LCD's colours, a black edge, a soft shadow.
+void DesktopEditor::drawBankTip(Graphics& g) {
+    if(!bankTip_.shown) return;
+    RectF r=bankTipRect();
+    if(r.Width<=0 || !visible(r)) return;
+    r=RectF(r.X+3.f,r.Y+3.f,r.Width-6.f,kTipH);
+    for(int i=3;i>=1;--i) {
+        GraphicsPath shade;roundedPath(shade,r.X-float(i)+1.f,r.Y+1.f,r.Width+2.f*float(i)-2.f,r.Height+float(i)+1.f,4.f+float(i));
+        SolidBrush brush(Color(BYTE(18*(4-i)),0,0,0));
+        g.FillPath(&brush,&shade);
+    }
+    GraphicsPath box;roundedPath(box,r.X,r.Y,r.Width,r.Height,4.f);
+    SolidBrush face(colors_[kDisplayBottom]);
+    g.FillPath(&face,&box);
+    roundedOutline(g,Color(204,0,0,0),r.X+.5f,r.Y+.5f,r.Width-1.f,r.Height-1.f,4.f);
+    text(g,bankTip_.text,r.X+kTipPad-1.f,r.Y,r.Width-2*kTipPad+2.f,r.Height,kTipTextSize,rgb(kLcdText));
+}
+void DesktopEditor::mouseLeft() {
+    hoverChanged(-1,0);
+    if(typeMenuHover_>=0) {typeMenuHover_=-1;invalidateTypeMenu();}
+    bankTipHover(-1.f,-1.f);
+}
+
 // Hover uses the same design-space hit rectangles as clicks. It only
 // invalidates the window when the hovered target changes; idle redraws remain off.
 void DesktopEditor::updateHover(float x,float y) {
+    bankTipHover(x,y);
     if(typeMenu_>=0) { // the open pick list covers the panel (the mac's overlay)
         const int v=typeMenuHit(x,y);
         if(v!=typeMenuHover_) {typeMenuHover_=v;invalidateTypeMenu();}
@@ -1889,6 +1968,7 @@ void DesktopEditor::updateHover(float x,float y) {
 }
 
 void DesktopEditor::mouseDown(float x,float y,bool doubleClick) {
+    dismissBankTip();
     if(typeMenu_>=0) { // a pick, or a click anywhere else closes it
         const int id=typeMenu_, v=typeMenuHit(x,y);
         closeTypeMenu();
@@ -2047,6 +2127,7 @@ int DesktopEditor::wheelTarget(float x,float y) const {
 }
 void DesktopEditor::wheel(int direction,float x,float y) {
     if(direction==0) return;
+    dismissBankTip(); // the list moves under it
     // A RUN of wheel events (< kWheelRunMs apart) belongs to what was under
     // the cursor at its first one (the mac's WheelMonitor momentum owner):
     // touchpad / free-spin inertia carries no momentum flag on Windows, so
@@ -2266,6 +2347,10 @@ void DesktopEditor::tick() {
     sharedThemes().flush(false);
     savePendingSize(false);
     if(flashUntil_ && GetTickCount64()>=flashUntil_) flash({});
+    if(bankTip_.dueAt && GetTickCount64()>=bankTip_.dueAt) {
+        bankTip_.dueAt=0;bankTip_.shown=true;
+        invalidate(bankTipRect());
+    }
     bool dirty=false;
     if(hooks_.patchSerial) {
         const int serial=hooks_.patchSerial(hooks_.ctx);

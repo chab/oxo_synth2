@@ -71,6 +71,9 @@ OXO_TEST(PatchLibraryFoldersContainers) {
     OXO_EXPECT_EQ(names[2], std::string("MyBank"));
     OXO_EXPECT_EQ(names[3], std::string("Sets / A"));
     OXO_EXPECT_EQ(names[4], std::string("Sets / B"));
+    OXO_EXPECT_EQ(BankLeafName(names[3]), std::string("A"));
+    OXO_EXPECT_EQ(BankLeafName(names[2]), std::string("MyBank"));
+    OXO_EXPECT_EQ(BankLeafName("unify_sy1 / Ann Nolwenn / Ann Nolwenn V1"), std::string("Ann Nolwenn V1"));
     OXO_EXPECT_EQ(banks[1].Count(), 0);
     // numbered file keeps its slot, others fill the first free slot
     OXO_EXPECT_EQ(banks[2].slots[4].name, std::string("Fifth"));

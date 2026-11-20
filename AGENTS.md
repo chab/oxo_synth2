@@ -813,7 +813,13 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   aspect-locked, width in NSUserDefaults `oxo.synth2.editorWidth`.
 - TOOLTIPS: only `.oxoTruncationTooltip` on cut patch / bank names in the
   browser (first 0.5 s, then instant while warm); no help tips, no
-  `.help()`; hover via `onContinuousHover`.
+  `.help()`; hover via `onContinuousHover`. Bank rows list the bank's OWN
+  folder name (`BankLeafName` / `PatchBankInfo.leafName`: "a / b / c" ->
+  "c"; write dialog too; the LCD line 2 and dialogs keep the full name);
+  the tip ("NN:a / b / c") shows when the row is cut OR nested (`shown:`).
+  Windows / Linux: the same tip drawn in the panel (`DesktopEditor`
+  `bankTip_`, same timing, hidden by a click / key / wheel / rescan,
+  bank rows only).
 - RENDER COST (2026-11-18, user report: Logic's playhead and mouse lagged
   while the editor was on screen, fine once hidden / moved off-screen; never
   seen in Live). Logic hosts the editor OUT OF PROCESS

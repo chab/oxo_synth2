@@ -561,8 +561,7 @@ void DesktopEditor::handleEvent(void* event,bool input) {
     }
     case LeaveNotify: // WM_MOUSELEAVE
         if(e.xcrossing.state&Button1Mask) break; // a drag left the window: it goes on
-        hoverChanged(-1,0);
-        if(typeMenuHover_>=0) {typeMenuHover_=-1;invalidateTypeMenu();}
+        mouseLeft();
         break;
     case KeyPress: {
         modifiers_=e.xkey.state;
