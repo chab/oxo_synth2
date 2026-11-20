@@ -815,7 +815,8 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   browser (first 0.5 s, then instant while warm); no help tips, no
   `.help()`; hover via `onContinuousHover`. Bank rows list the bank's OWN
   folder name (`BankLeafName` / `PatchBankInfo.leafName`: "a / b / c" ->
-  "c"; write dialog too; the LCD line 2 and dialogs keep the full name);
+  "c"; write dialog, LCD line 2 and its bank messages (written / copied
+  to, bank deleted) too; the delete / export dialogs keep the full name);
   the tip ("NN:a / b / c") shows when the row is cut OR nested (`shown:`).
   Windows / Linux: the same tip drawn in the panel (`DesktopEditor`
   `bankTip_`, same timing, hidden by a click / key / wheel / rescan,

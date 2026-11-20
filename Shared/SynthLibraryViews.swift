@@ -62,7 +62,7 @@ struct BottomBar: View {
         guard let b = model.loadedBank ?? model.currentBank, b < model.banks.count else {
             return "click here to browse banks"
         }
-        return String(format: "%02d:%@", b, model.banks[b].name)
+        return String(format: "%02d:%@", b, model.banks[b].leafName)
     }
 
     private var lcd: some View {

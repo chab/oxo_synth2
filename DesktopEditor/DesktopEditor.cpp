@@ -1131,7 +1131,7 @@ void DesktopEditor::drawDynamic(Graphics& g) {
         if(second.empty()) {
             if(loadedBank>=0 && loadedBank<int(banks_.size())) {
                 wchar_t num[16];std::swprintf(num,16,L"%02d: ",displayBankNumber(loadedBank));
-                second=std::wstring(num)+toWide(banks_[size_t(loadedBank)].name.c_str());
+                second=std::wstring(num)+banks_[size_t(loadedBank)].leaf;
             } else second=knownRevision_>0 ? L"Click here to browse banks" : L"Scanning preset banks...";
         }
         text(g,second,60,526,392,23,13,p[kDisplayText],false,false,true);
@@ -1414,17 +1414,17 @@ bool DesktopEditor::showLibraryMenu(float x,float y,int screenX,int screenY) {
             if(bank<0) break;
             const Bank& b=banks_[size_t(bank)];
             const auto count=std::count_if(b.slots.begin(),b.slots.end(),[](const std::string& s){return !s.empty();});
-            const std::wstring name=toWide(b.name.c_str()); // b may not survive until the answer
+            const std::wstring name=toWide(b.name.c_str()), leaf=b.leaf; // b may not survive until the answer
             const std::wstring detail=L"\u201C"+name+L"\u201D ("+std::to_wstring(count)+
                 (count==1?L" patch":L" patches")+(CanRecycle(std::filesystem::path(toWide(b.source.c_str())))
                     ? L") will be moved to the "+std::wstring(kTrash)+L"."
                     : L") will be deleted: this drive has no "+std::wstring(kTrash)+L". This can't be undone.");
-            messageBox(detail,L"Delete bank?",MB_YESNO|MB_ICONWARNING|MB_DEFBUTTON2,[this,bankNow,name](int answer) {
+            messageBox(detail,L"Delete bank?",MB_YESNO|MB_ICONWARNING|MB_DEFBUTTON2,[this,bankNow,leaf](int answer) {
                 if(answer!=IDYES) return;
                 const int bank=bankNow();
                 const int result=bank>=0 && hooks_.deleteBank ? hooks_.deleteBank(hooks_.ctx,bank) : 0;
                 if(result==0) messageBox(L"Unable to delete this bank.",L"Synth2",MB_ICONWARNING);
-                else flash(L"bank "+name+(result==1 ? L" moved to the "+std::wstring(kTrash) : std::wstring(L" deleted")));
+                else flash(L"bank "+leaf+(result==1 ? L" moved to the "+std::wstring(kTrash) : std::wstring(L" deleted")));
                 adoptLibrary();
                 repaint();
             });
@@ -1619,7 +1619,7 @@ void DesktopEditor::commitWrite() {
             wchar_t where[24];
             std::swprintf(where,24,L"written to %02d:",displayBankNumber(bank));
             wchar_t number[8];std::swprintf(number,8,L" %03d",slot+1);
-            flash(where+toWide(banks_[size_t(bank)].name.c_str())+number);
+            flash(where+banks_[size_t(bank)].leaf+number);
         }
     } else messageBox(L"Cannot write that preset. Check the library folder is writable.",L"Synth2",MB_ICONWARNING);
 }
@@ -1832,7 +1832,7 @@ void DesktopEditor::dragEnd(bool drop) {
         const std::string target=banks_[size_t(toBank)].source;
         const int to=bankBySource(target);
         if(to<0) return;
-        const std::wstring name=toWide(banks_[size_t(to)].name.c_str());
+        const std::wstring name=banks_[size_t(to)].leaf;
         const int number=displayBankNumber(to);
         const int s=hooks_.copyPatch(hooks_.ctx,from,press.slot,to);
         adoptLibrary();

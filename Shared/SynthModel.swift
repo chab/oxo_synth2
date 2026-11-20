@@ -625,7 +625,7 @@ final class SynthModel: ObservableObject {
         currentProgram = slot
         loadedBankID = banks[bank].id
         poll()
-        flash(String(format: "written to %02d:%@ %03d", bank, banks[bank].name, slot + 1))
+        flash(String(format: "written to %02d:%@ %03d", bank, banks[bank].leafName, slot + 1))
         return true
     }
 
@@ -695,7 +695,7 @@ final class SynthModel: ObservableObject {
     func deleteBank(id: String) {
         bankToDelete = nil
         guard let b = banks.firstIndex(where: { $0.id == id }), !banks[b].readOnly else { return }
-        let name = banks[b].name
+        let name = banks[b].leafName
         let result = host.deleteBank(b)
         loadLibrary()
         if loadedBankID == id { // the sound plays on, out of no bank (the host forgot it too)
@@ -719,7 +719,7 @@ final class SynthModel: ObservableObject {
     /// shown, the loaded program stays.
     func copyPatch(bank: Int, slot: Int, to: Int) {
         guard bank < banks.count, to < banks.count else { return }
-        let target = String(format: "%02d:%@", to, banks[to].name)
+        let target = String(format: "%02d:%@", to, banks[to].leafName)
         let s = host.copyPatch(bank: bank, slot: slot, to: to)
         loadLibrary()
         switch s {
