@@ -6,9 +6,10 @@
 //  the bubble drawn over everything, hit-testing off) and any number of
 //  sources: `.oxoTooltip(text)` always, `.oxoTruncationTooltip(text, ...)`
 //  only while the Text it decorates is cut (`lineLimit(1)` + truncation —
-//  the full width is measured once, when the pointer enters). Synth2 uses
-//  only the latter (the browser's cut patch / bank names): no help tips
-//  (user, 2026-10-31).
+//  the full width is measured once, when the pointer enters) or shows less
+//  than the tip (`shown:`, a nested bank's own name). Synth2 uses only the
+//  latter (the browser's patch / bank names): no help tips (user,
+//  2026-10-31).
 //
 //  Timing: the first tip waits 0.5 s (Drums' value); while
 //  WARM — a tip on screen, or one closed less than 5 s ago — the next shows
@@ -153,14 +154,15 @@ extension View {
     /// A tip with `text` on hover. `optional`: a hint the user may turn off
     /// (`OxoTooltipCenter.showsOptionalTips`).
     func oxoTooltip(_ text: String, optional: Bool) -> some View {
-        modifier(OxoTooltipSource(text: text, font: nil, optional: optional))
+        modifier(OxoTooltipSource(text: text, shown: nil, font: nil, optional: optional))
     }
 
-    /// A tip with the FULL `text` while the decorated one-line Text is cut;
-    /// `size` / `weight` / `monospaced` = its system font.
-    func oxoTruncationTooltip(_ text: String, size: CGFloat, weight: Font.Weight = .regular, monospaced: Bool = false,
-                              optional: Bool) -> some View {
-        modifier(OxoTooltipSource(text: text, font: (size, weight, monospaced), optional: optional))
+    /// A tip with the FULL `text` while the decorated one-line Text
+    /// (`shown`, nil = `text`) is cut, and always when `shown` differs from
+    /// `text`; `size` / `weight` / `monospaced` = its system font.
+    func oxoTruncationTooltip(_ text: String, shown: String? = nil, size: CGFloat, weight: Font.Weight = .regular,
+                              monospaced: Bool = false, optional: Bool) -> some View {
+        modifier(OxoTooltipSource(text: text, shown: shown, font: (size, weight, monospaced), optional: optional))
     }
 }
 
@@ -210,6 +212,8 @@ private final class OxoTooltipTracker {
 
 private struct OxoTooltipSource: ViewModifier {
     let text: String
+    /// The decorated Text's string when it is not `text` (nil = `text`).
+    let shown: String?
     /// nil = always; else the font the decorated Text is drawn with.
     let font: (size: CGFloat, weight: Font.Weight, monospaced: Bool)?
     let optional: Bool
@@ -250,7 +254,8 @@ private struct OxoTooltipSource: ViewModifier {
 
     private var isCut: Bool {
         guard let font else { return true }
-        return OxoTextMetrics.width(of: text, size: font.size, weight: font.weight, monospaced: font.monospaced)
+        if let shown, shown != text { return true }
+        return OxoTextMetrics.width(of: shown ?? text, size: font.size, weight: font.weight, monospaced: font.monospaced)
             > tracker.width + 1
     }
 }

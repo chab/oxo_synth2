@@ -13,9 +13,11 @@
 #include "Params.hpp"
 #include "WaveTables.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 
 namespace oxo::s2 {
 
@@ -70,6 +72,13 @@ OXO_INLINE double Sin2Pi(double ph) {
     for (const double c : {1.0 / 362880.0, -1.0 / 5040.0, 1.0 / 120.0, -1.0 / 6.0, 1.0}) s = s * r2 + c;
     return std::copysign(s * r, -x);
 }
+// A smoothed knob over a render call: its value at the first sample and its
+// per-sample step (Synth's knob glides; step 0 = still).
+struct KnobRamp {
+    double start = 0, step = 0;
+    KnobRamp From(int off) const { return {start + step * off, step}; }
+};
+
 class Voice {
 public:
     // The longest run rendered in one go (Synth renders in chunks of it:
@@ -205,13 +214,14 @@ public:
 
     // lfo[k] = LFO k's per-sample value (nullptr when that LFO is off);
     // lfoSteps[k] = its pitch steps when it is routed to pitch (Lfo.hpp).
-    // cutoffKnob / cutoffStep: the smoothed cutoff knob at the block start and
-    // its per-sample ramp (Synth's 50 ms glide, measured).
+    // cutoff: the smoothed cutoff knob over the call (Synth's glide);
+    // gain: the gain knob's linear gain (1 while it glides: Synth ramps the
+    // voices' mix).
     // pos: the chunk's first sample in the host block; blockEnd: the host
     // block's length.
     void Render(float *left, float *right, int frames, int64_t pos, int64_t blockEnd, const PatchValues &p,
-                double bendSemis, const double *const lfo[2], const int32_t *const lfoSteps[2], double cutoffKnob,
-                double cutoffStep) {
+                double bendSemis, const double *const lfo[2], const int32_t *const lfoSteps[2], KnobRamp cutoff,
+                double gain) {
         if (!Active()) return;
         if (p[kPortaTime] <= 0) glide_ = note_;
         // (measured, measure_porta.py) a glide moves every 16 samples
@@ -220,8 +230,7 @@ public:
             const int n = std::min(gliding ? std::min(frames - off, glideTick_) : frames - off, kMaxChunk);
             const double *at[2] = {lfo[0] ? lfo[0] + off : nullptr, lfo[1] ? lfo[1] + off : nullptr};
             const int32_t *stepsAt[2] = {lfoSteps[0] ? lfoSteps[0] + off : nullptr, lfoSteps[1] ? lfoSteps[1] + off : nullptr};
-            RenderChunk(left + off, right + off, n, pos + off, blockEnd, p, bendSemis, at, stepsAt, cutoffKnob + cutoffStep * off,
-                        cutoffStep);
+            RenderChunk(left + off, right + off, n, pos + off, blockEnd, p, bendSemis, at, stepsAt, cutoff.From(off), gain);
             off += n;
             if (gliding && (glideTick_ -= n) == 0) {
                 glideTick_ = 16;
@@ -254,17 +263,21 @@ private:
         kOscCross,  // FM, ring or sync (osc1 and osc2 depend on each other), anything else too
     };
     void RenderChunk(float *left, float *right, int frames, int64_t pos, int64_t blockEnd, const PatchValues &p,
-                     double bendSemis, const double *const lfo[2], const int32_t *const lfoSteps[2], double cutoffKnob,
-                     double cutoffStep) {
+                     double bendSemis, const double *const lfo[2], const int32_t *const lfoSteps[2], KnobRamp cutoff,
+                     double gain) {
         const bool modEnv = p[kModEnvOn] != 0;
         bool cross = p[kOsc2Ring] || p[kOsc2Sync] || p[kOsc1FM] > 0 || (modEnv && p[kModEnvDest] == 1), moving = modEnv;
         for (int k = 0; k < 2; ++k) {
             const int dest = LfoDest(p, lfo, k);
             cross |= dest == 6;
-            moving |= dest == 1 || dest == 2 || dest == 5;
+            // an LFO on pitch moves the oscillators only when its whole steps
+            // change within the chunk (a square, a slow LFO: mostly not)
+            moving |= dest == 5 || ((dest == 1 || dest == 2) &&
+                                    std::adjacent_find(lfoSteps[k], lfoSteps[k] + frames, std::not_equal_to<>()) !=
+                                        lfoSteps[k] + frames);
         }
         using Chunk = void (Voice::*)(float *, float *, int, int64_t, int64_t, const PatchValues &, double,
-                                      const double *const[2], const int32_t *const[2], double, double);
+                                      const double *const[2], const int32_t *const[2], KnobRamp, double);
 #define OXO_CHUNKS(osc, detune) \
     {&Voice::RenderChunkAs<osc, detune, VoiceFilter::kSvf>, &Voice::RenderChunkAs<osc, detune, VoiceFilter::kLadder>, \
      &Voice::RenderChunkAs<osc, detune, VoiceFilter::kDiode>}
@@ -274,13 +287,14 @@ private:
 #undef OXO_CHUNKS
         (this->*kChunk[cross ? kOscCross : moving ? kOscMoving : kOscStatic][p[kOsc1Detune] > 0]
                       [VoiceFilter::KindOf(p[kFilterType])])(left, right, frames, pos, blockEnd, p, bendSemis, lfo,
-                                                              lfoSteps, cutoffKnob, cutoffStep);
+                                                              lfoSteps, cutoff, gain);
     }
 
     template <int kOsc, bool kDetune, int kFilter>
     void RenderChunkAs(float *left, float *right, int frames, int64_t pos, int64_t blockEnd, const PatchValues &p,
-                       double bendSemis, const double *const lfo[2], const int32_t *const lfoSteps[2], double cutoffKnob,
-                     double cutoffStep) {
+                       double bendSemis, const double *const lfo[2], const int32_t *const lfoSteps[2], KnobRamp cutoff,
+                       double gain) {
+        const double cutoffKnob = cutoff.start, cutoffStep = cutoff.step;
         // ---- LFO routing (measured depth laws per destination). Both LFOs on
         // one destination (measured, measure_lfo_sum.py): pitch = sum of each
         // LFO's cents; cutoff / FM / pw / pan = the law applied to the
@@ -369,14 +383,24 @@ private:
         // (measured) amount -> -1..+1: (amt - 64) / 63 above 64, / 64 below
         const double modAmt = (p[kModEnvAmount] - 64) / (p[kModEnvAmount] > 64 ? 63.0 : 64.0);
 
-        const double ampGain = kOscAmplitude * tables::kAmpGain[p[kAmpGain]] *
+        const double ampGain = kOscAmplitude * gain *
                                std::pow(10.0, -15.0 * (p[kAmpVelSens] / 64.0) * (127 - velocity_) / 126.0 / 20.0);
 
         // (measured, measure_pw_limits.py) the final duty never reaches 0 / 1:
         // pw 0 = pw 1 = 1.25 / 254, modulation tops out at 1 - 1.375 / 254
         static constexpr double kWidthMin = 1.25 / 254.0, kWidthMax = 1.0 - 1.375 / 254.0;
-        // a static oscillator section's steps and width (else per sample, below)
-        const double staticIncA = PhaseStep(inc1 * bendRatio), staticIncB = inc2 * bendRatio;
+        // a static oscillator section's steps and width (else per sample,
+        // below). Static with LFOs on pitch: their steps hold over the chunk
+        // (RenderChunk), the same ratios as the moving case's.
+        double ratioA = bendRatio, ratioB = bendRatio;
+        if constexpr (kOsc == kOscStatic) {
+            if (r[1] || r[2]) {
+                const int lfoAll = r[2] ? pitchSteps(r[2], 0) : 0;
+                if (r[2]) ratioA = PitchRatio{}(bendSteps + lfoAll);
+                ratioB = r[1] ? PitchRatio{}(bendSteps + lfoAll + pitchSteps(r[1], 0)) : ratioA;
+            }
+        }
+        const double staticIncA = PhaseStep(inc1 * ratioA), staticIncB = inc2 * ratioB;
         const double staticWidth = std::clamp(width, kWidthMin, kWidthMax);
         double curWidth = staticWidth;
         uint32_t curWidthPoints = CopyWidth(staticWidth);
@@ -498,8 +522,103 @@ private:
         // offset is above 0 (9.2 taus into the decay)
         const bool ringFmSource = p[kOsc1FM] > 0 || r[6] || (modOn && modDest == 1 && p[kModEnvAmount] >= 67);
         const double ringFmGain = shape2 == 2 ? 2.0 : shape2 == 4 ? 1.0 / kNoiseLevel : 1.0;
+        // osc2 silenced by the mix (osc mix 0) is not read: without FM / ring /
+        // sync that is its only use (its phase and the noise run on). Static
+        // oscillators only: the check per sample cost the moving ones ~2 %.
+        const bool osc2On = kOsc != kOscStatic || mixB != 0 || shape2 == 4;
         double copyStep = NAN, copyIncA = NAN; // the osc1 steps copyInc holds (the copies' steps, recomputed when they change)
         simd::P4 copyInc[2] = {};
+        Phase64 copyIncs[kDetuneOscs] = {};
+        // (measured, sync + FM: the copies' spread in Hz stays the unmodulated
+        // one while sync's FM offset moves the pitch) every copy takes osc1's
+        // FM deviation as it is, added to its own detuned step, not scaled by
+        // its detune ratio. A step under one cycle either way converts
+        // directly (two's complement = mod 1)
+        const auto copySteps = [&](double incA, double step) {
+            if (step == copyStep && incA == copyIncA) return;
+            copyStep = step, copyIncA = incA;
+            const double deviation = step - incA;
+            if (std::fabs(step) < kFastStepLimit) {
+                for (int d = 0; d < kDetuneOscs; ++d)
+                    copyIncs[d] = Phase64(int64_t((incA * detuneRatio[d] + deviation) * copyScale)) << 1;
+            } else {
+                for (int d = 0; d < kDetuneOscs; ++d)
+                    copyIncs[d] = ToPhase64((incA * detuneRatio[d] + deviation) * copyRatio);
+            }
+            copyInc[0] = simd::Phases(copyIncs[0], copyIncs[1], copyIncs[2], copyIncs[3]);
+            copyInc[1] = simd::Phases(copyIncs[4], copyIncs[5], copyIncs[6], copyIncs[7]);
+        };
+        // Without FM (osc static / moving) the copies' sums are computed AHEAD
+        // for the chunk (CopiesRun, its own tight loop: a quarter of their cost
+        // in the voice loop, where they shared the registers and ports with
+        // everything else). FM / sync / ring (cross) need osc2 per sample:
+        // inline below. A voice ending mid-chunk replays the phases up to
+        // there (a slot's phases carry on to its next note).
+        static constexpr bool kCopiesAhead = kDetune && kOsc != kOscCross;
+        float copies1[kCopiesAhead ? kMaxChunk : 1], copiesSub[kCopiesAhead ? kMaxChunk : 1];
+        const auto copiesAhead = [&](int n, bool sums) {
+            Phase64 ph[kDetuneOscs];
+            std::copy_n(copyPhase_.data(), kDetuneOscs, ph);
+            uint32_t widthPts[kMaxChunk];
+            if (sums && shape1 == 2) {
+                if constexpr (kOsc == kOscStatic) std::fill_n(widthPts, n, curWidthPoints);
+                else
+                    for (int i = 0; i < n; ++i) widthPts[i] = CopyWidth(widths[i]);
+            }
+            for (int i = 0; i < n;) {
+                // a run of samples on one osc1 step
+                const double incA = kOsc == kOscStatic ? staticIncA : incAs[i];
+                int end = i + 1;
+                if constexpr (kOsc != kOscStatic)
+                    while (end < n && incAs[end] == incA) ++end;
+                else end = n;
+                copySteps(incA, incA); // (no FM: osc1's step incA x 1.0)
+                if (!sums) CopiesRun<false, false, false>(end - i, ph, copyIncs, 0, nullptr, nullptr, nullptr, nullptr, nullptr);
+                else if (shape1 == 2) {
+                    if (subOn) CopiesRun<true, true, true>(end - i, ph, copyIncs, copyShift, copy1, copySub, widthPts + i, copies1 + i, copiesSub + i);
+                    else CopiesRun<true, true, false>(end - i, ph, copyIncs, copyShift, copy1, copySub, widthPts + i, copies1 + i, copiesSub + i);
+                } else {
+                    if (subOn) CopiesRun<true, false, true>(end - i, ph, copyIncs, copyShift, copy1, copySub, nullptr, copies1 + i, copiesSub + i);
+                    else CopiesRun<true, false, false>(end - i, ph, copyIncs, copyShift, copy1, copySub, nullptr, copies1 + i, copiesSub + i);
+                }
+                i = end;
+            }
+            std::array<Phase64, kDetuneOscs> end;
+            std::copy_n(ph, kDetuneOscs, end.begin());
+            return end;
+        };
+        std::array<Phase64, kDetuneOscs> copyEnd{};
+        if constexpr (kCopiesAhead) copyEnd = copiesAhead(frames, true);
+        // the copies' phases stay in registers over the chunk (stored back below)
+        simd::P4 copyPh[2] = {simd::LoadPhases(copyPhase_.data()), simd::LoadPhases(copyPhase_.data() + 4)};
+        // the cutoff (knob units) at sample i for the filter env's value env
+        // (knob still: its clamped target is the same all chunk, hoisted)
+        const bool knobStill = cutoffStep == 0;
+        const double stillBase = cutoffBase + cutoffStep * 0, stillLow = stillBase - 2.1;
+        const double stillSpan = std::clamp(stillBase + envDepth, -2.0, 125.0) - stillLow;
+        const auto cutoffAt = [&](int i, double env) {
+            double cutoff;
+            if (knobStill) {
+                cutoff = stillLow + stillSpan * env;
+            } else {
+                const double base = cutoffBase + cutoffStep * i, low = base - 2.1;
+                cutoff = low + (std::clamp(base + envDepth, -2.0, 125.0) - low) * env;
+            }
+            if (r[3]) cutoff += std::max(0.0, 125.0 - cutoff) * std::min(1.0, r[3].Unipolar(i)); // tops out (measured)
+            return cutoff;
+        };
+        const auto setCutoff = [&](double cutoff) {
+            if constexpr (kFilter == VoiceFilter::kSvf) filter_.SetSvfCutoff(cutoff);
+            else if constexpr (kFilter == VoiceFilter::kLadder) filter_.SetLadder(cutoff, filterRes);
+            else filter_.SetDiode(cutoff, filterRes);
+        };
+        if constexpr (kFilter == VoiceFilter::kSvf) filter_.SetSvfRes(filterType, filterRes);
+        // A HELD cutoff (filter env holding its sustain, no LFO on it, knob
+        // not moving: a held note) is the same every sample: its coefficients
+        // once per chunk (bit for bit the per-sample ones). Per sample they
+        // were ~25 % of a simple voice.
+        const bool cutoffHeld = cutoffStep == 0 && !r[3] && filterEnv_.Holding();
+        if (cutoffHeld) setCutoff(cutoffAt(0, filterEnv_.Level()));
         for (int i = 0; i < frames; ++i) {
             double incA = staticIncA, incB = staticIncB, w = staticWidth;
             if constexpr (kOsc != kOscStatic) {
@@ -509,7 +628,7 @@ private:
             }
             // ---- osc2 ----
             double o2 = 0;
-            switch (shape2) {
+            if (osc2On) switch (shape2) {
             case 1: o2 = saw2.Read(osc2Phase_); break;
             case 2: o2 = 0.5 * (saw2.Read(osc2Phase_) - saw2.Read(WrapNext(osc2Phase_ + w))); break;
             case 3: o2 = tri2.Read(osc2Phase_); break;
@@ -534,32 +653,19 @@ private:
             double o1 = OscRead(shape1, saw1, tri1, osc1Phase_, curWidth);
             double sub = subOn ? OscRead(subAs1, sawSub, triSub, subPhase_, 0.5) : 0.0;
             if (detuneOn) {
-                const Phase64 *const ph = copyPhase_.data();
-                const double acc = o1 + (shape1 == 2 ? 0.5f * (CopiesSum(copy1, ph, copyShift, 0) - CopiesSum(copy1, ph, copyShift, curWidthPoints))
-                                                     : CopiesSum(copy1, ph, copyShift, 0));
-                const double subAcc = subOn ? sub + CopiesSum(copySub, ph, 0, 0) : sub;
-                // (measured, sync + FM: the copies' spread in Hz stays the
-                // unmodulated one while sync's FM offset moves the pitch) every
-                // copy takes osc1's FM deviation as it is, added to its own
-                // detuned step, not scaled by its detune ratio.
-                // A step under one cycle either way converts directly (two's
-                // complement = mod 1)
-                if (const double step = incA * fm; step != copyStep || incA != copyIncA) {
-                    copyStep = step, copyIncA = incA;
-                    const double deviation = step - incA;
-                    Phase64 inc[kDetuneOscs];
-                    if (std::fabs(step) < kFastStepLimit) {
-                        for (int d = 0; d < kDetuneOscs; ++d)
-                            inc[d] = Phase64(int64_t((incA * detuneRatio[d] + deviation) * copyScale)) << 1;
-                    } else {
-                        for (int d = 0; d < kDetuneOscs; ++d)
-                            inc[d] = ToPhase64((incA * detuneRatio[d] + deviation) * copyRatio);
-                    }
-                    copyInc[0] = simd::Phases(inc[0], inc[1], inc[2], inc[3]);
-                    copyInc[1] = simd::Phases(inc[4], inc[5], inc[6], inc[7]);
+                double acc, subAcc;
+                if constexpr (kCopiesAhead) {
+                    acc = o1 + copies1[i], subAcc = subOn ? sub + copiesSub[i] : sub;
+                } else {
+                    uint32_t idx[kDetuneOscs], idxSub[kDetuneOscs];
+                    CopyIndices(copyPh, copyShift, idx);
+                    acc = o1 + (shape1 == 2 ? 0.5f * (CopiesSum(copy1, idx, 0) - CopiesSum(copy1, idx, curWidthPoints))
+                                            : CopiesSum(copy1, idx, 0));
+                    if (subOn) CopyIndices(copyPh, 0, idxSub);
+                    subAcc = subOn ? sub + CopiesSum(copySub, idxSub, 0) : sub;
+                    copySteps(incA, incA * fm);
+                    copyPh[0] = copyPh[0] + copyInc[0], copyPh[1] = copyPh[1] + copyInc[1];
                 }
-                simd::StorePhases(copyPhase_.data(), simd::LoadPhases(copyPhase_.data()) + copyInc[0]);
-                simd::StorePhases(copyPhase_.data() + 4, simd::LoadPhases(copyPhase_.data() + 4) + copyInc[1]);
                 o1 = acc * detuneGain;
                 // (measured, measure_ring_detune.py) ring on: the sub copies
                 // skip the copy gain (~+10 dB). The original bounds that loud
@@ -595,20 +701,11 @@ private:
 
             const double mixed = mixA * osc1Out + mixB * o2;
             // ---- filter -> saturation -> amp (measured order) ----
-            const double base = cutoffBase + cutoffStep * i, low = base - 2.1;
-            double cutoff = low + (std::clamp(base + envDepth, -2.0, 125.0) - low) * filterEnv_.Next();
-            if (r[3]) cutoff += std::max(0.0, 125.0 - cutoff) * std::min(1.0, r[3].Unipolar(i)); // tops out (measured)
+            if (!cutoffHeld) setCutoff(cutoffAt(i, filterEnv_.Next()));
             double filterOut;
-            if constexpr (kFilter == VoiceFilter::kSvf) {
-                filter_.SetSvf(filterType, cutoff, filterRes);
-                filterOut = filter_.ProcessSvf(mixed);
-            } else if constexpr (kFilter == VoiceFilter::kLadder) {
-                filter_.SetLadder(cutoff, filterRes);
-                filterOut = filter_.ProcessLadder(mixed);
-            } else {
-                filter_.SetDiode(cutoff, filterRes);
-                filterOut = filter_.ProcessDiode(mixed);
-            }
+            if constexpr (kFilter == VoiceFilter::kSvf) filterOut = filter_.ProcessSvf(mixed);
+            else if constexpr (kFilter == VoiceFilter::kLadder) filterOut = filter_.ProcessLadder(mixed);
+            else filterOut = filter_.ProcessDiode(mixed);
             const double filtered = Saturate(filterOut, satA);
             const double env = AmpGain(amp_.Next(), pos + i, blockEnd);
             double gainMod = 1.0;
@@ -619,6 +716,7 @@ private:
             right[i] += float(y * panR);
             if (!amp_.Active() && (((pos + i + 1) & 255) == 0 || pos + i + 1 >= blockEnd)) {
                 tail_ = false;
+                if constexpr (kCopiesAhead) copyEnd = copiesAhead(i + 1, false);
                 // the voice ends here: the mod env stops with it (it ran ahead)
                 if constexpr (kOsc != kOscStatic) {
                     if (modOn) {
@@ -630,6 +728,8 @@ private:
             }
             tail_ = !amp_.Active();
         }
+        if constexpr (kCopiesAhead) copyPhase_ = copyEnd;
+        else if (detuneOn) simd::StorePhases(copyPhase_.data(), copyPh[0]), simd::StorePhases(copyPhase_.data() + 4, copyPh[1]);
     }
 
     // (measured: a locked synced-noise DC through the amp env, whole
@@ -675,13 +775,48 @@ private:
         default: return tri.Read(ph);
         }
     }
-    // the 8 detune copies' sum: the table's points at the phases ph << shift,
-    // truncated (no interpolation, see WaveTableSet::CopyTable), `offset`
-    // points further (a pulse's second saw)
-    static OXO_INLINE float CopiesSum(const float *table, const Phase64 *ph, int shift, uint32_t offset) {
+    // n samples of the copies on fixed steps (CopiesSum's arithmetic, bit for
+    // bit): osc1's sums (a pulse: two points, widthPts apart) and the sub's;
+    // kSums false = the phases only
+    template <bool kSums, bool kPulse, bool kSub>
+    static void CopiesRun(int n, Phase64 ph[kDetuneOscs], const Phase64 inc[kDetuneOscs], int shift, const float *t1,
+                          const float *tSub, const uint32_t *widthPts, float *out1, float *outSub) {
+        constexpr int kTop = 64 - WaveTableSet::kCopyBits;
+        constexpr uint32_t kMask = WaveTableSet::kCopyPoints - 1;
+        Phase64 p[kDetuneOscs];
+        for (int d = 0; d < kDetuneOscs; ++d) p[d] = ph[d];
+        for (int i = 0; i < n; ++i) {
+            if constexpr (kSums) {
+                uint32_t idx[kDetuneOscs];
+                float v[kDetuneOscs];
+                for (int d = 0; d < kDetuneOscs; ++d) idx[d] = uint32_t((p[d] << shift) >> kTop), v[d] = t1[idx[d]];
+                const float a = ((v[0] + v[1]) + (v[2] + v[3])) + ((v[4] + v[5]) + (v[6] + v[7]));
+                if constexpr (kPulse) {
+                    const uint32_t w = widthPts[i];
+                    for (int d = 0; d < kDetuneOscs; ++d) v[d] = t1[(idx[d] + w) & kMask];
+                    out1[i] = 0.5f * (a - (((v[0] + v[1]) + (v[2] + v[3])) + ((v[4] + v[5]) + (v[6] + v[7]))));
+                } else {
+                    out1[i] = a;
+                }
+                if constexpr (kSub) {
+                    for (int d = 0; d < kDetuneOscs; ++d) v[d] = tSub[uint32_t(p[d] >> kTop)];
+                    outSub[i] = ((v[0] + v[1]) + (v[2] + v[3])) + ((v[4] + v[5]) + (v[6] + v[7]));
+                }
+            }
+            for (int d = 0; d < kDetuneOscs; ++d) p[d] += inc[d];
+        }
+        for (int d = 0; d < kDetuneOscs; ++d) ph[d] = p[d];
+    }
+    // the 8 detune copies' sum: the table's points at their phases' top bits
+    // (CopyIndices: of the phases << shift), truncated (no interpolation, see
+    // WaveTableSet::CopyTable), `offset` points further (a pulse's second saw)
+    static OXO_INLINE void CopyIndices(const simd::P4 ph[2], int shift, uint32_t idx[kDetuneOscs]) {
+        simd::TopBits<WaveTableSet::kCopyBits>(ph[0], shift, idx);
+        simd::TopBits<WaveTableSet::kCopyBits>(ph[1], shift, idx + 4);
+    }
+    static OXO_INLINE float CopiesSum(const float *table, const uint32_t idx[kDetuneOscs], uint32_t offset) {
         float v[kDetuneOscs];
-        for (int d = 0; d < kDetuneOscs; ++d)
-            v[d] = table[(uint32_t((ph[d] << shift) >> (64 - WaveTableSet::kCopyBits)) + offset) & (WaveTableSet::kCopyPoints - 1)];
+        for (int d = 0; d < kDetuneOscs; ++d) v[d] = table[(idx[d] + offset) & (WaveTableSet::kCopyPoints - 1)];
         return ((v[0] + v[1]) + (v[2] + v[3])) + ((v[4] + v[5]) + (v[6] + v[7]));
     }
     // a pulse width in whole table points: (measured) the copies' pulse is

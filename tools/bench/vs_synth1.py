@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Synth2 vs the original Synth1: CPU per scenario, same jobs, same session.
+
+  tools/bench/vs_synth1.py [--features | --split patch.sy1] [--runs N] [--only substr] [--no-s1]
+                           [--also LABEL=bench_binary]...
+
+Both run as x86_64 under Rosetta (Synth1 = build/s1ref/s1ref, ours =
+build/vs_synth1/bench-x86_64, the plugin's -O3), runs alternated, best and
+median kept; ours also native arm64 (build/vs_synth1/bench-arm64). Builds the
+benches and s1ref first. Prints % of one core per scenario (render only:
+s1ref's S1REF_TIME, our RenderJob's renderSeconds) and the cost per voice
+over idle. --features: INIT with 16 held voices, one change at a time
+(what each feature costs on each side). --split: a patch, 4 held keys,
+one feature taken out at a time. --also: other x86_64 builds of
+tools/bench (e.g. before a change), alternated too, as extra columns. Rosetta is a proxy for a PC (AGENTS.md "VS THE ORIGINAL").
+"""
+import os
+import re
+import statistics
+import subprocess
+import sys
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+OUT = os.path.join(ROOT, 'build', 'vs_synth1')
+ME = os.path.join(ROOT, 'Shared', 'Resources', 'Synth2 Starter Banks', 'Madame Eljay')
+INIT = os.path.join(ROOT, 'Shared', 'Resources', 'Synth2 Factory', '001.sy1')
+LEN = 10.0
+OSC1_DETUNE = 76
+
+
+def sy1(path):
+    lines = open(path, encoding='latin-1').read().splitlines()
+    ver = next((int(l[4:]) for l in lines if l.startswith('ver=')), 0)
+    if ver < 112:
+        sys.exit(f'{path}: legacy ver {ver}, convert it first')
+    vals = {}
+    for l in lines[1:]:
+        m = re.fullmatch(r'\s*(\d+)\s*,\s*(-?\d+)\s*', l)
+        if m:
+            vals[int(m[1])] = int(m[2])
+    return vals
+
+
+def held(keys):
+    return [(0.0, LEN + 1, k) for k in keys]
+
+
+def scrub():
+    step = 10 * 256 / 44100  # tools/bench Scrub: a key every 60 ms, released after two
+    return [(k * step, (k + 2) * step, 48 + k % 24) for k in range(int(LEN / step) + 1)]
+
+
+CHORD4 = [48, 52, 55, 59]
+KEYS16 = list(range(40, 72, 2))
+
+
+def scenarios():
+    init = sy1(INIT)
+    saw = {**init, OSC1_DETUNE: 10}
+    d50, pad = sy1(os.path.join(ME, '010.sy1')), sy1(os.path.join(ME, '035.sy1'))
+    return [
+        ('init idle', init, 0, []),
+        ('init 1 voice', init, 1, held([60])),
+        ('init 4 voices', init, 4, held(CHORD4)),
+        ('init 16 voices', init, 16, held(KEYS16)),
+        ('init+detune10 1 voice', saw, 1, held([60])),
+        ('init+detune10 4 voices', saw, 4, held(CHORD4)),
+        ('init+detune10 16 voices', saw, 16, held(KEYS16)),
+        ('D-50 idle', d50, 0, []),
+        ('D-50 4 keys (16 voices)', d50, 16, held(CHORD4)),
+        ('D-50 scrub', d50, None, scrub()),
+        ('Harmony Pad idle', pad, 0, []),
+        ('Harmony Pad 4 keys (8 v.)', pad, 8, held(CHORD4)),
+        ('Harmony Pad scrub', pad, None, scrub()),
+    ]
+
+
+# --features: INIT, 16 held voices, one change at a time (param id: value)
+FEATURES = [
+    ('osc mix 64', {5: 64}), ('osc mix 127', {5: 127}),
+    ('osc1 sine', {0: 0}), ('osc1 pulse', {0: 2}), ('osc1 triangle', {0: 3}),
+    ('osc2 saw', {1: 1}), ('osc2 noise', {1: 4}),
+    ('detune 10', {76: 10}), ('detune 64', {76: 64}), ('sub 64 (sine)', {95: 64, 96: 0}),
+    ('sub 64 square', {95: 64, 96: 3}), ('detune 64 + sub 64', {76: 64, 95: 64}),
+    ('LP12 cutoff 64', {19: 64}), ('LP12 res 100', {19: 64, 20: 100}),
+    ('LP24', {14: 1}), ('LP24 cutoff 64 res 100', {14: 1, 19: 64, 20: 100}),
+    ('HP12', {14: 2}), ('BP12', {14: 3}), ('LPDL', {14: 4}), ('LPDL cutoff 64 res 100', {14: 4, 19: 64, 20: 100}),
+    ('filter env amt 100', {21: 100}), ('filter sat 64', {23: 64}),
+    ('LFOs off', {57: 0, 58: 0}), ('LFO1 pitch 20', {41: 1, 44: 20}), ('LFO2 cutoff 40', {44: 0, 46: 3, 49: 40}),
+    ('mod env pitch', {10: 1, 11: 90, 13: 60}), ('osc2 FM 40', {45: 40}), ('osc2 sync', {6: 1, 2: 76}),
+    ('osc2 ring', {7: 1}), ('vel sens 64', {30: 64}), ('pan 20', {86: 20}),
+]
+
+
+# --split <patch.sy1>: the patch, 4 held keys, one feature taken out at a time
+SPLIT = [
+    ('effects off (EQ stays)', {77: 0, 65: 0, 66: 0}), ('EQ flat', {60: 64, 61: 64, 62: 64, 63: 64}),
+    ('all fx off + EQ flat', {77: 0, 65: 0, 66: 0, 60: 64, 61: 64, 62: 64, 63: 64}),
+    ('LFO1 off', {57: 0}), ('LFO2 off', {58: 0}), ('LFOs off', {57: 0, 58: 0}),
+    ('unison off', {73: 0}), ('sub off', {95: 0}), ('detune 0', {76: 0}),
+    ('osc mix 0', {5: 0}), ('osc mix 127', {5: 127}), ('osc1 saw', {0: 1}),
+    ('LP12', {14: 0}), ('res 0', {20: 0}), ('filter env A0 D0', {15: 0, 16: 0}),
+    ('filter vel switch off', {24: 0}), ('amp attack 0', {25: 0}), ('amp vel sens 0', {30: 0}),
+    ('voice simple: LFOs, sub off, LP12, env A0 D0', {57: 0, 58: 0, 95: 0, 14: 0, 15: 0, 16: 0}),
+]
+
+
+def split(path):
+    base = sy1(path)
+    keys = held(CHORD4)
+    return [(os.path.basename(path), base, None, keys)] + [(n, {**base, **ch}, None, keys) for n, ch in SPLIT]
+
+
+def features():
+    init = sy1(INIT)
+    keys = held(KEYS16)
+    return [('INIT 16 voices', init, 16, keys)] + [(n, {**init, **ch}, 16, keys) for n, ch in FEATURES]
+
+
+def write_jobs(path, scens):
+    os.makedirs(os.path.join(OUT, 'wav'), exist_ok=True)
+    with open(path, 'w') as f:
+        for i, (name, vals, _, notes) in enumerate(scens):
+            f.write(f'job {os.path.join(OUT, "wav", f"s{i:02d}.wav")}\nlen {LEN}\npreroll 0.25\n')
+            for k, v in sorted(vals.items()):
+                f.write(f'n {k} {v}\n')
+            for on, off, key in notes:
+                f.write(f'note {on:.6f} {off:.6f} {key} 100\n')
+            f.write('end\n')
+
+
+def run(cmd, env=None):
+    p = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    if p.returncode:
+        sys.exit(f'{cmd[0]} failed:\n{p.stderr[-2000:]}')
+    return [100.0 / float(x) for x in re.findall(r'x([\d.]+) realtime', p.stdout + p.stderr)]
+
+
+def build():
+    os.makedirs(OUT, exist_ok=True)
+    src = os.path.join(ROOT, 'tools', 'bench', 'main.cpp')
+    for arch in ('x86_64', 'arm64'):
+        subprocess.run(['clang++', '-std=c++20', '-O3', '-DNDEBUG', '-arch', arch, src, '-o',
+                        os.path.join(OUT, f'bench-{arch}')], check=True)
+    subprocess.run(['make', '-s', '-C', os.path.join(ROOT, 'tools', 's1ref')], check=True)
+
+
+def main():
+    args = sys.argv[1:]
+    runs = int(args[args.index('--runs') + 1]) if '--runs' in args else 5
+    only = args[args.index('--only') + 1] if '--only' in args else ''
+    s1 = '--no-s1' not in args
+    feat = '--features' in args
+    split_patch = args[args.index('--split') + 1] if '--split' in args else None
+    also = [args[i + 1].split('=', 1) for i, a in enumerate(args) if a == '--also']
+    build()
+    scens = [s for s in (split(split_patch) if split_patch else features() if feat else scenarios())
+             if only.lower() in s[0].lower()]
+    jobs = os.path.join(OUT, 'vs_synth1_jobs.txt')
+    write_jobs(jobs, scens)
+    t = {k: [[] for _ in scens] for k in ['s1', 'x64', 'arm'] + [label for label, _ in also]}
+    env = dict(os.environ, S1REF_TIME='1')
+    for r in range(runs):
+        print(f'run {r + 1}/{runs}', file=sys.stderr)
+        sides = [('x64', [os.path.join(OUT, 'bench-x86_64'), jobs], None),
+                 ('arm', [os.path.join(OUT, 'bench-arm64'), jobs], None)]
+        sides[1:1] = [(label, [path, jobs], None) for label, path in also]
+        if s1:
+            sides.insert(r % 2, ('s1', [os.path.join(ROOT, 'build', 's1ref', 's1ref'), 'batch', jobs], env))
+        for key, cmd, e in sides:
+            for i, v in enumerate(run(cmd, e)):
+                t[key][i].append(v)
+
+    def best(key, i):
+        return min(t[key][i]) if t[key][i] else float('nan')
+
+    def med(key, i):
+        return statistics.median(t[key][i]) if t[key][i] else float('nan')
+
+    print(f'% of one core (best of {runs}; median in brackets), x86_64 under Rosetta unless arm64')
+    print(f'{"scenario":26} {"Synth1":>15}' + ''.join(f' {label[:15]:>15} {"ratio":>6}' for label, _ in also) +
+          f' {"Synth2":>15} {"ratio":>6} {"Synth2 arm64":>15}')
+    for i, (name, *_rest) in enumerate(scens):
+        def col(k):
+            ratio = best(k, i) / best('s1', i) if s1 else float('nan')
+            return f' {best(k, i):6.3f} ({med(k, i):6.3f}) {ratio:6.2f}'
+        print(f'{name:26} {best("s1", i):6.3f} ({med("s1", i):6.3f})' + ''.join(col(label) for label, _ in also) +
+              col('x64') + f' {best("arm", i):6.3f} ({med("arm", i):6.3f})')
+    if split_patch:
+        print('change vs the patch (% of one core; gap = what the change removes from Synth2 minus from Synth1)')
+        print(f'{"change":44} {"Synth1":>8} {"Synth2":>8} {"gap":>8} {"arm64":>8}')
+        d = {k: [best(k, i) - best(k, 0) for i in range(len(scens))] for k in ('s1', 'x64', 'arm')}
+        for i, (name, *_r) in enumerate(scens[1:], 1):
+            print(f'{name:44} {d["s1"][i]:8.3f} {d["x64"][i]:8.3f} {d["x64"][i] - d["s1"][i]:8.3f} {d["arm"][i]:8.3f}')
+        return
+    if feat:
+        print('per voice, change vs INIT (% of one core / voice; Synth2 - Synth1 = what the change adds to the gap)')
+        print(f'{"change":26} {"Synth1":>8} {"Synth2":>8} {"gap":>8} {"arm64":>8}')
+        d = {k: [(best(k, i) - best(k, 0)) / 16 for i in range(len(scens))] for k in ('s1', 'x64', 'arm')}
+        for i, (name, *_r) in enumerate(scens[1:], 1):
+            print(f'{name:26} {d["s1"][i]:8.4f} {d["x64"][i]:8.4f} {d["x64"][i] - d["s1"][i]:8.4f} {d["arm"][i]:8.4f}')
+        return
+    idle = {}
+    for i, (name, _, voices, _n) in enumerate(scens):
+        if voices == 0:
+            idle[name.split(' idle')[0]] = i
+    print('per voice over idle (% of one core)')
+    for i, (name, _, voices, _n) in enumerate(scens):
+        base = next((j for p, j in idle.items() if name.startswith(p)), None)
+        if voices and base is not None:
+            per = [(best(k, i) - best(k, base)) / voices for k in ('s1', 'x64', 'arm')]
+            ratio = per[1] / per[0] if s1 else float('nan')
+            print(f'{name:26} {per[0]:7.4f} {per[1]:7.4f} {ratio:6.2f} {per[2]:7.4f}')
+
+
+if __name__ == '__main__':
+    main()

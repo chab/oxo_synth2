@@ -50,6 +50,13 @@ public:
     bool Releasing() const { return stage_ == Stage::Release; }
     bool Attacking() const { return stage_ == Stage::Attack; }
     double Level() const { return level_; }
+    // Next() would leave it as it is (idle, or a decay settled on its
+    // sustain): the caller may skip it and use Level()
+    bool Holding() const {
+        Adsr next = *this;
+        next.Next();
+        return next.stage_ == stage_ && next.level_ == level_;
+    }
     Stage CurrentStage() const { return stage_; }
 
     OXO_INLINE double Next() {

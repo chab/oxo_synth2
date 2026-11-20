@@ -238,6 +238,23 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO
   build` (0 warnings in our code; `CLANG_WARN_COMMA = NO` — the engine's
   compact comma style). Then `tools/au_harness`.
+- ENGINE BUILD FLAGS = THE BENCH'S, ON EVERY PRODUCT: `-O2` (MSVC /
+  clang-cl `/O2`), IEEE math (no fast-math: the engine uses NaN as a "not
+  computed" mark), the flags `tools/bench` and `tools/regress` use, so
+  what we measure and check is what ships. Where each comes from: iPad =
+  project-level Release `GCC_OPTIMIZATION_LEVEL = 2` (Xcode's default is
+  `-Os`); mac VST3 / AUv2 = `OxoSynth2VST3/CMakeLists.txt` (the Xcode
+  generator gave our target `-O1`, from Swift's `-O`, and the SDK adds
+  `-ffast-math -ffp-contract=fast`: both overridden); Windows = CMake
+  Release `/O2` + our `/fp:precise` after the SDK's `/fp:fast`; Linux =
+  `-O2 -fno-fast-math` on the target. Check after a toolchain / CMake /
+  project change: the `-O` in the compile's `*-common-args.resp` (Xcode)
+  or `xcodebuild -showBuildSettings`. Found 2026-11-20 (1.1.6 and this
+  branch until then had them): chords load (M4, % of one core) `-O2`
+  2.46, `-Os` 4.57, `-O1` fast-math 4.47; `-Os` also made the branch's
+  optimizations SLOWER than 1.1.6 (3.71): the per-case / ahead loops need
+  `-O2`. `-O3` = `-O2`; fast-math gains nothing and moves chaotic
+  patches up to -45 dBFS (regress).
 - `make -C EngineCoreTests test`, `make -C tools/s2render`, CPU bench
   `clang++ -std=c++20 -O2 tools/bench/main.cpp -o build/bench && ./build/bench`
   (16 voices, one core, Apple M4: LP12 x135, LP24 x109, LPDL x35,
@@ -270,6 +287,44 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   A/B over the line profile). Timing the ORIGINAL per feature tells how
   it works (its pulse copies cost 2x its saw copies = two reads; its sub
   copies cost the same for the four sub shapes = one read each).
+  `tools/bench/vs_synth1.py [--features]` = THE comparison (both x86_64
+  Rosetta + ours arm64, runs alternated, best / median, render time only):
+  INIT 1 / 4 / 16 voices, INIT + osc1 detune 10, Madame Eljay 010 "Roland
+  D-50" / 035 "Harmony Pad" (idle, held, scrub); `--features` = INIT 16
+  voices, one change at a time, cost per voice on each side. 2026-11-19
+  (before 9a38dae): per voice ours 1.6-1.7x Synth1 on INIT, detune, D-50,
+  1.4x Harmony Pad; ours CHEAPER on FM (0.6x) and LPDL (0.9x), and idle
+  with fx (Synth1 0.16 %, ours 0.04 %); INIT idle 0.036 % vs 0.007 %.
+  Detune was +0.012 %/voice over INIT vs Synth1's +0.007; since 1e552b0
+  +0.005 (cheaper than Synth1). The
+  gap adds up from: the SVF / ladder OUTPUT LIMITER (~25 % of an INIT
+  voice, both archs: gain lookup ~60 %, follower ~40 %; level-dependent,
+  hence HP12 / res / mix 64 cheaper than INIT for us, not for Synth1),
+  osc2 sync +0.021, mod env pitch +0.017, ring +0.013, sub +0.010, LP24
+  +0.010, osc2 pulse vs saw +0.010 (two reads; Synth1's costs the same).
+  INIT VOICE (16 voices, before 9901329), ablation shares: filter 46 %
+  (coefficient per sample 29, limiter 22), osc2 23, osc1 19, filter env
+  12, amp env 10 (arm64 alike).
+  REGRESSION: `make -C tools/regress [ARCH=x86_64]`, `build/regress/
+  regress-<arch> save|check <dir> <patches or folders>` (bit-identical
+  or residual dB, `--tolerance`, `--phrase` = the phrase only); baselines
+  per arch. 4 scenarios per patch: the phrase; knob / switch SWEEPS (one
+  param after the other over a held chord: what a still-knob or silence
+  shortcut breaks; a difference names the param swept when it starts) at
+  44.1 kHz and 96 kHz / 64-frame blocks; the phrase after 3 s of silence
+  at 48 kHz in random 1..1100-frame blocks. ~0.08 s per patch (arm64),
+  baselines ~19 MB per patch. The phrase alone missed the 1.1.8
+  effect-type bug, the sweeps caught it (-18 dBFS, effect_type). The 1.1.8
+  check (master vs HEAD, 1001 patches, NEON / SSE2 / scalar): all under
+  -130 dBFS. Scale:
+  FMA off alone (arm64) leaves 271 / 313 patches under -100 dB but
+  chaotic ones (ME 050, 113, 095) at -60..-80 dB.
+  TRIED, REJECTED (2026-11-19, the limiter): its gain at control rate
+  (held 8 samples, or predicted to the segment's middle): INIT 16 voices
+  -14 %, but D-50 / Harmony Pad / detune unchanged or worse, and residuals
+  up to -44 dB (6 dB per doubling of N: the gain RIPPLES within the
+  waveform's cycle, part of the sound); its table cell cached (exact):
+  within noise in the full loop. `--also` compares builds in one session.
   TRIED, NO GAIN (2026-11-10): linear interpolation for the copies (-2.5
   ..5 % instructions: an interpolated read costs its gather, not its
   order); skipping the filter's coefficient lookup when the cutoff did
@@ -285,7 +340,27 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   copies (`copyPhase_`, sub octave = half rate, osc1's = `<< 1`),
   stepped through `EngineCore/Simd.hpp` `P4` (SSE2 / NEON / plain C++,
   `-DOXO_SIMD_SCALAR` forces the latter: clang builds that from scalar
-  source, MSVC does not). THE VOICE LOOP IS COMPILED PER CASE: `Voice::RenderChunk` picks
+  source, MSVC does not). Without FM (osc static / moving) the copies'
+  sums are computed AHEAD per chunk (`Voice::CopiesRun`, a tight loop per
+  run of one osc1 step; a voice ending mid-chunk replays the phases): in
+  the voice loop they cost 4x (4.3 vs ~1.1 ns per voice-sample, Rosetta;
+  1e552b0); cross (FM / sync / ring) keeps them inline (osc2 per sample).
+  A HELD CUTOFF (filter env `Adsr::Holding`, no LFO on cutoff, knob
+  still) sets its coefficients once per chunk; osc2 at mix 0 is not read
+  (static oscillators only) (9901329: INIT voice 1.6x -> 1.06x Synth1).
+  Ahead loops pay only for chain-free work: the cutoff + env computed
+  ahead was 25 % SLOWER (the env's recurrence alone is latency-bound,
+  free in the voice loop); per-sample checks in the loop are not free
+  either (~2 % each on a moving-osc patch), keep them per case.
+  A MOVING CUTOFF keeps its table cell (`VoiceFilter::SetSvfCutoff` /
+  `SetLadder`: value + slope, re-read when the cutoff leaves the cell, At's
+  arithmetic) and, knob still, its clamped env target per chunk; an LFO on
+  pitch whose steps hold over the chunk takes the STATIC case (49ce6d1,
+  479a635, 9e81fb6: Harmony Pad 1.16x -> 1.02x, its scrub 1.37x -> 1.14x;
+  the approximate option, coefficients every N samples, was not needed).
+  `vs_synth1.py --split <patch>` = a patch's features one by one (Harmony
+  Pad: our fx 0.6x Synth1's hid voices at 1.54x).
+  THE VOICE LOOP IS COMPILED PER CASE: `Voice::RenderChunk` picks
   one of 18 `RenderChunkAs<kOsc, kDetune, kFilter>` (osc static / moving
   / cross = FM, ring, sync; detune; SVF / ladder / diode), same
   statements in each (`if constexpr`), so they render bit-identically.
@@ -303,7 +378,22 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   truncate by cast. Delay / chorus indices wrap by compare (`% size` = a
   64-bit division). Everything the loop calls is `OXO_INLINE` (forced).
   Per-chunk exps are cached (`Adsr::Configure`, detune ratios).
-  `Synth::Render` flushes denormals (FTZ / DAZ, x86). Keep the voice in
+  `Synth::Render` flushes denormals (FTZ / DAZ, x86). EFFECTS' SILENCE
+  GATE (`Effects.hpp` `kQuiet`, `Silent`): an effect (unit, EQ, delay,
+  chorus) whose input block is exactly 0 and whose state faded under
+  -180 dB skips the block (delay / chorus: every sample their reads can
+  reach written under it, then emptied); clocks move on (chorus LFO, ring
+  phase, decimator hold, delay glide). The effect unit zeroes only the
+  CURRENT type's state (`Rest`): another type's stays frozen for a switch
+  back (zeroing all of them cost up to -18 dBFS on a type switch during
+  silence, 1.1.8 build 15 before release). Measured on the original: its
+  effects cost ~nothing in silence (Harmony Pad idle 0.09 % of a core,
+  ours 0.42 % before the gate, 0.06 % after; x86_64 Rosetta, render
+  only). No trig in the chorus loop (sin / cos rotated per sample), no
+  exp2 in the phaser's (ratio steps). Playing, Harmony Pad 4 notes: ours
+  1.17 %, Synth1 0.98 %; without fx 1.0 % vs 0.58 %: the gap left is the
+  VOICE (~1.6-1.75x Synth1 per voice; idle without fx 0.044 % vs 0.005
+  %: voice loop / LFOs). Keep the voice in
   ONE per-sample loop (splitting the filter into its own pass made it
   latency-bound). A value the original plays as exactly 0 must be 0, not
   a fit's residue (FM 0, LFO depth 0): the residue is inaudible but
@@ -359,6 +449,15 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   run the same on any Linux box (`podman run -v $PWD:/src debian:12`).
   Actions pinned by commit SHA. "Run workflow" only lists workflows on the
   default branch; from there it runs on any branch or tag.
+  GCC vs CLANG (2026-11-18, branch `compare_linux_compilers`: workflow
+  "Compare Linux compilers" + `tools/bench/compare_compilers.sh`, tools/bench
+  with the plugin's options, best of 5, alternating, same VM): the release
+  STAYS ON GCC. x86_64 (Xeon 6975P), debian:12 and :13: clang / GCC 0.92
+  .. 1.07 per scenario, chords / scrubs 0.96 .. 1.05 = a tie (a Linux
+  user's "2x Synth1" on a Core 2 is not the compiler). aarch64 (Neoverse
+  N2): clang +9..18 % on detune + sub, chords and the 010 scrub, +22..34 %
+  on LPDL, but -7..10 % on simple patches with the release's clang 14
+  (a tie with clang 19). Revisit for aarch64 if ARM users report CPU.
 - WINDOWS INSTALLER: `tools\prepare_win_installer.bat [--skip-build]
   [--skip-validator] [--msvc] [--dynamic-crt] [--no-pause]` on Windows (+
   Inno Setup 6.3+, `winget install JRSoftware.InnoSetup`) →
@@ -731,7 +830,14 @@ VERSION: MARKETING_VERSION / CURRENT_PROJECT_VERSION in `Identity.xcconfig`
   aspect-locked, width in NSUserDefaults `oxo.synth2.editorWidth`.
 - TOOLTIPS: only `.oxoTruncationTooltip` on cut patch / bank names in the
   browser (first 0.5 s, then instant while warm); no help tips, no
-  `.help()`; hover via `onContinuousHover`.
+  `.help()`; hover via `onContinuousHover`. Bank rows list the bank's OWN
+  folder name (`BankLeafName` / `PatchBankInfo.leafName`: "a / b / c" ->
+  "c"; write dialog, LCD line 2 and its bank messages (written / copied
+  to, bank deleted) too; the delete / export dialogs keep the full name);
+  the tip ("NN:a / b / c") shows when the row is cut OR nested (`shown:`).
+  Windows / Linux: the same tip drawn in the panel (`DesktopEditor`
+  `bankTip_`, same timing, hidden by a click / key / wheel / rescan,
+  bank rows only).
 - RENDER COST (2026-11-18, user report: Logic's playhead and mouse lagged
   while the editor was on screen, fine once hidden / moved off-screen; never
   seen in Live). Logic hosts the editor OUT OF PROCESS
@@ -952,8 +1058,16 @@ original AU; keeps both renders for listening).
   LINEAR sustain. Velocity: dB = -15 (sens/64)(127-vel)/126.
 - Cutoff knob GLIDE (`measure_cutoff_glide.py`, job line `pt <s> <id>
   <norm>` = timed AU param): a new cutoff value ramps LINEARLY over 50 ms
-  whatever the step (`CutoffRamp`, snaps while silent). Other knobs: gain
-  ~instant, res / pw / mix not measured cleanly yet.
+  whatever the step (`Synth::Glide`, snaps while silent). Other knobs: gain
+  ~instant, res / pw / mix not measured cleanly yet. OURS, not measured:
+  the GAIN knob glides too (linear gain, 20 ms, `kGainGlideSeconds`): a
+  mouse drag jumps several steps per UI tick (MIDI CC: one) and zippered.
+  It snaps unless a voice sounded at the end of the previous Render (a
+  patch then its first note in one block: no glide; mono notes start
+  their voice at once, before the render). Still: the voices take the
+  knob's gain as before (bit-identical, no cost); gliding: they render
+  at gain 1 and Synth ramps their mix (a per-voice ramp in the voice
+  loop cost ~1 % ALL the time, still knob included).
 - Filter: LP12/HP12/BP12 = Chamberlin SVF ×2 iterations (input held),
   f = 2 sin(pi fc/2fs), fc = 16.7·2^(c/12.624) (c ≤ 125), d = 1-r,
   in gain 1-0.7r. LP24 = 4 bilinear one-poles + unit-delay feedback, fc

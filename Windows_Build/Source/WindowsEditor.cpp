@@ -402,8 +402,7 @@ LRESULT DesktopEditor::windowMessage(UINT msg,WPARAM wp,LPARAM lp) {
         mouseMove(float(GET_X_LPARAM(lp))/sx,float(GET_Y_LPARAM(lp))/sy);return 0;
     case WM_MOUSELEAVE:
         trackingMouseLeave_=false;
-        hoverChanged(-1,0);
-        if(typeMenuHover_>=0) {typeMenuHover_=-1;invalidateTypeMenu();}
+        mouseLeft();
         return 0;
     case WM_LBUTTONUP:mouseUp();return 0;
     case WM_CAPTURECHANGED: // lost the capture (another window, a menu): a drag is cancelled

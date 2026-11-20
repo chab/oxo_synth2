@@ -75,6 +75,7 @@ private:
         bool readOnly = false;
         std::vector<std::string> slots;
         std::wstring wideName; // for the natural sort
+        std::wstring leaf;     // its own folder's name, listed (s2::BankLeafName)
     };
     void constructLayout();
     void knob(int id, const wchar_t* label, float sx, float sy, float x, float y, float size = 24);
@@ -148,6 +149,7 @@ private:
     void mouseMove(float x, float y);
     void updateHover(float x, float y);
     void mouseUp();
+    void mouseLeft(); // the pointer left the window
     void wheel(int direction, float x, float y);
     int wheelTarget(float x, float y) const;
     // The current wheel run's owner (wheelTarget at its first event) and its
@@ -165,6 +167,26 @@ private:
     HCURSOR dragCursor();
     void openBrowser(bool writing);
     void closeBrowser();
+    // The bank list's tooltip (SynthTooltip.swift, its timing): the full
+    // "NN:parent / bank" over a row whose name is cut or nested; drawn in
+    // the panel. bank = the row under the pointer (-1 = none), kept after a
+    // click / key / wheel (dismissBankTip) so the row stays quiet until
+    // the pointer leaves it.
+    struct BankTip {
+        int bank = -1;
+        std::wstring text; // "" = nothing to show for this row
+        float x = 0, y = 0; // the pointer when it entered the row
+        uint64_t dueAt = 0; // pending: shown at this GetTickCount64
+        bool shown = false;
+    };
+    BankTip bankTip_;
+    uint64_t bankTipWarmUntil_ = 0; // a tip closed less than 5 s ago: the next one shows at once
+    void bankTipHover(float x, float y);
+    void hideBankTip();
+    void dismissBankTip();
+    void resetBankTip();
+    Gdiplus::RectF bankTipRect() const;
+    void drawBankTip(Gdiplus::Graphics& g);
     int bankRowAt(float x, float y) const; // bank (or kNewUserBank) under a point, -1 = none
     int slotAt(float x, float y) const;    // slot of the shown bank under a point, -1 = none
     bool showLibraryMenu(float x, float y, int screenX, int screenY); // false = not over a row

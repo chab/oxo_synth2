@@ -71,10 +71,9 @@ static void TimeJobs(const char *path) {
     }
     std::vector<float> l, r;
     for (const Job &job : jobs) {
-        const auto t0 = std::chrono::steady_clock::now();
-        RenderJob(job, l, r);
-        const double cpu = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-        std::printf("  %-40s x%.1f realtime\n", job.out.c_str(), (job.length + job.preroll) / cpu);
+        double cpu = 0;
+        RenderJob(job, l, r, &cpu);
+        std::printf("  %-40s x%.1f realtime\n", job.out.c_str(), job.length / cpu);
     }
 }
 
