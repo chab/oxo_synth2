@@ -5,12 +5,22 @@ rem  installer .exe, plus the .zip that actually gets hosted (that exe +
 rem  README.pdf + the raw bundle). On the Windows machine, from anywhere:
 rem
 rem    tools\prepare_win_installer.bat [--skip-build] [--skip-validator]
-rem                                    [--msvc] [--dynamic-crt] [--no-pause]
-rem                                    [--help]
+rem                                    [--msvc] [--dynamic-crt] [--msi]
+rem                                    [--no-pause] [--help]
 rem
 rem  Output: dist\win\<Product>-<version>-<build>-Windows-x64.{exe,zip}
 rem  (gitignored). VST3 only, x64.
 rem  Also run by .github/workflows/windows-release.yml (unsigned, --no-pause).
+rem
+rem  --msi: an .msi (WiX, tools\win_installer\synth2.wxs + synth2.wxl) in
+rem  place of the Inno Setup exe, same install; the zip then holds the msi.
+rem  Run by .github/workflows/windows-msi-release.yml. Needs the WiX .NET
+rem  tool + its UI and Util extensions, the versions the workflow pins:
+rem    dotnet tool install --global wix --version 7.0.1
+rem    wix extension add --global WixToolset.UI.wixext/7.0.1
+rem    wix extension add --global WixToolset.Util.wixext/7.0.1
+rem  and its EULA accepted once (wix eula accept wix7: WiX's Open Source
+rem  Maintenance Fee, see the workflow). The script never accepts it.
 rem
 rem  Steps: 1. build Release x64 (CMake + Visual Studio's clang-cl, like
 rem  build_windows.bat) into Windows_Build\build-dist-clang + run the
@@ -85,6 +95,7 @@ set "SKIP_BUILD=0"
 set "SKIP_VALIDATOR=0"
 set "STATIC_CRT=ON"
 set "NOPAUSE="
+set "MSI=0"
 
 :parse_args
 if "%~1"=="" goto args_done
@@ -93,6 +104,7 @@ if /i "%~1"=="--skip-validator" (set "SKIP_VALIDATOR=1" & shift & goto parse_arg
 if /i "%~1"=="--msvc" (set "BUILD_DIR=%SRC_DIR%\build-dist" & set "TOOLSET=" & set "COMPILER=MSVC" & shift & goto parse_args)
 if /i "%~1"=="--dynamic-crt" (set "STATIC_CRT=OFF" & shift & goto parse_args)
 if /i "%~1"=="--no-pause" (set "NOPAUSE=1" & shift & goto parse_args)
+if /i "%~1"=="--msi" (set "MSI=1" & shift & goto parse_args)
 if /i "%~1"=="--help" goto usage
 echo ERROR: unknown option: %~1 1>&2
 goto usage
@@ -122,7 +134,9 @@ set "VST3_SRC=%BUILD_DIR%\VST3\Release\%BUNDLE%"
 set "STAGED=%STAGE_DIR%\%BUNDLE%"
 set "DLL=%STAGED%\Contents\x86_64-win\%BUNDLE%"
 
-echo ==^> %PRODUCT% %VERSION% (%BUILD_NUM%) Windows installer (VST3, x64, %COMPILER%)
+set "INSTALLER_EXT=exe"
+if "%MSI%"=="1" set "INSTALLER_EXT=msi"
+echo ==^> %PRODUCT% %VERSION% (%BUILD_NUM%) Windows installer .%INSTALLER_EXT% (VST3, x64, %COMPILER%)
 if "%COMPILER%"=="MSVC" echo     !!! --msvc: the engine takes ~1.7x the CPU of the clang-cl build
 if "%STATIC_CRT%"=="ON" echo     static CRT: no VC++ redistributable needed on the user's PC
 if "%STATIC_CRT%"=="OFF" echo     !!! --dynamic-crt: the user's PC NEEDS the VC++ 2015-2022 x64 redistributable
@@ -211,7 +225,8 @@ powershell -NoProfile -Command "Get-Content -Tail 3 (Join-Path $env:DIST_DIR 'va
 rem ---------------------------------------------------------- 4. sign dll
 call :sign "%DLL%" || goto fail
 
-rem ----------------------------------------------------- 5. installer exe
+rem ------------------------------------------------- 5. installer exe / msi
+if "%MSI%"=="1" goto build_msi
 set "ISCC="
 for /f "delims=" %%i in ('where iscc 2^>nul') do if not defined ISCC set "ISCC=%%i"
 if not defined ISCC if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
@@ -222,9 +237,32 @@ echo ==^> Building the installer
 "%ISCC%" /Q "/DOxoProduct=%PRODUCT%" "/DOxoVendor=%ID_OXO_VENDOR%" "/DOxoWebsite=%ID_OXO_VENDOR_WEBSITE%" "/DOxoBundleId=%ID_OXO_BUNDLE_ID%" "/DOxoBundle=%BUNDLE%" "/DOxoDataFolder=%DATA_FOLDER%" "/DOxoLibraryFolder=%LIBRARY_FOLDER%" "/DOxoVersion=%VERSION%" "/DOxoBuild=%BUILD_NUM%" "/DOxoStageDir=%STAGE_DIR%" "/DOxoOutDir=%DIST_DIR%" "/DOxoOutName=%OUT_NAME%" "%RES_DIR%\synth2.iss"
 if errorlevel 1 (set "REASON=ISCC failed" & goto fail)
 set "INSTALLER=%DIST_DIR%\%OUT_NAME%.exe"
+goto installer_built
+
+:build_msi
+rem Not %%WIX%%: WiX 3's installer sets that variable (GitHub's image has it).
+set "WIX_EXE="
+for /f "delims=" %%i in ('where wix 2^>nul') do if not defined WIX_EXE set "WIX_EXE=%%i"
+if not defined WIX_EXE if exist "%USERPROFILE%\.dotnet\tools\wix.exe" set "WIX_EXE=%USERPROFILE%\.dotnet\tools\wix.exe"
+if not defined WIX_EXE (set "REASON=WiX not found: dotnet tool install --global wix --version 7.0.1 (header of this script)" & goto fail)
+rem MSI compares only the first 3 version fields: MARKETING_VERSION padded
+rem to 3 (1.2 -> 1.2.0) + the build number as the 4th.
+set "MV1=" & set "MV2=" & set "MV3="
+for /f "tokens=1-3 delims=." %%a in ("%VERSION%") do (set "MV1=%%a" & set "MV2=%%b" & set "MV3=%%c")
+if not defined MV2 set "MV2=0"
+if not defined MV3 set "MV3=0"
+set "MSI_VERSION=%MV1%.%MV2%.%MV3%.%BUILD_NUM%"
+set "INSTALLER=%DIST_DIR%\%OUT_NAME%.msi"
+echo ==^> Building the msi (WiX, version %MSI_VERSION%)
+"%WIX_EXE%" build -arch x64 -culture en-US -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext -loc "%RES_DIR%\synth2.wxl" -d "OxoProduct=%PRODUCT%" -d "OxoVendor=%ID_OXO_VENDOR%" -d "OxoWebsite=%ID_OXO_VENDOR_WEBSITE%" -d "OxoBundleId=%ID_OXO_BUNDLE_ID%" -d "OxoBundle=%BUNDLE%" -d "OxoDataFolder=%DATA_FOLDER%" -d "OxoLibraryFolder=%LIBRARY_FOLDER%" -d "OxoMsiVersion=%MSI_VERSION%" -d "OxoStaged=%STAGED%" -o "%INSTALLER%" "%RES_DIR%\synth2.wxs"
+if errorlevel 1 (set "REASON=wix build failed" & goto fail)
+rem wix leaves its debug symbols next to the msi.
+if exist "%DIST_DIR%\%OUT_NAME%.wixpdb" del "%DIST_DIR%\%OUT_NAME%.wixpdb"
+
+:installer_built
 if not exist "%INSTALLER%" (set "REASON=installer not produced: %INSTALLER%" & goto fail)
 
-rem ---------------------------------------------------------- 6. sign exe
+rem ---------------------------------------------------- 6. sign exe / msi
 call :sign "%INSTALLER%" || goto fail
 
 rem --------------------------------------------------------------- 7. zip
@@ -308,6 +346,7 @@ echo   --msvc             build with MSVC instead of clang-cl: no clang componen
 echo                      needed, but the engine takes ~1.7x the CPU (not for a release)
 echo   --dynamic-crt      shared MSVC runtime: the user's PC then NEEDS the
 echo                      VC++ 2015-2022 x64 redistributable
+echo   --msi              build an .msi with WiX instead of the Inno Setup exe
 echo   --no-pause         no final pause
 echo   --help             this text
 echo.

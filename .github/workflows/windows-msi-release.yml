@@ -1,0 +1,104 @@
+# Windows MSI release: the WiX .msi + the hosted zip (msi, README.pdf, raw
+# bundle), built by tools/prepare_win_installer.bat --msi exactly as on a PC
+# (clang-cl, static CRT, validator, unsigned: no certificate on GitHub).
+# Same plug-in as "Windows release" (Inno Setup exe), only the installer
+# differs: an .msi is run by Windows' own msiexec, fewer antivirus heuristics.
+# Started by hand: Actions > Windows MSI release > Run workflow, on the
+# release tag. Artifacts: the msi, the zip, their .sha256, and a build
+# provenance attestation (gh attestation verify <file> -R <owner>/<repo>
+# proves which workflow run and commit built it).
+name: Windows MSI release
+
+on:
+  workflow_dispatch:
+  # TESTING ONLY, while the msi is developed on its branch: every push
+  # builds. Remove before merging into master (manual runs only).
+  push:
+    branches: [wix-msi]
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    name: Build x64 (msi)
+    # Pinned image: Visual Studio 2022 (clang-cl toolset) + the .NET SDK
+    # (WiX is a .NET tool, pinned below; the image's WiX 3 is not used).
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      # WiX 6+ binaries come under the Open Source Maintenance Fee (OSMF):
+      # due by organizations with >= US$10,000 annual revenue using it for
+      # revenue-generating activities (sponsor the wixtoolset GitHub org).
+      # WiX 7 refuses to build until its EULA is accepted: accepting it here
+      # is the repository owner's decision, made for this workflow.
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 7.0.1
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - name: WiX extensions + EULA
+        shell: pwsh
+        run: |
+          wix --version
+          wix eula accept wix7
+          wix extension add --global WixToolset.UI.wixext/7.0.1
+          wix extension add --global WixToolset.Util.wixext/7.0.1
+          wix extension list --global
+      - name: Build, check, validate, package
+        shell: cmd
+        run: tools\prepare_win_installer.bat --msi --no-pause
+      - name: Checksums
+        id: package
+        shell: bash
+        run: |
+          cd dist/win
+          msis=(*.msi)
+          [[ ${#msis[@]} == 1 && -f ${msis[0]} ]] || { echo "ERROR: expected one msi in dist/win" >&2; exit 1; }
+          name="${msis[0]%.msi}"
+          [[ -f "$name.zip" ]] || { echo "ERROR: $name.zip missing" >&2; exit 1; }
+          sha256sum "$name.msi" > "$name.msi.sha256"
+          sha256sum "$name.zip" > "$name.zip.sha256"
+          cat "$name.msi.sha256" "$name.zip.sha256"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/win/${{ steps.package.outputs.name }}.msi
+            dist/win/${{ steps.package.outputs.name }}.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: dist/win/${{ steps.package.outputs.name }}.msi
+          archive: false
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: dist/win/${{ steps.package.outputs.name }}.msi.sha256
+          archive: false
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: dist/win/${{ steps.package.outputs.name }}.zip
+          archive: false
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: dist/win/${{ steps.package.outputs.name }}.zip.sha256
+          archive: false
+          if-no-files-found: error
+      # The script prints only the last errors: the full logs, on failure.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: logs
+          path: |
+            Windows_Build/build-dist-clang/build.log
+            dist/win/validator.log
+          if-no-files-found: ignore
+          retention-days: 7

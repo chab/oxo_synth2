@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Dialog texts of synth2.wxs (overrides of WixUI's English strings + our
+  messages). Dialog text is formatted: [ProductName], [Manufacturer] and
+  our [OXOBUNDLE] property are filled in at install time. The text boxes
+  are small (Welcome ~4 lines, Finish ~3): keep them short.
+-->
+<WixLocalization Culture="en-US" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="WelcomeDlgDescription" Value="This installs the [ProductName] VST3 plug-in (64-bit) into Common Files\VST3\[OXOBUNDLE]. Please CLOSE YOUR DAW before continuing: Windows cannot replace a plug-in that a running host has loaded." />
+  <String Id="ExitDialogDescription" Value="Start your DAW. If it does not find [ProductName], let it rescan its VST3 folders. It appears as an instrument from [Manufacturer]." />
+  <String Id="InnoInstalled" Value="New installer method: please uninstall the previous [ProductName] first (Settings &gt; Apps &gt; Installed apps &gt; [ProductName] ... (VST3)), then run this installer again. Your patches and settings are kept." />
+  <String Id="Downgrade" Value="A newer version of [ProductName] is already installed." />
+</WixLocalization>

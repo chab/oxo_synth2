@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WiX (v7) script for the WINDOWS MSI installer: the VST3 plug-in only, the
+  same install as synth2.iss (the Inno Setup exe) in Windows' own installer
+  format. An .msi is a database run by msiexec, not a third-party setup
+  program: fewer antivirus heuristics than an Inno / NSIS exe.
+
+  Never run this by hand: tools\prepare_win_installer.bat with its msi option builds the
+  plug-in, stages the bundle and passes the -d defines below, all read from
+  Identity.xcconfig (+ Identity.local.xcconfig). Needs the WiX .NET tool and
+  its UI + Util extensions (see the bat).
+
+  The .vst3 is a BUNDLE FOLDER (Contents\x86_64-win\<dll> +
+  Contents\Resources with the factory and starter banks), installed into the
+  shared 64-bit VST3 folder. Hosts scan the folder, nothing is registered.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <!--
+    Id: the upgrade identity (WiX derives the UpgradeCode from it). Derived
+    from the bundle id, so a fork (its own OXO_BUNDLE_ID) never upgrades or
+    uninstalls the official build. NEVER change it for a given identity: a
+    new id makes an update install alongside the old entry.
+    Version = MARKETING_VERSION padded to 3 fields + the build number: MSI
+    compares only the first 3, hence AllowSameVersionUpgrades (a rebuild of
+    the same version must still replace the installed one).
+  -->
+  <Package Id="$(OxoBundleId).vst3" Name="$(OxoProduct)" Manufacturer="$(OxoVendor)"
+           Version="$(OxoMsiVersion)" Language="1033" Scope="perMachine">
+    <!-- Default schedule (afterInstallValidate): the old version is fully
+         removed before the new files go in, so a factory / starter patch
+         removed in the repo does not survive an upgrade (the Inno script's
+         [InstallDelete] of Contents). -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="!(loc.Downgrade)" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Property Id="ARPURLINFOABOUT" Value="https://$(OxoWebsite)/" />
+    <Property Id="ARPHELPLINK" Value="https://$(OxoWebsite)/" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <!-- NEVER close the user's DAW for them: Restart Manager offers to kill
+         a session with unsaved work. Disabled, a locked file gets the plain
+         Files In Use dialog (close the DAW, Retry). -->
+    <Property Id="MSIRESTARTMANAGERCONTROL" Value="Disable" />
+    <!-- For the dialog texts (synth2.wxl). -->
+    <Property Id="OXOBUNDLE" Value="$(OxoBundle)" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT" Value="Patch library: Documents\$(OxoLibraryFolder), created the first time you open $(OxoProduct) (with its starter banks). Add Synth1 banks with Import... in the patch browser. Settings and themes: AppData\Roaming\$(OxoDataFolder)." />
+
+    <!-- An install made by the Inno Setup exe (its uninstall key = AppId +
+         "_is1"): both would own the same folder, and uninstalling the Inno
+         one would delete the MSI's files. Ask for its removal first. -->
+    <Property Id="OXO_INNO_INSTALL">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(OxoBundleId).vst3_is1"
+                      Name="UninstallString" Type="raw" Bitness="always64" />
+    </Property>
+    <Launch Condition="Installed OR NOT OXO_INNO_INSTALL" Message="!(loc.InnoInstalled)" />
+
+    <!-- STALE-COPY TRAP: hosts scan several VST3 folders and duplicate class
+         IDs resolve unpredictably. Only ever OUR bundle name, only in the
+         32-bit Common Files VST3 folder, and only when the search found it
+         (the property stays empty otherwise). The per-user VST3 folder of
+         the Inno script is not cleaned: from an elevated install it would
+         be the admin's profile. -->
+    <Property Id="OXO_STALE_32">
+      <DirectorySearch Id="OxoStale32" Path="[CommonFilesFolder]VST3\$(OxoBundle)" Depth="0" />
+    </Property>
+
+    <!-- The plug-in folder is FIXED: hosts only scan the standard locations. -->
+    <StandardDirectory Id="CommonFiles64Folder">
+      <Directory Id="VST3DIR" Name="VST3">
+        <Directory Id="INSTALLFOLDER" Name="$(OxoBundle)" />
+      </Directory>
+    </StandardDirectory>
+
+    <Files Include="$(OxoStaged)\**" Directory="INSTALLFOLDER" />
+
+    <!-- Hosts the stale-copy removal (a component must carry it). Registry
+         key path: its GUID is derived from the key, so it differs per
+         identity. -->
+    <Component Id="OxoStaleCopies" Directory="INSTALLFOLDER">
+      <RegistryValue Root="HKLM" Key="SOFTWARE\$(OxoVendor)\$(OxoProduct)" Name="Installed"
+                     Type="integer" Value="1" KeyPath="yes" />
+      <util:RemoveFolderEx Property="OXO_STALE_32" On="install" Condition="OXO_STALE_32" />
+    </Component>
+
+    <!--
+      WixUI_InstallDir without its license and folder pages: Welcome (the
+      "close your DAW" text) -> Ready to install -> progress -> finish.
+    -->
+    <UI Id="Synth2UI">
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Tahoma" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Tahoma" Size="9" Bold="yes" />
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+      <DialogRef Id="WelcomeDlg" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="1" Condition="NOT Installed OR PATCH" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2" Condition="Installed AND NOT PATCH" />
+      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
+    </UI>
+    <UIRef Id="WixUI_Common" />
+  </Package>
+</Wix>
