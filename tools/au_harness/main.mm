@@ -150,7 +150,9 @@ int main() {
     expect(std::strstr(h.slotPath(h.ctx, 0, 0), "001.sy1") != nullptr && *h.slotPath(h.ctx, 0, 1) == 0, "slot path");
     // import: a written patch file comes back as the "Imported" bank
     expect(h.savePatchFile(h.ctx, "/tmp/oxo_s2_harness_import.sy1") == 1, "save patch file");
-    expect(std::strstr(h.importItems(h.ctx, "/tmp/oxo_s2_harness_import.sy1"), "/Imported") != nullptr, "import");
+    const char *imported = h.importItems(h.ctx, "/tmp/oxo_s2_harness_import.sy1");
+    expect(std::strstr(imported, "patches=1") == imported, "import reports its patch count");
+    expect(std::strstr(imported, "+1 ") != nullptr && std::strstr(imported, "/Imported") != nullptr, "import");
     expect(std::strstr(h.libraryJSON(h.ctx), "\"Imported\"") != nullptr, "imported bank listed");
     // a zip put into the library: extracted on rescan, moved to the Trash
     std::system("rm -rf /tmp/oxo_s2_hz && mkdir -p /tmp/oxo_s2_hz/Z && cp /tmp/oxo_s2_harness_import.sy1 /tmp/oxo_s2_hz/Z/001.sy1"

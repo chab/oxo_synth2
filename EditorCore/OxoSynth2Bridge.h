@@ -51,7 +51,9 @@ typedef struct OxoSynth2Hooks {
     // Copies a bank as a new folder into `dir` -> that folder, "" = failed.
     const char *(*exportBank)(void *ctx, int32_t bank, const char *dir);
     // Copies folders / extracts zips / loose .sy1 into the library and
-    // rescans; paths newline-separated in, new top-level folders out.
+    // rescans; paths newline-separated in, an ImportPayload out (see
+    // EngineCore/PatchLibrary.hpp: "patches=N", "+<count> <folder>",
+    // "!<path>: <reason>") so the UI can say what landed and what did not.
     const char *(*importItems)(void *ctx, const char *paths);
     // MIDI learn (plugin-global table, persisted by the wrapper).
     int32_t (*midiCC)(void *ctx, int32_t id);                  // 0 = not learned

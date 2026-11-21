@@ -2160,6 +2160,41 @@ void DesktopEditor::wheel(int direction,float x,float y) {
     }
 }
 
+// EngineCore/PatchLibrary.hpp `ImportPayload`: "patches=N", then
+// "+<count> <folder>" per bank created, then "!<path>: <reason>" per
+// refusal. The old shape was a bare folder list, so a successful import of
+// loose .sy1 files, a full Imported bank and an unsupported pick all looked
+// like "nothing happened".
+struct ImportPayload {
+    int patches = 0;
+    int banks = 0;
+    std::vector<std::string> refused;
+
+    bool Empty() const { return patches == 0 && banks == 0; }
+};
+
+inline int LeadingNumber(const std::string& s, size_t from) {
+    int n = 0;
+    for(size_t i = from; i < s.size() && s[i] >= '0' && s[i] <= '9'; ++i) n = n * 10 + (s[i] - '0');
+    return n;
+}
+
+inline ImportPayload ParseImportPayload(const std::string& payload) {
+    ImportPayload out;
+    size_t at = 0;
+    while(at < payload.size()) {
+        size_t end = payload.find('\n', at);
+        if(end == std::string::npos) end = payload.size();
+        const std::string line = payload.substr(at, end - at);
+        at = end + 1;
+        if(line.rfind("patches=", 0) == 0) out.patches = LeadingNumber(line, 8);
+        else if(!line.empty() && line[0] == '+') ++out.banks;
+        else if(!line.empty() && line[0] == '!') out.refused.push_back(line.substr(1));
+        else if(!line.empty()) ++out.banks; // an older host: a bare folder list
+    }
+    return out;
+}
+
 void DesktopEditor::showImportDialog(int screenX,int screenY) {
     HMENU menu=CreatePopupMenu();
     AppendMenuW(menu,MF_STRING,1,L"Import .sy1 or ZIP bank...");
@@ -2169,14 +2204,22 @@ void DesktopEditor::showImportDialog(int screenX,int screenY) {
         auto import=[this](const std::wstring& path) {
             const std::string bytes=toUtf8(path);
             const char* imported=hooks_.importItems(hooks_.ctx,bytes.c_str());
-            // newline-separated added items (SynthModel.importItems)
-            const std::string added=imported ? imported : "";
-            if(added.empty())
-                messageBox(L"No new preset bank was imported. The files may already exist or may not contain valid .sy1 presets.",
-                           L"Synth2",MB_ICONINFORMATION);
+            const ImportPayload out=ParseImportPayload(imported ? imported : "");
+            if(out.Empty()) {
+                // The reasons matter here: "already in the library" and "no
+                // .sy1 inside" need different replies from the user, and the
+                // old build said only "No new preset bank was imported".
+                std::wstring why=L"Already in the library, not a bank folder / zip / .sy1, or no .sy1 presets inside.";
+                if(!out.refused.empty()) why=toWide(out.refused.front().c_str());
+                messageBox(L"Nothing was imported.\n\n"+why,L"Synth2",MB_ICONINFORMATION);
+            } else {
+                std::wstring text=L"imported "+std::to_wstring(out.patches)+
+                                  (out.patches==1?L" patch":L" patches")+L" into "+
+                                  std::to_wstring(out.banks)+(out.banks==1?L" bank":L" banks");
+                if(!out.refused.empty()) text+=L" ("+std::to_wstring(out.refused.size())+L" skipped)";
+                flash(text);
+            }
             refreshBanks();
-            if(!added.empty())
-                flash(L"imported "+std::to_wstring(std::count(added.begin(),added.end(),'\n')+(added.back()=='\n'?0:1))+L" item(s)");
             repaint();
         };
         if(selected==1) chooseFile(FileDialog::ImportFile,import);

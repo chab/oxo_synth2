@@ -53,9 +53,8 @@ public protocol SynthHost: AnyObject {
     /// Browser > Export bank: copies the bank as a new folder into `dir`;
     /// returns that folder, "" = failed.
     func exportBank(_ bank: Int, to dir: String) -> String
-    /// Copies into the library and rescans; newline-separated paths in,
-    /// the new top-level folders out.
-    func importItems(_ paths: String) -> [String]
+    /// Copies into the library and rescans; newline-separated paths in.
+    func importItems(_ paths: String) -> ImportOutcome
     /// MIDI learn: plugin-global table (0 = not learned) and the latest
     /// "a CC arrived" token ((counter << 7) | cc, 0 = none yet).
     func midiCC(_ id: Int) -> Int
@@ -123,12 +122,49 @@ private struct LibraryInfo: Decodable {
 }
 
 /// File dialogs the panel presents (NSOpenPanel / NSSavePanel on mac, the
-/// system file importer / exporter on iPad). `importFolder`: the iPad's
-/// folder picker (the mac's Import… panel takes both, `importBanks`);
-/// `exportBank`: pick the folder that receives the bank (its id).
+/// system file importer / exporter on iPad). `importFolder`: pick bank
+/// folders, `importBanks`: pick files (zips / .sy1) - two panels, because
+/// one panel taking folders and files hits neither well; `exportBank`:
+/// pick the folder that receives the bank (its id).
 enum FileAction: Equatable {
     case importBanks, importFolder, loadPatch, savePatch
     case exportBank(String)
+}
+
+/// What one Import… answered (EngineCore/PatchLibrary.hpp `ImportResult`,
+/// via the hook's newline payload): the folders created with their patch
+/// counts, a total, and why anything was left out. The old bare list of
+/// folders made a successful import, a full bank and an unsupported pick
+/// all look like "nothing happened".
+public struct ImportOutcome: Equatable {
+    public struct Added: Equatable {
+        public let path: String
+        public let patches: Int
+    }
+    public var added: [Added] = []
+    public var patches = 0
+    public var refused: [String] = []
+    public var isEmpty: Bool { added.isEmpty }
+
+    /// Decodes `patches=N` / `+<n> <folder>` / `!<path>: <reason>` lines.
+    /// A bare list of folders (an older host) still reads as "added".
+    public init(payload: String) {
+        for line in payload.split(separator: "\n", omittingEmptySubsequences: true) {
+            if line.hasPrefix("patches=") {
+                patches = Int(line.dropFirst(8)) ?? 0
+            } else if line.hasPrefix("+") {
+                let rest = line.dropFirst()
+                let count = Int(rest.prefix { $0.isNumber }) ?? 0
+                let path = rest.drop { $0.isNumber || $0 == " " }
+                if !path.isEmpty { added.append(Added(path: String(path), patches: count)) }
+            } else if line.hasPrefix("!") {
+                refused.append(String(line.dropFirst()))
+            } else {
+                added.append(Added(path: String(line), patches: 0))
+            }
+        }
+        if patches == 0 { patches = added.reduce(0) { $0 + $1.patches } }
+    }
 }
 
 /// Editor state mirrored from the host by a 30 Hz poll (host automation,
@@ -148,6 +184,10 @@ final class SynthModel: ObservableObject {
     @Published private(set) var libraryRoot = ""
     /// A background rescan is running (the browser says "loading…").
     @Published private(set) var libraryLoading = false
+    /// Last Import… result, shown in the browser header for a few seconds
+    /// (the LCD sits behind an open browser).
+    @Published private(set) var importNotice: String?
+    private var importNoticeHide: Date?
     /// `host.libraryRevision` of `banks`.
     private var libraryRevision = 0
     /// Bank shown in the browser / LCD, and the loaded program slot.
@@ -301,6 +341,10 @@ final class SynthModel: ObservableObject {
         if let hide = readoutHide, hide <= now {
             readoutHide = nil
             readout = nil
+        }
+        if let hide = importNoticeHide, hide <= now {
+            importNoticeHide = nil
+            importNotice = nil
         }
         // a session restore may bring the other mode
         if let mode = uiWidthModeStorage?.get(), mode != uiWidthMode { uiWidthMode = mode }
@@ -746,13 +790,35 @@ final class SynthModel: ObservableObject {
     /// Copies bank folders, zip banks (extracted) or loose .sy1 files into
     /// the library; selects the first new bank.
     func importItems(_ urls: [URL]) {
-        let added = SynthLibrary.withAccess(urls) { host.importItems($0) }
+        let out = SynthLibrary.withAccess(urls) { host.importItems($0) }
         loadLibrary()
-        if let first = added.first,
+        if let first = out.added.first?.path,
            let i = banks.firstIndex(where: { $0.source == first || $0.source.hasPrefix(first + "/") }) {
-            currentBank = i
+            currentBank = i // a picked container: its first bank
         }
-        flash(added.isEmpty ? "nothing imported" : "imported \(added.count) item(s)")
+        let text = Self.describe(out)
+        importNotice = text
+        importNoticeHide = Date().addingTimeInterval(5)
+        flash(text, seconds: 5)
+    }
+
+    /// "imported 3 patches into Imported" - the browser header shows this
+    /// too, because an open browser covers the LCD.
+    static func describe(_ out: ImportOutcome) -> String {
+        if out.isEmpty {
+            if let why = out.refused.first { return "nothing imported - \(why)" }
+            return "nothing imported"
+        }
+        let n = out.patches == 1 ? "1 patch" : "\(out.patches) patches"
+        var text = out.added.count == 1 && !out.added[0].path.isEmpty
+            ? "imported \(n) into \(lastPathComponent(out.added[0].path))"
+            : "imported \(n) into \(out.added.count) banks"
+        if !out.refused.isEmpty { text += " (\(out.refused.count) skipped)" }
+        return text
+    }
+
+    private static func lastPathComponent(_ p: String) -> String {
+        p.split(separator: "/").last.map(String.init) ?? p
     }
 
     func allNotesOff() {
