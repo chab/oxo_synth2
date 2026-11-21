@@ -71,8 +71,8 @@ build() {
         > "$log" 2>&1 || { tail -30 "$log"; fail "configure failed"; }
     echo "==> Building the plug-in and Steinberg's validator"
     cmake --build "$build_dir" --target OxoSynth2VST3 validator -j"$(nproc)" >> "$log" 2>&1 \
-        || { grep -E "error|Error" "$log" | head -30; fail "build failed"; }
-    grep -E "warning:" "$log" | grep -v "/third_party/" | sort -u | head -20 || true
+        || { grep -aE "error|Error" "$log" | head -30; fail "build failed"; }
+    grep -aE "warning:" "$log" | grep -v "/third_party/" | sort -u | head -20 || true
 
     bundle="$build_dir/VST3/Release/$BUNDLE"
     so="$bundle/Contents/$arch-linux/$PRODUCT_FILE.so"
@@ -102,9 +102,9 @@ build() {
     local home
     home="$(mktemp -d)" # keeps the user's library and settings out of it
     HOME="$home" "$build_dir/bin/Release/validator" "$bundle" > "$DIST_DIR/validator-$arch.log" 2>&1 \
-        || { grep -E "\[(Failed|Error)\]|Result:" "$DIST_DIR/validator-$arch.log" | head -20; fail "validator failed"; }
+        || { grep -aE "\[(Failed|Error)\]|Result:" "$DIST_DIR/validator-$arch.log" | head -20; fail "validator failed"; }
     rm -rf "$home"
-    grep "Result:" "$DIST_DIR/validator-$arch.log"
+    grep -a "Result:" "$DIST_DIR/validator-$arch.log"
 
     echo "==> EngineCoreTests"
     # -w: the Makefile's -Werror trips GCC-version-specific warnings
