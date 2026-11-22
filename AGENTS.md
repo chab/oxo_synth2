@@ -231,7 +231,11 @@ by CMake (major*65536 + minor*256 + patch, 65536 = 1.0); the iPad plist
 ## Builds and tests
 
 - `./build_vst3.sh` → builds and installs `OxoSynth2.vst3` + `Oxo
-  Synth2.component` into ~/Library/Audio/Plug-Ins. `--no-install` = build
+  Synth2.component` into ~/Library/Audio/Plug-Ins. The AUv2 arrives with
+  its `Contents/Resources/plugin.vst3` symlink replaced by a real copy of
+  the VST3 (re-signed adhoc inner-out): rsync would otherwise install a
+  link into the build tree, which breaks when the checkout moves and fails
+  a strict code seal. `--no-install` = build
   only. Validator 47/47 (`OxoSynth2VST3/build/bin/Release/validator
   <bundle>`; run it with `HOME=$(mktemp -d)` to keep your library out of
   it), `auval -v aumu OXS2 OXOM`.

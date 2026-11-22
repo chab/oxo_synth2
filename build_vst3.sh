@@ -59,5 +59,21 @@ echo "==> Installed $PLUGIN_DST_DIR/$(basename "$PLUGIN_SRC")"
 if [[ -d "$AUV2_SRC" ]]; then
   mkdir -p "$AUV2_DST_DIR"
   rsync -a --delete "$AUV2_SRC" "$AUV2_DST_DIR/"
-  echo "==> Installed $AUV2_DST_DIR/$PRODUCT_NAME.component"
+  # The AUv2 wrapper keeps its DSP in Contents/Resources/plugin.vst3, which in
+  # the build tree is a SYMLINK into OxoSynth2VST3/build. rsync copies the link
+  # as is, so the installed component breaks as soon as the checkout moves or is
+  # deleted, and a strict code seal rejects it ("invalid destination for
+  # symbolic link in bundle"). Install the real bundle instead, as
+  # tools/prepare_mac_installer does for the pkg.
+  AUV2_INNER="$AUV2_DST/Contents/Resources/plugin.vst3"
+  if [[ -L "$AUV2_INNER" ]]; then
+    rm -f "$AUV2_INNER"
+    rsync -a --exclude '.DS_Store' "$PLUGIN_SRC/" "$AUV2_INNER/"
+    # Sealing the added resource invalidates the component's signature, so sign
+    # inner-out again (adhoc: a dev install is not a release).
+    codesign --force --sign - "$AUV2_INNER"
+    codesign --force --sign - "$AUV2_DST"
+    echo "==> Replaced the AUv2 plugin.vst3 symlink with a real, signed copy"
+  fi
+  echo "==> Installed $AUV2_DST"
 fi
