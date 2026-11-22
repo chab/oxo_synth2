@@ -42,10 +42,11 @@ OXO_VST3_CONTROLLER_UID = 6373C508 18B14394 A4CBB4EF 2C6F6E28
 OXO_DATA_FOLDER = Oxo Music/Oxo Synth2
 OXO_LIBRARY_FOLDER = Oxo Music/Oxo Synth2
 
-// Version (VST3, AUv2, iPad app + extension). The AU plists' integer
-// `version` (AudioComponents) is set by hand next to it.
+// Version (VST3, AUv2, iPad app + extension). The AU's integer `version`
+// (AudioComponents): the AUv2's is derived by CMake, the iPad
+// OxoSynth2AudioUnit/Info.plist one is set by hand next to it.
 MARKETING_VERSION = 1.1.8
-CURRENT_PROJECT_VERSION = 16
+CURRENT_PROJECT_VERSION = 17
 
 // Apple signing team (iPad). Override without touching this file in a
 // gitignored Identity.local.xcconfig (any key above too).
