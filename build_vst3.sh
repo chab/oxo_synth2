@@ -44,7 +44,7 @@ rm -rf "$PLUGIN_SRC/Contents/Resources/Synth2 Factory" "$PLUGIN_SRC/Contents/Res
 
 echo "==> Building (Release)"
 cmake --build "$BUILD_DIR" --config Release -j 8 > "$BUILD_DIR.build.log" 2>&1 \
-  || { grep -E "error:|BUILD FAILED" "$BUILD_DIR.build.log" | head -30; exit 1; }
+  || { grep -aE "error:|BUILD FAILED" "$BUILD_DIR.build.log" | head -30; exit 1; }
 
 [[ -d "$PLUGIN_SRC" ]] || { echo "ERROR: built plugin not found at $PLUGIN_SRC" >&2; exit 1; }
 if [[ $INSTALL -eq 0 ]]; then
