@@ -651,8 +651,15 @@ by CMake (major*65536 + minor*256 + patch, 65536 = 1.0); the iPad plist
   (only .sy1), zips EXTRACTED into a folder of their name (one wrapping
   folder dropped, __MACOSX / dot files skipped, non-UTF-8 names cleaned),
   a Synth1 `zipbank/` folder merges into its parent, loose .sy1 →
-  "Imported" bank's next free slots; never clobbers ("Bank 2"). No export
-  (Finder). Sessions store the patch, never a bank ref.
+  "Imported" bank's next free slots; never clobbers ("Bank 2"). Returns
+  `ImportResult` → hook payload (`ImportPayload`): `patches=N`, then
+  `+<count> <folder>` per bank created, then `!<path>: <reason>` per
+  refusal (the library itself or a parent, not a folder / zip / .sy1, no
+  .sy1 inside, Imported bank full: the rest still counted). mac / iPad:
+  "imported N patches into X (k skipped)" / "nothing imported - <reason>"
+  on the LCD and the browser header (5 s); Windows / Linux: the counts on
+  the LCD, the first reason in a message box. No export (Finder).
+  Sessions store the patch, never a bank ref.
 - WRITE (Synth1): dialog = banks + 128-slot grid + name field + "New
   bank…" (the only in-app way to make one); writes `NNN.sy1` (replaces a
   differently named file that held the slot), "Overwrite NNN" when
@@ -689,10 +696,10 @@ by CMake (major*65536 + minor*256 + patch, 65536 = 1.0); the iPad plist
   own bank: only its .sy1 files. Never the factory bank, never outside the
   root; the loaded program is forgotten if its bank goes (the sound plays
   on). Bank delete asks first (in-browser `DeleteBankDialog`, Esc cancels).
-- Browser header: Import… / Open library folder / Refresh / Close (mac);
-  iPad: Import folder… (picker on `[.folder]` ALONE: mixed with file types
-  iOS navigates into folders, no Open button) / Import files… (zip / .sy1,
-  multiple) / Refresh / Close. Rescans on every open. Bank / slot menu
+- Browser header: Import folder… (picker on folders ALONE: mixed with
+  file types iOS navigates into folders, no Open button; same split on
+  mac) / Import files… (zip / .sy1, multiple) / Open library folder (mac)
+  / Refresh / Close. Rescans on every open. Bank / slot menu
   (`libraryMenu`): mac right click = [Export bank…,] Show in Finder[,
   Delete / Delete bank…]; iPad long press = [Export bank…,] [Delete /
   Delete bank…] (no delete on the factory bank); Windows right click = the
