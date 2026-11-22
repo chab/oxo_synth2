@@ -155,8 +155,11 @@ OXO_TEST(ImportCopiesFoldersExtractsZips) {
     const std::string added = m.Import(s1.string() + "\n" + (src / "Two.zip").string() + "\n" + (src / "Loose.sy1").string() +
                                        "\n" + (src / "Other.sy1").string() + "\n" + (src / "zip2" / "A").string() + "\n" +
                                        root.string() + "\n" + (src / "zip2").string() + "/");
-    OXO_EXPECT_EQ(added, (root / "Synth1Patches").string() + "\n" + (root / "Two").string() + "\n" + (root / "A").string() +
-                             "\n" + (root / "zip2").string() + "\n" + (root / "Imported").string());
+    // patches= first, then "+<count> <folder>", then "!<what>: <why>" - the
+    // library root itself is refused, not silently skipped.
+    OXO_EXPECT_EQ(added, std::string("patches=11") + "\n+4 " + (root / "Synth1Patches").string() + "\n+2 " + (root / "Two").string() +
+                             "\n+1 " + (root / "A").string() + "\n+2 " + (root / "zip2").string() + "\n+2 " +
+                             (root / "Imported").string() + "\n!" + root.string() + ": already in the library");
     OXO_EXPECT(fs::exists(root / "Synth1Patches" / "Dark" / "001.sy1"));
     OXO_EXPECT(!fs::exists(root / "Synth1Patches" / "Dark" / "readme.txt"));
     OXO_EXPECT(!fs::exists(root / "Synth1Patches" / "Nothing"));
@@ -176,7 +179,10 @@ OXO_TEST(ImportCopiesFoldersExtractsZips) {
     // a second import of loose files fills the next free slots
     m.Import((src / "Loose.sy1").string());
     OXO_EXPECT(fs::exists(root / "Imported" / "003.sy1"));
-    OXO_EXPECT(m.Import((src / "Nothing.zip").string()).empty());
+    // A failed import says so (and why) instead of looking like a no-op.
+    const std::string nothing = m.Import((src / "Nothing.zip").string());
+    OXO_EXPECT(nothing.rfind("patches=0", 0) == 0);
+    OXO_EXPECT(nothing.find("no .sy1 patches found") != std::string::npos);
     fs::remove_all(base);
 }
 

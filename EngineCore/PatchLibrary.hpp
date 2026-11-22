@@ -704,25 +704,55 @@ inline int SeedStarterBanks(const std::filesystem::path &root, const std::filesy
     return n;
 }
 
+// What an import did: the new top-level folders (the first one gets
+// selected), how many .sy1 files landed, and why anything was left out
+// ("path: reason") so the browser can say more than "nothing imported".
+struct ImportResult {
+    // Folders the import created, each with how many .sy1 files landed in
+    // it, so the browser can say "3 patches into Imported" and not just a
+    // total.
+    std::vector<std::pair<std::filesystem::path, int>> added;
+    std::vector<std::string> refused;
+    int patches = 0;
+    bool Empty() const { return added.empty(); }
+};
+
+// The C-hook / IPC shape: one "patches=N" line, then "+<count> <folder>"
+// per added bank, then "!<path>: <reason>" per refusal.
+inline std::string ImportPayload(const ImportResult &r) {
+    std::string out = "patches=" + std::to_string(r.patches);
+    for (const auto &a : r.added) out += "\n+" + std::to_string(a.second) + " " + a.first.string();
+    for (const auto &s : r.refused) out += "\n!" + s;
+    return out;
+}
+
 // "Import…": COPIES what the user picked into the library root. A folder (a
 // bank, a container, a whole Synth1 bank folder) is copied, a zip is
 // extracted into a folder of its name, loose .sy1 files fill the free slots
-// of the "Imported" bank. Never clobbers ("Bank 2"). Returns the new
-// top-level folders (the first one gets selected).
-inline std::vector<std::filesystem::path> ImportItems(const std::filesystem::path &root,
-                                                      const std::vector<std::filesystem::path> &items) {
-    std::vector<std::filesystem::path> added, loose;
+// of the "Imported" bank. Never clobbers ("Bank 2"). Anything skipped is
+// reported in `refused` - a silent no-op looked like a broken import.
+inline ImportResult ImportItems(const std::filesystem::path &root, const std::vector<std::filesystem::path> &items) {
+    ImportResult r;
+    std::vector<std::filesystem::path> loose;
     std::error_code ec;
     for (std::filesystem::path p : items) {
         if (p.filename().empty()) p = p.parent_path(); // "dir/"
         const std::filesystem::path rel = root.lexically_relative(p);
-        if (!rel.empty() && *rel.begin() != "..") continue; // the library itself (or a parent)
+        if (!rel.empty() && *rel.begin() != "..") {
+            r.refused.push_back(p.string() + ": already in the library");
+            continue;
+        }
         std::filesystem::path dest;
         int n = 0;
         if (std::filesystem::is_directory(p, ec)) n = CopyBankTree(p, dest = UniquePath(root / SafeName(p.filename().string())));
         else if (Lower(p.extension().string()) == ".zip") n = ExtractZipBank(p, dest = UniquePath(root / SafeName(p.stem().string())));
-        else if (IsSy1(p.filename().string())) loose.push_back(p);
-        if (n > 0) added.push_back(dest);
+        else if (IsSy1(p.filename().string())) { loose.push_back(p); continue; }
+        else {
+            r.refused.push_back(p.string() + ": not a bank folder, a zip or a .sy1 patch");
+            continue;
+        }
+        if (n > 0) { r.added.emplace_back(dest, n); r.patches += n; }
+        else r.refused.push_back(p.string() + ": no .sy1 patches found");
     }
     if (!loose.empty()) {
         const std::filesystem::path bank = root / "Imported";
@@ -731,20 +761,21 @@ inline std::vector<std::filesystem::path> ImportItems(const std::filesystem::pat
         existing.Scan(bank);
         const int b = existing.FindBySource(bank.string());
         size_t next = 0;
-        int n = 0;
+        int n = 0, full = 0;
         for (const auto &p : loose) {
             while (next < size_t(kBankSlots) && ((b >= 0 && !existing.Banks()[size_t(b)].slots[next].Empty()) ||
                                                  std::filesystem::exists(bank / SlotFileName(int(next)), ec)))
                 ++next;
-            if (next >= size_t(kBankSlots)) break;
+            if (next >= size_t(kBankSlots)) { ++full; continue; } // keep going: say how many were left out
             n += std::filesystem::copy_file(p, bank / SlotFileName(int(next++)), ec);
         }
-        if (n > 0) added.push_back(bank);
+        if (n > 0) { r.added.emplace_back(bank, n); r.patches += n; }
+        if (full > 0) r.refused.push_back("Imported bank is full (" + std::to_string(kBankSlots) + " patches): " + std::to_string(full) + " left out");
     }
-    return added;
+    return r;
 }
 
-// Same, paths as newline-separated text in and out (C hooks).
+// Paths as newline-separated text in, the payload above out (C hooks).
 inline std::string ImportItemsText(const std::filesystem::path &root, const std::string &paths) {
     std::vector<std::filesystem::path> items;
     for (size_t at = 0; at < paths.size();) {
@@ -753,9 +784,7 @@ inline std::string ImportItemsText(const std::filesystem::path &root, const std:
         if (end > at) items.emplace_back(paths.substr(at, end - at));
         at = end + 1;
     }
-    std::string out;
-    for (const auto &p : ImportItems(root, items)) out += (out.empty() ? "" : "\n") + p.string();
-    return out;
+    return ImportPayload(ImportItems(root, items));
 }
 
 // ---- the user's library: one root folder + operations -------------------------

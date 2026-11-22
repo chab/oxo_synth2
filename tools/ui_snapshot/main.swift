@@ -60,7 +60,7 @@ final class MockHost: SynthHost {
     func copyPatch(bank: Int, slot: Int, to: Int) -> Int { 0 }
     func deleteBank(_ bank: Int) -> Int { 1 }
     func exportBank(_ bank: Int, to dir: String) -> String { "" }
-    func importItems(_ paths: String) -> [String] { [] }
+    func importItems(_ paths: String) -> ImportOutcome { ImportOutcome(payload: "patches=0") }
     func name(_ id: Int) -> String { "param \(id)" }
     func displayName(_ id: Int) -> String { name(id) }
     var learned: [Int: Int] = [19: 74, 20: 71]
