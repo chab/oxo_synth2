@@ -2052,6 +2052,7 @@ void DesktopEditor::mouseDown(float x,float y,bool doubleClick) {
             }
             dragId_=c.id;dragStartY_=y;dragStartValue_=value(c.id);
             if(hooks_.beginEdit)hooks_.beginEdit(hooks_.ctx,c.id);
+            show(c.id);
             SetCapture(window_);return;
         case Kind::Toggle:
         case Kind::Badge: setValueOnce(c.id,value(c.id)?0:1);return;
