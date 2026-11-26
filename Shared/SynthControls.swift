@@ -179,12 +179,26 @@ private func shiftHeld() -> Bool {
 
 /// In learn mode a control stops taking input and wears a hotspot instead
 /// (Oxo Simple's look): dim border = not learned, bright 2 pt border = armed
-/// and waiting for a CC, learn-colour fill + CC badge = learned. Tap arms,
-/// double-tap unlearns.
+/// and waiting for a CC, learn-colour fill + CC badge = learned. A press
+/// arms AT ONCE, a double click unlearns and leaves the selection as before
+/// it (the Windows / Linux editor's rule). Not `.onTapGesture(count: 2)` +
+/// `.onTapGesture`: SwiftUI then holds every single tap for the
+/// double-click interval (0.5 s by default) before arming.
 private struct Learnable: ViewModifier {
     @ObservedObject var model: SynthModel
     let id: Int
     @Environment(\.editorScale) private var scale
+    /// This control's last arming press: when, and what was armed before it.
+    @State private var lastPress: (time: Date, previous: Int?)?
+    @State private var pressing = false
+
+    private static var doubleClickInterval: TimeInterval {
+        #if os(macOS)
+        return NSEvent.doubleClickInterval
+        #else
+        return 0.35
+        #endif
+    }
 
     func body(content: Content) -> some View {
         content
@@ -206,10 +220,27 @@ private struct Learnable: ViewModifier {
                     }
                     .uiPadding(.all, -3)
                     .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { model.learnUnlearn(id) }
-                    .onTapGesture { model.learnSelect(id) }
+                    .gesture(DragGesture(minimumDistance: 0)
+                        .onChanged { _ in
+                            guard !pressing else { return }
+                            pressing = true
+                            press()
+                        }
+                        .onEnded { _ in pressing = false })
                 }
             }
+    }
+
+    private func press() {
+        let now = Date()
+        if let last = lastPress, now.timeIntervalSince(last.time) < Self.doubleClickInterval {
+            lastPress = nil
+            model.learnUnlearn(id)
+            model.learnSelect(last.previous)
+        } else {
+            lastPress = (now, model.learnSelection)
+            model.learnSelect(id)
+        }
     }
 }
 

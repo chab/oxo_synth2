@@ -815,8 +815,12 @@ by CMake (major*65536 + minor*256 + patch, 65536 = 1.0); the iPad plist
   again while the write dialog is open = its Write (save in place: click,
   click).
 - MIDI LEARN: menu > MIDI Learn → every control wears a hotspot (dim =
-  unlearned, bright = armed, blue + CC badge = learned); tap arms,
-  double-tap clears, the next CC (any channel, 1..127) is assigned, one CC
+  unlearned, bright = armed, blue + CC badge = learned); a PRESS arms at
+  once, a double click clears and restores the previous selection (all
+  editors). SwiftUI: never `.onTapGesture(count: 2)` next to a single tap
+  where the single one must be instant: SwiftUI holds it for the
+  double-click interval (learn arming took ~0.5 s after the release);
+  detect the second press by hand (`Learnable`). The next CC (any channel, 1..127) is assigned, one CC
   may drive several params; "Exit MIDI Learn" chip; never survives the
   editor. Table = PLUGIN-GLOBAL `midi_mappings.json` ({param key: cc}),
   empty by default. The controller owns + saves it and sends "OxoMidiLearn"
