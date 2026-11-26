@@ -841,6 +841,35 @@ by CMake (major*65536 + minor*256 + patch, 65536 = 1.0); the iPad plist
   = mac, the iPad gets themes only), themes. Resize = C callback
   passed to `OxoSynth2EditorCreate` → `plugFrame->resizeView`. Window
   aspect-locked, width in NSUserDefaults `oxo.synth2.editorWidth`.
+- SCALING (issue #19): the SwiftUI panel is LAID OUT at its final size,
+  never stretched (a `.scaleEffect` magnified layers rendered at 770 pt:
+  text and lines went soft at every size above 100 %). The 770 x 560 grid
+  stays the coordinate system; `\.editorScale` (view points per design
+  point, set once in `SynthPanelView.panel`) multiplies every design number
+  where it is applied: `place`, `uiFrame` / `uiPosition` / `uiOffset` /
+  `uiPadding` / `uiFont` (`PanelFont`) / `uiShadow`, `scale *` inline for
+  stack spacing, corner radii, line widths; `PanelCanvas` / `FlatCanvas`
+  draw in design points (context scaled: paths, text, filter radii);
+  gesture distances are divided back (`/ scale`). A raw `.frame(width: 40)`
+  / `.font(.system(size: 11))` in the panel is a bug (fine at 100 %, wrong
+  elsewhere). Exception: a `.borderlessButton` Menu label keeps PLAIN
+  `.font` / `.frame` on its Text (AppKit rebuilds it from them; a `ui*`
+  wrapper hides them, `MenuDisplay`). `KnobFace` is drawn at scale too,
+  but its DIAL alone gets a small blur above 100 % (`KnobFace.dialFeather`,
+  0 at 100 % = byte-identical, ~half the old stretched rendering's softness
+  above): crisp, the 2 pt dial's edges stepped visibly while it turned
+  (user, 2026-11-26). CPU per update = a stretched knob's (the bench below, 770 / 1155 / 1540 pt; the knob canvases
+  are not the cost, SwiftUI's update of the view graph is: splitting the
+  knob into a static face + a dial canvas or a rotated dial layer was
+  +5 %, more views). A snapshot (`cacheDisplay`) draws a `scaleEffect`
+  sharp: judge rendering on a LIVE capture, `CGWindowListCreateImage`
+  (via dlsym, obsoleted in the SDK) of the tool's own on-screen window
+  needs no screen-recording permission. Check: `SNAP_W=770` snapshots are
+  byte-identical before / after a refactor (scale 1; the tool reads YOUR
+  themes.json: pin `themeText = ThemePalette.synth2.stateText` in a temp
+  copy of the mock when comparing across time), then compare
+  `SNAP_W=1540` for misplaced parts. Text over ~20 pt is set slightly
+  tighter than 2x (SF optical sizes): expected, not a bug.
 - TOOLTIPS: only `.oxoTruncationTooltip` on cut patch / bank names in the
   browser (first 0.5 s, then instant while warm); no help tips, no
   `.help()`; hover via `onContinuousHover`. Bank rows list the bank's OWN
@@ -867,6 +896,16 @@ by CMake (major*65536 + minor*256 + patch, 65536 = 1.0); the iPad plist
   (`KnobFace`, `FlatCanvas` + `GraphicsContext.glow` / `strokeBorder` in
   SynthControls.swift: knobs, button faces, LEDs, wave cells, value
   displays); prefer one Canvas over a stack of shapes for repeated widgets.
+  `FlatCanvas(bleed:key:)`: `key` = everything its draw closure reads
+  (state, theme, text); unchanged key = no redraw (a closure is not
+  comparable: before, all 57 redrew on every value change). A value
+  missing from the key = a stale drawing. The `ui*` helpers are value-type
+  ViewModifiers (compared, skipped), not closures. Bench (2026-11-26,
+  issue #19 follow-up): fixed-work loop, the mock's poll() made callable
+  in a temp copy, 400 forced updates (3 knobs + a display automated,
+  voice grid) x 5, min CPU per update: pre-#19 5.09 / 5.07 / 5.05 ms at
+  770 / 1050 / 1400 pt, #19 as first landed 5.45 / 5.76 / 5.70, with keys
+  4.62 / 4.78 / 4.77; precise to ~1 % where 10 s timed runs are +-2 points.
   Dialogs / menus shown on demand may keep `.shadow`. No `.drawingGroup()`
   (Metal layers cannot be remoted, Oxo Steps), `.compositingGroup()` did
   nothing here. How it was found (reuse it): temporary title-band chips each

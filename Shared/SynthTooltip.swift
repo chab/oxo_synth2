@@ -218,6 +218,8 @@ private struct OxoTooltipSource: ViewModifier {
     let font: (size: CGFloat, weight: Font.Weight, monospaced: Bool)?
     let optional: Bool
     @Environment(\.oxoTooltipCenter) private var center
+    /// `font.size` is in design points; the Text is drawn at size x scale.
+    @Environment(\.editorScale) private var scale
     @State private var tracker = OxoTooltipTracker()
 
     func body(content: Content) -> some View {
@@ -255,7 +257,7 @@ private struct OxoTooltipSource: ViewModifier {
     private var isCut: Bool {
         guard let font else { return true }
         if let shown, shown != text { return true }
-        return OxoTextMetrics.width(of: shown ?? text, size: font.size, weight: font.weight, monospaced: font.monospaced)
+        return OxoTextMetrics.width(of: shown ?? text, size: font.size * scale, weight: font.weight, monospaced: font.monospaced)
             > tracker.width + 1
     }
 }
@@ -283,6 +285,7 @@ private struct OxoTooltipHost: ViewModifier {
 private struct OxoTooltipLayer: View {
     let center: OxoTooltipCenter
     @Environment(\.theme) private var theme
+    @Environment(\.editorScale) private var scale
     @State private var bubbleSize: CGSize = .zero
 
     private static let margin: CGFloat = 4
@@ -291,27 +294,28 @@ private struct OxoTooltipLayer: View {
         GeometryReader { proxy in
             if let tip = center.tip {
                 Text(tip.text)
-                    .font(.system(size: 10))
+                    .uiFont(10)
                     .foregroundStyle(Theme.lcdText)
                     .lineLimit(1)
                     .fixedSize()
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
+                    .uiPadding(.horizontal, 6)
+                    .uiPadding(.vertical, 3)
                     .background(theme.lcdBottom)
-                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.black.opacity(0.8), lineWidth: 1))
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                    .shadow(color: .black.opacity(0.35), radius: 4, x: 0, y: 2)
+                    .overlay(RoundedRectangle(cornerRadius: 4 * scale).stroke(Color.black.opacity(0.8), lineWidth: scale))
+                    .clipShape(RoundedRectangle(cornerRadius: 4 * scale))
+                    .uiShadow(color: .black.opacity(0.35), radius: 4, y: 2)
                     .onGeometryChange(for: CGSize.self) { $0.size } action: { bubbleSize = $0 }
                     .offset(origin(for: tip.location, in: proxy.size))
             }
         }
     }
 
+    /// View points (the pointer, the bubble and the host are), offsets scaled.
     private func origin(for pointer: CGPoint, in bounds: CGSize) -> CGSize {
-        let m = Self.margin
-        let x = min(max(m, pointer.x + 10), bounds.width - bubbleSize.width - m)
-        var y = pointer.y + 18
-        if y + bubbleSize.height > bounds.height - m { y = pointer.y - bubbleSize.height - 6 }
+        let m = Self.margin * scale
+        let x = min(max(m, pointer.x + 10 * scale), bounds.width - bubbleSize.width - m)
+        var y = pointer.y + 18 * scale
+        if y + bubbleSize.height > bounds.height - m { y = pointer.y - bubbleSize.height - 6 * scale }
         return CGSize(width: max(m, x), height: max(m, y))
     }
 }
