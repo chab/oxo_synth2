@@ -697,7 +697,7 @@ void DesktopEditor::buildLearnRects() {
 void DesktopEditor::setLearn(bool on) {
     if(on && browser_) closeBrowser(); // SynthModel.toggleLearn
     midiLearn_=on;
-    learnTarget_=learnPrevTarget_=-1;
+    learnTarget_=-1;
     if(on) {
         if(hooks_.lastCC) lastCcToken_=hooks_.lastCC(hooks_.ctx);
         for(int id=0;id<kLearnCount;id++) learnCC_[size_t(id)]=hooks_.midiCC ? hooks_.midiCC(hooks_.ctx,id) : 0;
@@ -2011,19 +2011,16 @@ void DesktopEditor::mouseDown(float x,float y,bool doubleClick) {
     // Learn mode: a hotspot takes the click (the controls under it stop
     // taking input); the others (volume, ctrl src / assign menus) still work.
     if(const int id=midiLearn_ ? learnHit(x,y) : -1; id>=0) {
+        // A double click clears its CC; the control stays armed (the
+        // first click of the pair armed it), like the mac / iPad editor.
+        learnSelect(id);
         if(doubleClick) {
-            // The first click of the pair armed it: the mac's double tap
-            // leaves the selection as it was.
             if(learnCC_[size_t(id)] && hooks_.setMidiCC) {
                 hooks_.setMidiCC(hooks_.ctx,id,0);
                 flash(L"MIDI LEARN: "+toWide(hooks_.paramName ? hooks_.paramName(hooks_.ctx,id) : "")+L" cleared");
             }
             learnCC_[size_t(id)]=0;
-            learnSelect(learnPrevTarget_);
             invalidate(learnRects_[size_t(id)]);
-        } else {
-            learnPrevTarget_=learnTarget_;
-            learnSelect(id);
         }
         return;
     }

@@ -470,8 +470,7 @@ final class SynthModel: ObservableObject {
         learnSelection = nil
     }
 
-    /// nil = none armed.
-    func learnSelect(_ id: Int?) {
+    func learnSelect(_ id: Int) {
         guard learnActive else { return }
         learnSelection = id
     }
