@@ -816,8 +816,7 @@ by CMake (major*65536 + minor*256 + patch, 65536 = 1.0); the iPad plist
   click).
 - MIDI LEARN: menu > MIDI Learn → every control wears a hotspot (dim =
   unlearned, bright = armed, blue + CC badge = learned); a PRESS arms at
-  once, a double click clears and restores the previous selection (all
-  editors). SwiftUI: never `.onTapGesture(count: 2)` next to a single tap
+  once, a double click clears its CC and it STAYS armed (all editors). SwiftUI: never `.onTapGesture(count: 2)` next to a single tap
   where the single one must be instant: SwiftUI holds it for the
   double-click interval (learn arming took ~0.5 s after the release);
   detect the second press by hand (`Learnable`). The next CC (any channel, 1..127) is assigned, one CC

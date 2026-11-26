@@ -180,16 +180,16 @@ private func shiftHeld() -> Bool {
 /// In learn mode a control stops taking input and wears a hotspot instead
 /// (Oxo Simple's look): dim border = not learned, bright 2 pt border = armed
 /// and waiting for a CC, learn-colour fill + CC badge = learned. A press
-/// arms AT ONCE, a double click unlearns and leaves the selection as before
-/// it (the Windows / Linux editor's rule). Not `.onTapGesture(count: 2)` +
+/// arms AT ONCE, a double click unlearns and the control stays armed (all
+/// editors). Not `.onTapGesture(count: 2)` +
 /// `.onTapGesture`: SwiftUI then holds every single tap for the
 /// double-click interval (0.5 s by default) before arming.
 private struct Learnable: ViewModifier {
     @ObservedObject var model: SynthModel
     let id: Int
     @Environment(\.editorScale) private var scale
-    /// This control's last arming press: when, and what was armed before it.
-    @State private var lastPress: (time: Date, previous: Int?)?
+    /// This control's last arming press.
+    @State private var lastPress: Date?
     @State private var pressing = false
 
     private static var doubleClickInterval: TimeInterval {
@@ -233,13 +233,12 @@ private struct Learnable: ViewModifier {
 
     private func press() {
         let now = Date()
-        if let last = lastPress, now.timeIntervalSince(last.time) < Self.doubleClickInterval {
+        model.learnSelect(id)
+        if let last = lastPress, now.timeIntervalSince(last) < Self.doubleClickInterval {
             lastPress = nil
             model.learnUnlearn(id)
-            model.learnSelect(last.previous)
         } else {
-            lastPress = (now, model.learnSelection)
-            model.learnSelect(id)
+            lastPress = now
         }
     }
 }
