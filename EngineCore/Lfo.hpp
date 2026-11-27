@@ -117,4 +117,53 @@ private:
     uint32_t state_ = kSeed;
 };
 
+// (measured: the gain of a pulse probe, LFO on amp vs none, the original vs
+// ours) ON AMP the original does not follow the LFO per sample, its gain moves
+// on control KNOTS every N samples of the host block (N = 64 up to 10 Hz, 32
+// above, LFO rate in Hz, tempo sync too; samples at any sample rate):
+//   saw, triangle, sine   the value at a knot is reached at the next one,
+//                 linearly (an N-sample lag, the saw's jump = an N-sample
+//                 ramp, the triangle's corners cut);
+//   square, S&H   a step at sample t ramps LINEARLY from t to the next
+//                 256-sample boundary (Voice::AmpGain's grid), a step in a
+//                 256 block's first N samples from its first knot: ramps of
+//                 N..256 samples where ours jumped in one sample (clicks);
+//   smooth random unchanged, per sample (its amp form's jumps ramp over N
+//                 samples or to the boundary: rule not found).
+// A key-sync restart (and the first chunk routed to amp) starts at the
+// LFO's value, no ramp (measured on key-synced notes).
+class LfoAmpShaper {
+public:
+    static constexpr double kFastHz = 10.0; // (measured: 10.00 Hz -> 64, 10.05 -> 32)
+    void Snap() { snap_ = true; }
+    // v[0..n) = the LFO's values at `hz` (in place); at = v[0]'s offset in
+    // the host block, blockEnd = the block's length.
+    void Process(double *v, int n, int type, double hz, int64_t at, int64_t blockEnd) {
+        if (type != type_) snap_ = true, type_ = type;
+        if (type == 4) return;
+        const int knot = hz > kFastHz ? 32 : 64;
+        for (int i = 0; i < n; ++i, ++at) {
+            const int o = int(at & 255);
+            if (type == 2 || type == 3) {
+                if (o == 0 || snap_) latch_ = v[i];
+                const double target = o < knot ? latch_ : v[i];
+                if (snap_) cur_ = target, snap_ = false;
+                cur_ += (target - cur_) / double(std::max<int64_t>(1, std::min<int64_t>(256 - o, blockEnd - at)));
+                v[i] = cur_;
+            } else {
+                if ((at & (knot - 1)) == 0 || snap_) {
+                    from_ = snap_ ? v[i] : from_ + (to_ - from_) * std::min(1.0, since_ / len_);
+                    to_ = v[i], since_ = 0, len_ = knot, snap_ = false;
+                }
+                v[i] = from_ + (to_ - from_) * std::min(1.0, since_++ / len_);
+            }
+        }
+    }
+
+private:
+    bool snap_ = true;
+    double cur_ = 0, latch_ = 0, from_ = 0, to_ = 0, since_ = 0, len_ = 32;
+    int type_ = -1;
+};
+
 } // namespace oxo::s2
