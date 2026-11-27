@@ -541,6 +541,12 @@ by CMake (major*65536 + minor*256 + patch, 65536 = 1.0); the iPad plist
   order). Naming quirk: params 50 / 51 are called speed / amount sens in
   Params.hpp but 50 drives assign1 (default lfo1 DEPTH); keys kept for
   saved MIDI-learn maps.
+- 86–89 and 94 are NOT automatable (`automatable = false`, like the
+  original): VST3 flags 0 (AUv2: writable + NonRealTime), NEVER
+  `kIsReadOnly`. The editor sets them through `performEdit` like any
+  param; Studio One drops edits of a read-only param, so up to 1.1.8 its
+  polyphony stayed at 16 whatever the panel showed (Reaper / Live
+  forward them anyway).
 - Hidden proxies: pitch bend 1000, channel pressure 1001, CC n = 1100 + n
   (IMidiMapping). Hidden read-only OUTPUT params: 1300 = MIDI learn "last
   CC" token; 1301..1304 = voice activity for the panel's 2x16 grid (8
