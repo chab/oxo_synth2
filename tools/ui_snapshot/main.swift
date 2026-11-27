@@ -1,6 +1,6 @@
 // Renders the editor with a mock host to PNG (layout eye-check without a DAW).
 //   swiftc Shared/*.swift tools/ui_snapshot/main.swift -o build/ui/snap
-//   ./build/ui/snap out.png [browser|browser-loading|loading|write|write-factory|write-new-user|learn|themes|logo|logo-ipad|ipad|ipad-wide|effect|delay|chorus|lfo1|lfo2|update|delete-bank]
+//   [SNAP_W=<window width, default 1155 = 150 %; 770 = scale 1>] ./build/ui/snap out.png [browser|browser-loading|loading|write|write-factory|write-new-user|learn|themes|logo|logo-ipad|ipad|ipad-wide|effect|delay|chorus|lfo1|lfo2|update|delete-bank]
 import AppKit
 import SwiftUI
 
@@ -118,7 +118,7 @@ if args.count > 2 {
         if args[2] == "delete-bank" { model.bankToDelete = model.banks[0].id }
     }
 }
-let width = 1155.0
+let width = Double(ProcessInfo.processInfo.environment["SNAP_W"] ?? "") ?? 1155
 let height = args.count > 2 && args[2] == "ipad-wide" ? 600.0
     : width * SynthPanelView.designSize.height / SynthPanelView.designSize.width
 MainActor.assumeIsolated {

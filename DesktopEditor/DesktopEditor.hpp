@@ -272,7 +272,6 @@ private:
     bool writing_ = false;
     bool midiLearn_ = false;
     int learnTarget_ = -1;
-    int learnPrevTarget_ = -1; // before a click: a double click restores it (as the mac's double tap)
     // MIDI learn hotspots (SynthControls' .learnable): one per patch param,
     // around all its controls; empty = not learnable.
     static constexpr int kLearnCount = 99; // patch params (SynthModel.paramCount)

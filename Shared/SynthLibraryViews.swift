@@ -39,16 +39,16 @@ struct BottomBar: View {
                     .place(758 - VoiceGrid.size.width, 34 - VoiceGrid.size.height / 2, VoiceGrid.size.width, VoiceGrid.size.height)
             } else {
                 Button(action: { model.exitLearn() }) {
-                    Text("Exit MIDI Learn").font(.system(size: 12, weight: .semibold))
+                    Text("Exit MIDI Learn").uiFont(12, weight: .semibold)
                         .foregroundColor(Color(red: 0.95, green: 0.87, blue: 0.87))
-                        .frame(width: 200, height: 28)
-                        .background(RoundedRectangle(cornerRadius: 4).fill(Theme.red))
-                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.black.opacity(0.6), lineWidth: 1))
+                        .uiFrame(width: 200, height: 28)
+                        .background(RoundedRectangle(cornerRadius: 4 * scale).fill(Theme.red))
+                        .overlay(RoundedRectangle(cornerRadius: 4 * scale).strokeBorder(Color.black.opacity(0.6), lineWidth: scale))
                 }
                 .buttonStyle(.plain)
                 .place(540, 4, 200, 28)
                 Text("Click a control, then move a controller knob.\nDouble-click a control to clear its CC.")
-                    .font(.system(size: 9.5)).foregroundColor(theme.dimInk).fixedSize()
+                    .uiFont(9.5).foregroundColor(theme.dimInk).fixedSize()
                     .place(540, 36, 210, 30)
             }
         }
@@ -68,25 +68,25 @@ struct BottomBar: View {
     private var lcd: some View {
         ZStack(alignment: .topLeading) {
             // Synth1: a click on the display opens the patch browser.
-            RoundedRectangle(cornerRadius: 4)
+            RoundedRectangle(cornerRadius: 4 * scale)
                 .fill(LinearGradient(colors: [theme.lcdTop, theme.lcdBottom], startPoint: .top, endPoint: .bottom))
-                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.black, lineWidth: 1.5))
+                .overlay(RoundedRectangle(cornerRadius: 4 * scale).strokeBorder(Color.black, lineWidth: 1.5 * scale))
                 .onTapGesture { toggleBrowser() }
             Text(programPrefix + model.patchName)
-                .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                .uiFont(17, weight: .semibold, design: .monospaced)
                 .foregroundColor(Theme.lcdText)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
                 .onTapGesture { toggleBrowser() }
                 .place(10, 6, 328, 26)
-            HStack(spacing: 4) {
+            HStack(spacing: 4 * scale) {
                 PanelButton(title: "◀", width: 36, height: 20) { model.step(-1) }
                 PanelButton(title: "▶", width: 36, height: 20) { model.step(1) }
             }
             .place(348, 9, 76, 20)
             Text(model.readout ?? bankLine)
-                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                .uiFont(13, weight: .medium, design: .monospaced)
                 .foregroundColor(model.readout == nil ? Theme.lcdText.opacity(0.85) : theme.displayText)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -144,8 +144,8 @@ struct BottomBar: View {
         } label: {
             // .button + .plain: the label is drawn as-is (centred), not
             // re-laid out by the borderless menu style.
-            Text("menu").font(.system(size: 11, weight: .semibold)).foregroundColor(Theme.buttonText)
-                .frame(width: 50, height: 26)
+            Text("menu").uiFont(11, weight: .semibold).foregroundColor(Theme.buttonText)
+                .uiFrame(width: 50, height: 26)
                 .background(ButtonFace())
                 .contentShape(Rectangle())
         }
@@ -153,7 +153,7 @@ struct BottomBar: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .menuOrder(.fixed)
-        .frame(width: 50, height: 26)
+        .uiFrame(width: 50, height: 26)
     }
 }
 
@@ -170,7 +170,7 @@ struct VoiceGrid: View {
 
     var body: some View {
         let states = activity.states, poly = polyphony
-        Canvas { ctx, _ in
+        PanelCanvas { ctx, _ in
             let c = Self.cell
             for i in 0..<Self.columns * Self.rows {
                 let rect = CGRect(x: 0.5 + CGFloat(i % Self.columns) * c, y: 0.5 + CGFloat(i / Self.columns) * c, width: c, height: c)
@@ -191,7 +191,7 @@ struct VoiceGrid: View {
             }
             ctx.stroke(lines, with: .color(theme.ink.opacity(0.12)), lineWidth: 1)
         }
-        .frame(width: Self.size.width, height: Self.size.height)
+        .uiFrame(width: Self.size.width, height: Self.size.height)
         .allowsHitTesting(false)
     }
 }
@@ -208,6 +208,7 @@ struct VoiceGrid: View {
 struct PatchBrowserView: View {
     @ObservedObject var model: SynthModel
     @Environment(\.theme) private var theme
+    @Environment(\.editorScale) private var scale
     @State private var target: Int?
     @State private var name = ""
     @State private var newBankName = ""
@@ -233,21 +234,21 @@ struct PatchBrowserView: View {
         VStack(spacing: 0) {
             header
             HStack(spacing: 0) {
-                bankList.frame(width: 190).frame(maxHeight: .infinity)
-                Rectangle().fill(theme.edge).frame(width: 1)
+                bankList.uiFrame(width: 190).frame(maxHeight: .infinity)
+                Rectangle().fill(theme.edge).uiFrame(width: 1)
                 // iOS: a ScrollView takes its ideal width otherwise
                 slotGrid.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(theme.panel)
-        .overlay(Rectangle().strokeBorder(theme.edge, lineWidth: 1.5))
+        .overlay(Rectangle().strokeBorder(theme.edge, lineWidth: 1.5 * scale))
         .overlay {
             if let id = model.bankToDelete, let bank = model.banks.first(where: { $0.id == id }) {
                 DeleteBankDialog(model: model, bank: bank)
             }
         }
-        .shadow(color: .black.opacity(0.4), radius: 6)
+        .uiShadow(color: .black.opacity(0.4), radius: 6)
         .onAppear {
             name = model.patchName
             leaveReadOnlyBank()
@@ -273,18 +274,18 @@ struct PatchBrowserView: View {
     // MARK: header
 
     private var header: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 6 * scale) {
             Text(model.writing ? "Write patch" : "Banks")
-                .font(.system(size: 12, weight: .semibold)).foregroundColor(theme.headerText)
+                .uiFont(12, weight: .semibold).foregroundColor(theme.headerText)
             if let notice = model.importNotice {
-                Text(notice).font(.system(size: 11)).foregroundColor(theme.headerText)
+                Text(notice).uiFont(11).foregroundColor(theme.headerText)
                     .lineLimit(1).truncationMode(.middle)
                     .oxoTruncationTooltip(notice, size: 11, optional: true)
             }
             if model.libraryLoading && !model.banks.isEmpty { // the list shown may still change
-                Text("loading…").font(.system(size: 11)).foregroundColor(theme.headerText.opacity(0.6))
+                Text("loading…").uiFont(11).foregroundColor(theme.headerText.opacity(0.6))
             }
-            Spacer(minLength: 6)
+            Spacer(minLength: 6 * scale)
             if naming {
                 field("new bank name", $newBankName, width: 180) { createBank() }
                 button("Create") { createBank() }
@@ -307,8 +308,8 @@ struct PatchBrowserView: View {
                 PanelButton(title: "Close", width: 60, height: 20, icon: "xmark") { model.closeBrowser() }
             }
         }
-        .padding(.horizontal, 8)
-        .frame(height: 28)
+        .uiPadding(.horizontal, 8)
+        .uiFrame(height: 28)
         .background(theme.header)
     }
 
@@ -330,11 +331,11 @@ struct PatchBrowserView: View {
     private func field(_ prompt: String, _ text: Binding<String>, width: CGFloat, submit: @escaping () -> Void) -> some View {
         TextField(prompt, text: text)
             .textFieldStyle(.plain)
-            .font(.system(size: 12, design: .monospaced))
+            .uiFont(12, design: .monospaced)
             .foregroundColor(Theme.lcdText)
-            .padding(.horizontal, 6)
-            .frame(width: width, height: 20)
-            .background(RoundedRectangle(cornerRadius: 3).fill(theme.displayFill))
+            .uiPadding(.horizontal, 6)
+            .uiFrame(width: width, height: 20)
+            .background(RoundedRectangle(cornerRadius: 3 * scale).fill(theme.displayFill))
             .onSubmit(submit)
     }
 
@@ -343,16 +344,16 @@ struct PatchBrowserView: View {
     private var bankList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: scale) {
                     ForEach(model.banks.indices, id: \.self) { b in bankRow(b) }
                     if model.writing && !model.banks.isEmpty && model.userBank == nil { newUserBankRow }
                     if model.banks.isEmpty {
                         Text(model.libraryLoading ? "Loading…"
                              : "No banks. Import… copies bank folders, zip banks or .sy1 patches into the library.")
-                            .font(.system(size: 10)).foregroundColor(Theme.lcdText.opacity(0.7)).padding(8)
+                            .uiFont(10).foregroundColor(Theme.lcdText.opacity(0.7)).uiPadding(.all, 8)
                     }
                 }
-                .padding(.top, 4)
+                .uiPadding(.top, 4)
             }
             .scrollDeadZone()
             // Keyboard steps roll into other banks: keep the bank in view.
@@ -368,15 +369,15 @@ struct PatchBrowserView: View {
 
     /// `tip`: the full name when `label` shows less (a nested bank's own name).
     private func bankLabel(_ label: String, tip: String? = nil, count: String, selected: Bool) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 4 * scale) {
             Text(label).lineLimit(1)
                 .oxoTruncationTooltip(tip ?? label, shown: label, size: 11, monospaced: true, optional: false)
-            Spacer(minLength: 2)
+            Spacer(minLength: 2 * scale)
             Text(count).opacity(0.6)
         }
-        .font(.system(size: 11, design: .monospaced))
+        .uiFont(11, design: .monospaced)
         .foregroundColor(selected ? theme.lcdBottom : Theme.lcdText)
-        .padding(.horizontal, 6).padding(.vertical, 3)
+        .uiPadding(.horizontal, 6).uiPadding(.vertical, 3)
         .background(selected ? theme.displayText : Color.clear)
     }
 
@@ -398,7 +399,7 @@ struct PatchBrowserView: View {
         let locked = model.writing && info.readOnly // the write dialog can't pick it
         let number = String(format: "%02d:", b)
         return bankLabel(number + info.leafName, tip: number + info.name, count: "\(info.count)", selected: selected)
-        .overlay(Rectangle().strokeBorder(theme.displayText, lineWidth: dropBank == b ? 1.5 : 0))
+        .overlay(Rectangle().strokeBorder(theme.displayText, lineWidth: dropBank == b ? 1.5 * scale : 0))
         .opacity(locked ? 0.35 : 1)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -450,24 +451,24 @@ struct PatchBrowserView: View {
     /// numbers, so the keyboard selection can scroll in.
     private func slotColumns<Cell: View>(_ count: Int, @ViewBuilder cell: @escaping (Int) -> Cell) -> some View {
         let rows = SynthModel.browserRows(count)
-        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 4), spacing: 2) {
+        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2 * scale), count: 4), spacing: 2 * scale) {
             ForEach((0..<rows * 4).map { $0 % 4 * rows + $0 / 4 }, id: \.self) { s in
                 if s < count { cell(s) } else { Color.clear }
             }
         }
-        .padding(6)
+        .uiPadding(.all, 6)
     }
 
     private func slotFace(_ s: Int, _ patch: String, selected: Bool) -> some View {
         Text(String(format: "%03d:", s + 1) + patch)
-            .font(.system(size: 11, design: .monospaced))
+            .uiFont(11, design: .monospaced)
             .foregroundColor(selected ? theme.lcdBottom : patch.isEmpty ? Theme.lcdText.opacity(0.3) : Theme.lcdText)
             .lineLimit(1)
             // a cut name shows whole (not a help tip: always on)
             .oxoTruncationTooltip(String(format: "%03d:", s + 1) + patch, size: 11, monospaced: true, optional: false)
-            .padding(.horizontal, 5).padding(.vertical, 3)
+            .uiPadding(.horizontal, 5).uiPadding(.vertical, 3)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 2).fill(selected ? theme.displayText : theme.display))
+            .background(RoundedRectangle(cornerRadius: 2 * scale).fill(selected ? theme.displayText : theme.display))
     }
 
     private func slotCell(_ b: Int, _ s: Int) -> some View {
@@ -475,7 +476,7 @@ struct PatchBrowserView: View {
         let readOnly = model.banks[b].readOnly
         let selected = model.writing ? target == s : (b == model.loadedBank && s == model.currentProgram)
         return slotFace(s, patch, selected: selected)
-            .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(theme.displayText, lineWidth: dropTarget == s ? 1.5 : 0))
+            .overlay(RoundedRectangle(cornerRadius: 2 * scale).strokeBorder(theme.displayText, lineWidth: dropTarget == s ? 1.5 * scale : 0))
             .contentShape(Rectangle())
             .onTapGesture {
                 if model.writing {
@@ -631,8 +632,8 @@ extension View {
     func slotDraggable(_ payload: String?, label: String, fill: Color) -> some View {
         if let payload {
             draggable(payload) {
-                Text(label).font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.lcdText)
-                    .padding(.horizontal, 5).padding(.vertical, 3)
+                Text(label).uiFont(11, design: .monospaced).foregroundColor(Theme.lcdText)
+                    .uiPadding(.horizontal, 5).uiPadding(.vertical, 3)
                     .background(RoundedRectangle(cornerRadius: 2).fill(fill))
             }
         } else {
@@ -696,6 +697,7 @@ extension View {
 struct DeleteBankDialog: View {
     @ObservedObject var model: SynthModel
     let bank: PatchBankInfo
+    @Environment(\.editorScale) private var scale
 
     private var detail: String {
         let patches = bank.count == 1 ? "1 patch" : "\(bank.count) patches"
@@ -710,24 +712,24 @@ struct DeleteBankDialog: View {
         ZStack {
             Color.black.opacity(0.3).contentShape(Rectangle()).onTapGesture { model.bankToDelete = nil }
             VStack(spacing: 0) {
-                Text("Delete bank?").font(.system(size: 11, weight: .semibold)).foregroundColor(Dlg.text)
-                    .frame(maxWidth: .infinity).frame(height: 22).background(Dlg.bar)
-                VStack(alignment: .leading, spacing: 14) {
-                    Text(detail).font(.system(size: 11)).foregroundColor(Dlg.text)
+                Text("Delete bank?").uiFont(11, weight: .semibold).foregroundColor(Dlg.text)
+                    .frame(maxWidth: .infinity).uiFrame(height: 22).background(Dlg.bar)
+                VStack(alignment: .leading, spacing: 14 * scale) {
+                    Text(detail).uiFont(11).foregroundColor(Dlg.text)
                         .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 8) {
+                    HStack(spacing: 8 * scale) {
                         Spacer()
                         button("Cancel", fill: Dlg.bar) { model.bankToDelete = nil }
                         button("Delete", fill: Theme.red) { model.deleteBank(id: bank.id) }
                     }
                 }
-                .padding(14)
+                .uiPadding(.all, 14)
             }
-            .frame(width: 340)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Dlg.bg))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .shadow(color: .black.opacity(0.5), radius: 10, y: 4)
+            .uiFrame(width: 340)
+            .background(RoundedRectangle(cornerRadius: 8 * scale).fill(Dlg.bg))
+            .overlay(RoundedRectangle(cornerRadius: 8 * scale).strokeBorder(Color.black.opacity(0.7), lineWidth: scale))
+            .clipShape(RoundedRectangle(cornerRadius: 8 * scale))
+            .uiShadow(color: .black.opacity(0.5), radius: 10, y: 4)
             #if os(macOS)
             .background(WheelShield())
             #endif
@@ -736,9 +738,9 @@ struct DeleteBankDialog: View {
 
     private func button(_ title: String, fill: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title).font(.system(size: 11)).foregroundColor(Dlg.text)
-                .padding(.horizontal, 12).frame(minWidth: 64).frame(height: 22)
-                .background(RoundedRectangle(cornerRadius: 3).fill(fill))
+            Text(title).uiFont(11).foregroundColor(Dlg.text)
+                .uiPadding(.horizontal, 12).frame(minWidth: 64 * scale).uiFrame(height: 22)
+                .background(RoundedRectangle(cornerRadius: 3 * scale).fill(fill))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

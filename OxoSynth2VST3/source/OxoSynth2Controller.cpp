@@ -47,7 +47,7 @@ tresult PLUGIN_API OxoSynth2Controller::initialize(FUnknown *context) {
         const s2::ParamInfo &p = s2::kParams[i];
         Vst::String128 title;
         UString(title, str16BufferSize(Vst::String128)).fromAscii(p.name);
-        int32 flags = p.automatable ? Vst::ParameterInfo::kCanAutomate : Vst::ParameterInfo::kIsReadOnly;
+        int32 flags = p.automatable ? Vst::ParameterInfo::kCanAutomate : 0;
         if (p.max - p.min > 4096) flags |= Vst::ParameterInfo::kIsHidden;
         auto *param = new Vst::RangeParameter(title, Vst::ParamID(i), nullptr, p.min, p.max, p.def, p.max - p.min, flags);
         param->setPrecision(0);
@@ -280,7 +280,7 @@ void OxoSynth2Controller::ThemeChanged(const std::string &theme) {
 }
 
 void OxoSynth2Controller::SetMidiCC(int id, int32_t cc) {
-    if (!s2::IsLearnable(id) || cc < 0 || cc > 127 || learnCc_[size_t(id)] == cc) return;
+    if (!s2::IsLearnable(id) || (cc != 0 && !s2::IsLearnableCC(cc)) || learnCc_[size_t(id)] == cc) return;
     learnCc_[size_t(id)] = cc;
     storage::SaveMidiLearn(learnCc_);
     if (Vst::IMessage *message = allocateMessage()) {

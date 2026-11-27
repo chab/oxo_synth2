@@ -8,7 +8,7 @@ import AppKit
 /// Instance members come from the instance's palette (`SynthModel.palette`,
 /// menu > Themes…), handed down as `\.theme` by the panel root; statics are
 /// fixed colours / fonts.
-struct Theme {
+struct Theme: Hashable {
     private let p: ThemePalette
     init(_ palette: ThemePalette) { p = palette }
 
@@ -39,16 +39,23 @@ struct Theme {
     var waveOn: Color { p[.displayText].color }
     static let red = Color(red: 0.68, green: 0.06, blue: 0.05)
     static let learn = Color(red: 0.35, green: 0.65, blue: 0.91)
-    static let labelFont = Font.system(size: 9.5, weight: .medium)
-    static let buttonFont = Font.system(size: 10, weight: .semibold)
+    static let labelFont = PanelFont(size: 9.5, weight: .medium)
+    static let buttonFont = PanelFont(size: 10, weight: .semibold)
 }
 
 private struct ThemeKey: EnvironmentKey {
     static let defaultValue = Theme(.synth2)
 }
 
-/// The panel's live scale (window width / design width), for menus
-/// that mark the current UI size.
+/// The panel's live scale (view points per design point; window width /
+/// design width). The panel is LAID OUT at its final size, never stretched
+/// by a `.scaleEffect` (that magnified layers rendered at design size: text
+/// and lines went soft above 100 %, issue #19). Design numbers (positions,
+/// frames, paddings, fonts, stack spacings, corner radii, line widths) are
+/// multiplied as they are applied: the `ui*` modifiers and `place` below,
+/// `scale *` inline where a number is not a modifier's; drawing goes through
+/// `PanelCanvas` / `FlatCanvas` (design points, the context scaled); gesture
+/// distances are divided back into design points.
 private struct EditorScaleKey: EnvironmentKey {
     static let defaultValue: CGFloat = 1
 }
@@ -64,6 +71,102 @@ extension EnvironmentValues {
     }
 }
 
+/// A system font in design points (`uiFont`; `font(scale)` for a Text
+/// resolved by hand).
+struct PanelFont {
+    let size: CGFloat
+    var weight: Font.Weight = .regular
+    var design: Font.Design = .default
+    var italic = false
+
+    func font(_ scale: CGFloat) -> Font {
+        let f = Font.system(size: size * scale, weight: weight, design: design)
+        return italic ? f.italic() : f
+    }
+}
+
+/// `content` built with the editor scale of where it is placed.
+struct WithEditorScale<Content: View>: View {
+    @Environment(\.editorScale) private var scale
+    @ViewBuilder let content: (CGFloat) -> Content
+    var body: some View { content(scale) }
+}
+
+// Value-type modifiers (not closures): SwiftUI compares them and skips the
+// unchanged ones on every panel update.
+private struct UIFrame: ViewModifier {
+    @Environment(\.editorScale) private var scale
+    let width: CGFloat?, height: CGFloat?, alignment: Alignment
+    func body(content: Content) -> some View {
+        content.frame(width: width.map { $0 * scale }, height: height.map { $0 * scale }, alignment: alignment)
+    }
+}
+
+private struct UIPosition: ViewModifier {
+    @Environment(\.editorScale) private var scale
+    let x: CGFloat, y: CGFloat
+    func body(content: Content) -> some View { content.position(x: x * scale, y: y * scale) }
+}
+
+private struct UIPlace: ViewModifier {
+    @Environment(\.editorScale) private var scale
+    let x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat
+    func body(content: Content) -> some View {
+        content.frame(width: w * scale, height: h * scale).position(x: (x + w / 2) * scale, y: (y + h / 2) * scale)
+    }
+}
+
+private struct UIOffset: ViewModifier {
+    @Environment(\.editorScale) private var scale
+    let x: CGFloat, y: CGFloat
+    func body(content: Content) -> some View { content.offset(x: x * scale, y: y * scale) }
+}
+
+private struct UIPadding: ViewModifier {
+    @Environment(\.editorScale) private var scale
+    let edges: Edge.Set, length: CGFloat
+    func body(content: Content) -> some View { content.padding(edges, length * scale) }
+}
+
+private struct UIFontModifier: ViewModifier {
+    @Environment(\.editorScale) private var scale
+    let font: PanelFont
+    func body(content: Content) -> some View { content.font(font.font(scale)) }
+}
+
+private struct UIShadow: ViewModifier {
+    @Environment(\.editorScale) private var scale
+    let color: Color, radius: CGFloat, x: CGFloat, y: CGFloat
+    func body(content: Content) -> some View { content.shadow(color: color, radius: radius * scale, x: x * scale, y: y * scale) }
+}
+
+extension View {
+    func uiFrame(width: CGFloat? = nil, height: CGFloat? = nil, alignment: Alignment = .center) -> some View {
+        modifier(UIFrame(width: width, height: height, alignment: alignment))
+    }
+
+    func uiPosition(x: CGFloat, y: CGFloat) -> some View { modifier(UIPosition(x: x, y: y)) }
+
+    /// Frame + place by top-left corner in the parent's coordinates (design points).
+    func place(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> some View {
+        modifier(UIPlace(x: x, y: y, w: w, h: h))
+    }
+
+    func uiOffset(x: CGFloat = 0, y: CGFloat = 0) -> some View { modifier(UIOffset(x: x, y: y)) }
+
+    func uiPadding(_ edges: Edge.Set = .all, _ length: CGFloat) -> some View { modifier(UIPadding(edges: edges, length: length)) }
+
+    func uiFont(_ font: PanelFont) -> some View { modifier(UIFontModifier(font: font)) }
+
+    func uiFont(_ size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> some View {
+        uiFont(PanelFont(size: size, weight: weight, design: design))
+    }
+
+    func uiShadow(color: Color, radius: CGFloat, x: CGFloat = 0, y: CGFloat = 0) -> some View {
+        modifier(UIShadow(color: color, radius: radius, x: x, y: y))
+    }
+}
+
 private func shiftHeld() -> Bool {
     #if os(macOS)
     return NSEvent.modifierFlags.contains(.shift)
@@ -76,11 +179,26 @@ private func shiftHeld() -> Bool {
 
 /// In learn mode a control stops taking input and wears a hotspot instead
 /// (Oxo Simple's look): dim border = not learned, bright 2 pt border = armed
-/// and waiting for a CC, learn-colour fill + CC badge = learned. Tap arms,
-/// double-tap unlearns.
+/// and waiting for a CC, learn-colour fill + CC badge = learned. A press
+/// arms AT ONCE, a double click unlearns and the control stays armed (all
+/// editors). Not `.onTapGesture(count: 2)` +
+/// `.onTapGesture`: SwiftUI then holds every single tap for the
+/// double-click interval (0.5 s by default) before arming.
 private struct Learnable: ViewModifier {
     @ObservedObject var model: SynthModel
     let id: Int
+    @Environment(\.editorScale) private var scale
+    /// This control's last arming press.
+    @State private var lastPress: Date?
+    @State private var pressing = false
+
+    private static var doubleClickInterval: TimeInterval {
+        #if os(macOS)
+        return NSEvent.doubleClickInterval
+        #else
+        return 0.35
+        #endif
+    }
 
     func body(content: Content) -> some View {
         content
@@ -90,22 +208,38 @@ private struct Learnable: ViewModifier {
                     let cc = model.learnTable[id]
                     let selected = model.learnSelection == id
                     ZStack {
-                        RoundedRectangle(cornerRadius: 4).fill(cc != 0 ? Theme.learn.opacity(0.4) : Color.clear)
-                        RoundedRectangle(cornerRadius: 4)
-                            .strokeBorder(Theme.learn.opacity(selected ? 1 : 0.6), lineWidth: selected ? 2 : 1)
+                        RoundedRectangle(cornerRadius: 4 * scale).fill(cc != 0 ? Theme.learn.opacity(0.4) : Color.clear)
+                        RoundedRectangle(cornerRadius: 4 * scale)
+                            .strokeBorder(Theme.learn.opacity(selected ? 1 : 0.6), lineWidth: (selected ? 2 : 1) * scale)
                         if cc != 0 {
-                            Text("\(cc)").font(.system(size: 9, weight: .bold)).foregroundColor(.white)
-                                .padding(.horizontal, 3).padding(.vertical, 1)
-                                .background(RoundedRectangle(cornerRadius: 2.4).fill(Theme.learn)
-                                    .overlay(RoundedRectangle(cornerRadius: 2.4).strokeBorder(.white.opacity(0.75), lineWidth: 1)))
+                            Text("\(cc)").uiFont(9, weight: .bold).foregroundColor(.white)
+                                .uiPadding(.horizontal, 3).uiPadding(.vertical, 1)
+                                .background(RoundedRectangle(cornerRadius: 2.4 * scale).fill(Theme.learn)
+                                    .overlay(RoundedRectangle(cornerRadius: 2.4 * scale).strokeBorder(.white.opacity(0.75), lineWidth: scale)))
                         }
                     }
-                    .padding(-3)
+                    .uiPadding(.all, -3)
                     .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { model.learnUnlearn(id) }
-                    .onTapGesture { model.learnSelect(id) }
+                    .gesture(DragGesture(minimumDistance: 0)
+                        .onChanged { _ in
+                            guard !pressing else { return }
+                            pressing = true
+                            press()
+                        }
+                        .onEnded { _ in pressing = false })
                 }
             }
+    }
+
+    private func press() {
+        let now = Date()
+        model.learnSelect(id)
+        if let last = lastPress, now.timeIntervalSince(last) < Self.doubleClickInterval {
+            lastPress = nil
+            model.learnUnlearn(id)
+        } else {
+            lastPress = now
+        }
     }
 }
 
@@ -148,12 +282,13 @@ struct KnobView: View {
     /// (finger jitter, touch-up) must not put the old value back (iPad).
     @State private var resetHeld = false
     @State private var wheelRemainder: Double = 0
+    @Environment(\.editorScale) private var scale
 
     var body: some View {
         let r = model.host.range(id)
         let v = model.values[id]
         let frac = Double(v - r.min) / Double(max(1, r.max - r.min))
-        VStack(spacing: 1) {
+        VStack(spacing: scale) {
             KnobFace(theme: theme, size: size, frac: frac)
             .contentShape(Circle().scale(1.3))
             .gesture(DragGesture(minimumDistance: 0)
@@ -165,12 +300,12 @@ struct KnobView: View {
                     if dragStart == nil {
                         dragStart = current
                         dragAccum = 0
-                        lastY = g.translation.height
+                        lastY = g.translation.height / scale
                         model.begin(id)
                         model.show(id)
                     }
-                    let dy = lastY - g.translation.height
-                    lastY = g.translation.height
+                    let dy = lastY - g.translation.height / scale
+                    lastY = g.translation.height / scale
                     let span = CGFloat(max(1, r.max - r.min))
                     dragAccum += dy * span / (shiftHeld() ? 900 : 180)
                     model.set(id, (dragStart ?? current) + Int(dragAccum.rounded()))
@@ -193,8 +328,8 @@ struct KnobView: View {
                 return true
             }
             #endif
-            Text(label).font(Theme.labelFont).foregroundColor(theme.ink).lineLimit(1).fixedSize()
-                .frame(height: 12)
+            Text(label).uiFont(Theme.labelFont).foregroundColor(theme.ink).lineLimit(1).fixedSize()
+                .uiFrame(height: 12)
         }
         .learnable(model, id)
     }
@@ -205,15 +340,21 @@ struct KnobView: View {
 /// ~12 layers + live CoreAnimation filters per knob, which Logic's
 /// out-of-process editor host composited again on every panel change (the
 /// voice grid while playing): Logic's own UI lagged.
+/// Drawn at the size it is shown, like the rest (issue #19). Only the dial
+/// is feathered above 100 %: with a 1-pixel edge it stepped visibly while
+/// turning (user, 2026-11-26); `dialFeather` softens it about halfway to
+/// the old stretched rendering, nothing at 100 %.
 private struct KnobFace: View {
     let theme: Theme
     let size: CGFloat
     let frac: Double
+    @Environment(\.editorScale) private var scale
 
     var body: some View {
         // ticks reach 0.65 x size from the centre, the shadow ~3 pt past the body
         let side = (size * 0.65 + 3) * 2
-        Canvas { ctx, box in
+        let feather = Self.dialFeather(scale)
+        PanelCanvas { ctx, box in
             let c = CGPoint(x: box.width / 2, y: box.height / 2)
             // Oxo Simple's 11-dot ring over the -140..+140 travel, at
             // 1.3 x the body radius, pulled in 1.5 pt.
@@ -238,12 +379,22 @@ private struct KnobFace: View {
                 dial.translateBy(x: c.x, y: c.y)
                 dial.rotate(by: .degrees(-140 + 280 * frac))
                 let h = size * 0.36
+                if feather > 0 { dial.addFilter(.blur(radius: feather)) }
                 dial.fill(Path(roundedRect: CGRect(x: -1, y: -size * 0.24 - h / 2, width: 2, height: h), cornerRadius: 1),
                           with: .color(theme.knobDial))
             }
         }
-        .frame(width: side, height: side)
-        .frame(width: size, height: size)
+        .uiFrame(width: side, height: side)
+        .uiFrame(width: size, height: size)
+    }
+
+    /// Blur radius of the dial in design points. The stretched rendering's
+    /// edge grew with the scale (a 1-pixel edge magnified), so does this:
+    /// 0 at 100 %, 0.10 at 150 %, 0.12 at 200 %, about half the stretched
+    /// edge's softness (0.15 ~ all of it at 200 %; measured on live window
+    /// captures, a snapshot's cacheDisplay draws scaleEffect sharp).
+    static func dialFeather(_ scale: CGFloat) -> CGFloat {
+        scale > 1 ? 0.14 * (scale * scale - 1).squareRoot() / scale : 0
     }
 }
 
@@ -256,19 +407,20 @@ struct ToggleButton: View {
     let id: Int
     let title: String
     var width: CGFloat = 40
+    @Environment(\.editorScale) private var scale
 
     var body: some View {
         let on = model.values[id] != 0
-        HStack(spacing: 3) {
-            FlatCanvas(bleed: 4) { ctx, r in
+        HStack(spacing: 3 * scale) {
+            FlatCanvas(bleed: 4, key: [on, theme]) { ctx, r in
                 let led = Path(roundedRect: r, cornerRadius: 1)
                 if on { ctx.glow(led, theme.ledOn.opacity(0.9), radius: 2) }
                 ctx.fill(led, with: .color(on ? theme.ledOn : theme.ledOff))
             }
-            .frame(width: 5, height: 5)
-            Text(title).font(Theme.buttonFont).foregroundColor(Theme.buttonText).lineLimit(1).fixedSize()
+            .uiFrame(width: 5, height: 5)
+            Text(title).uiFont(Theme.buttonFont).foregroundColor(Theme.buttonText).lineLimit(1).fixedSize()
         }
-        .frame(width: width, height: 17)
+        .uiFrame(width: width, height: 17)
         .background(ButtonFace())
         .contentShape(Rectangle())
         .onTapGesture { model.setOnce(id, on ? 0 : 1) }
@@ -286,8 +438,8 @@ struct CycleButton: View {
     var width: CGFloat = 40
 
     var body: some View {
-        Text(title).font(Theme.buttonFont).foregroundColor(Theme.buttonText).lineLimit(1).fixedSize()
-            .frame(width: width, height: 17)
+        Text(title).uiFont(Theme.buttonFont).foregroundColor(Theme.buttonText).lineLimit(1).fixedSize()
+            .uiFrame(width: width, height: 17)
             .background(ButtonFace())
             .contentShape(Rectangle())
             .onTapGesture { model.cycle(id, shiftHeld() ? -1 : 1) }
@@ -300,7 +452,7 @@ struct ButtonFace: View {
     @Environment(\.theme) private var theme
     var body: some View {
         let base = fill ?? theme.button
-        FlatCanvas(bleed: 3) { ctx, r in
+        FlatCanvas(bleed: 3, key: [base]) { ctx, r in
             let face = Path(roundedRect: r, cornerRadius: 3)
             var shadow = ctx
             shadow.addFilter(.shadow(color: .black.opacity(0.3), radius: 0.5, x: 1, y: 1))
@@ -319,15 +471,16 @@ struct PanelButton: View {
     var fill: Color?
     var icon: String?
     let action: () -> Void
+    @Environment(\.editorScale) private var scale
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 4) {
-                if let icon { Image(systemName: icon).font(.system(size: 9, weight: .bold)) }
-                Text(title).font(.system(size: 11, weight: .semibold))
+            HStack(spacing: 4 * scale) {
+                if let icon { Image(systemName: icon).uiFont(9, weight: .bold) }
+                Text(title).uiFont(11, weight: .semibold)
             }
             .foregroundColor(Theme.buttonText)
-            .frame(width: width, height: height)
+            .uiFrame(width: width, height: height)
             .background(ButtonFace(fill: fill))
         }
         .buttonStyle(.plain)
@@ -340,14 +493,15 @@ struct Badge: View {
     @ObservedObject var model: SynthModel
     let text: String
     var id: Int?
+    @Environment(\.editorScale) private var scale
 
     var body: some View {
         let on = id.map { model.values[$0] != 0 } ?? true
-        let face = Text(text).font(.system(size: 12, weight: .heavy))
+        let face = Text(text).uiFont(12, weight: .heavy)
             .foregroundColor(on ? (id == nil ? .white : Color(red: 1, green: 0.85, blue: 0.35)) : Color(white: 0.45))
-            .frame(width: 16, height: 18)
-            .background(RoundedRectangle(cornerRadius: 2).fill(on ? Color.black : Color(white: 0.22)))
-            .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(Color(white: 0.5), lineWidth: 1))
+            .uiFrame(width: 16, height: 18)
+            .background(RoundedRectangle(cornerRadius: 2 * scale).fill(on ? Color.black : Color(white: 0.22)))
+            .overlay(RoundedRectangle(cornerRadius: 2 * scale).strokeBorder(Color(white: 0.5), lineWidth: scale))
         if let id {
             face.contentShape(Rectangle())
                 .onTapGesture { model.setOnce(id, on ? 0 : 1) }
@@ -372,18 +526,19 @@ struct LedRadio: View {
     var showLabels = true
     var rowHeight: CGFloat = 13
     @State private var wheelRemainder: Double = 0
+    @Environment(\.editorScale) private var scale
 
     var body: some View {
-        let layout = horizontal ? AnyLayout(HStackLayout(spacing: 8)) : AnyLayout(VStackLayout(alignment: ledTrailing ? .trailing : .leading, spacing: 0))
+        let layout = horizontal ? AnyLayout(HStackLayout(spacing: 8 * scale)) : AnyLayout(VStackLayout(alignment: ledTrailing ? .trailing : .leading, spacing: 0))
         layout {
             ForEach(options, id: \.value) { option in
                 let on = model.values[id] == option.value
-                HStack(spacing: 3) {
+                HStack(spacing: 3 * scale) {
                     if !ledTrailing { led(on) }
-                    if showLabels { Text(option.label).font(Theme.labelFont).foregroundColor(theme.ink).fixedSize() }
+                    if showLabels { Text(option.label).uiFont(Theme.labelFont).foregroundColor(theme.ink).fixedSize() }
                     if ledTrailing { led(on) }
                 }
-                .frame(height: rowHeight)
+                .uiFrame(height: rowHeight)
                 .contentShape(Rectangle())
                 .onTapGesture { model.setOnce(id, option.value) }
             }
@@ -395,13 +550,13 @@ struct LedRadio: View {
     }
 
     private func led(_ on: Bool) -> some View {
-        FlatCanvas(bleed: 5) { ctx, r in
+        FlatCanvas(bleed: 5, key: [on, theme]) { ctx, r in
             let led = Path(ellipseIn: r)
             if on { ctx.glow(led, theme.radioOn.opacity(0.9), radius: 2.5) }
             ctx.fill(led, with: .color(on ? theme.radioOn : theme.radioOff))
             ctx.stroke(Path(ellipseIn: r.insetBy(dx: 0.25, dy: 0.25)), with: .color(.black.opacity(0.5)), lineWidth: 0.5)
         }
-        .frame(width: 7, height: 7)
+        .uiFrame(width: 7, height: 7)
     }
 }
 
@@ -412,16 +567,54 @@ struct LedRadio: View {
 /// their own layers (even with a clear colour); Logic's out-of-process
 /// editor host composited all of them again on every panel change (the
 /// voice grid while playing) and its own UI lagged. `bleed`: room drawn
-/// past the frame on each side for the glow; `draw` gets the frame's rect.
+/// past the frame on each side for the glow; `draw` gets the frame's rect,
+/// in design points (the context scaled, like `PanelCanvas`).
+/// `key` = EVERYTHING `draw` reads (state, theme, text): the canvas redraws
+/// only when it (or the scale / size) changes. A closure cannot be compared,
+/// so without it all ~57 of them redrew on every panel update (any value
+/// change), at full resolution since issue #19. A value missing from the
+/// key = a stale drawing.
 struct FlatCanvas: View {
+    @Environment(\.editorScale) private var scale
     let bleed: CGFloat
+    let key: [AnyHashable]
     let draw: (inout GraphicsContext, CGRect) -> Void
 
     var body: some View {
+        FlatLayer(bleed: bleed, scale: scale, key: key, draw: draw)
+            .equatable()
+            .padding(-bleed * scale)
+    }
+}
+
+private struct FlatLayer: View, Equatable {
+    let bleed: CGFloat
+    let scale: CGFloat
+    let key: [AnyHashable]
+    let draw: (inout GraphicsContext, CGRect) -> Void
+
+    static func == (a: Self, b: Self) -> Bool { a.bleed == b.bleed && a.scale == b.scale && a.key == b.key }
+
+    var body: some View {
         Canvas { ctx, size in
-            draw(&ctx, CGRect(origin: .zero, size: size).insetBy(dx: bleed, dy: bleed))
+            ctx.scaleBy(x: scale, y: scale)
+            draw(&ctx, CGRect(x: bleed, y: bleed, width: size.width / scale - 2 * bleed, height: size.height / scale - 2 * bleed))
         }
-        .padding(-bleed)
+    }
+}
+
+/// A Canvas drawn in DESIGN points: its context scaled by the editor scale
+/// (paths, text and filter radii alike), so the drawing is rasterized at
+/// the size it is shown; `draw` gets the size in design points.
+struct PanelCanvas: View {
+    @Environment(\.editorScale) private var scale
+    let draw: (inout GraphicsContext, CGSize) -> Void
+
+    var body: some View {
+        Canvas { ctx, size in
+            ctx.scaleBy(x: scale, y: scale)
+            draw(&ctx, CGSize(width: size.width / scale, height: size.height / scale))
+        }
     }
 }
 
@@ -509,7 +702,7 @@ private struct WaveCell: View {
     var height: CGFloat = 14
 
     var body: some View {
-        FlatCanvas(bleed: 4) { ctx, cell in
+        FlatCanvas(bleed: 4, key: [icon, on, theme]) { ctx, cell in
             let face = Path(roundedRect: cell, cornerRadius: 2)
             if on { ctx.glow(face, theme.waveOn.opacity(0.6), radius: 2) }
             ctx.fill(face, with: .color(on ? theme.waveOn : theme.button))
@@ -517,7 +710,7 @@ private struct WaveCell: View {
             ctx.stroke(icon.path(in: cell.insetBy(dx: 4, dy: 3.5)), with: .color(on ? Color.black : Color(white: 0.85)),
                        style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round))
         }
-        .frame(width: width, height: height)
+        .uiFrame(width: width, height: height)
     }
 }
 
@@ -528,9 +721,10 @@ struct WaveRadio: View {
     let shapes: [(value: Int, icon: WaveIcon)]
     var columns = 2
     @State private var wheelRemainder: Double = 0
+    @Environment(\.editorScale) private var scale
 
     var body: some View {
-        Grid(horizontalSpacing: 2, verticalSpacing: 2) {
+        Grid(horizontalSpacing: 2 * scale, verticalSpacing: 2 * scale) {
             ForEach(Array(stride(from: 0, to: shapes.count, by: columns)), id: \.self) { row in
                 GridRow {
                     ForEach(row..<min(row + columns, shapes.count), id: \.self) { i in
@@ -582,13 +776,15 @@ struct ValueDisplay: View {
     @State private var dragStart: Int?
     @State private var moved = false
     @State private var wheelRemainder: Double = 0
+    @Environment(\.editorScale) private var scale
 
     var body: some View {
         let v = model.values[id]
-        let label = Text(text?(v) ?? model.host.format(id, v))
+        let string = text?(v) ?? model.host.format(id, v)
+        let label = Text(string)
             .font(.system(size: 11, weight: .bold, design: .monospaced))
             .foregroundColor(theme.displayText)
-        FlatCanvas(bleed: 0) { ctx, r in
+        FlatCanvas(bleed: 0, key: [string, theme]) { ctx, r in
             ctx.fill(Path(roundedRect: r, cornerRadius: 2), with: .linearGradient(
                 Gradient(colors: [theme.lcdTop, theme.lcdBottom]), startPoint: CGPoint(x: 0, y: r.minY), endPoint: CGPoint(x: 0, y: r.maxY)))
             ctx.strokeBorder(r, cornerRadius: 2, .black.opacity(0.7), lineWidth: 1)
@@ -602,7 +798,7 @@ struct ValueDisplay: View {
             g.scaleBy(x: k, y: k)
             g.draw(t, at: .zero, anchor: .center)
         }
-            .frame(width: width, height: 17)
+            .uiFrame(width: width, height: 17)
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { g in
@@ -612,7 +808,7 @@ struct ValueDisplay: View {
                         model.begin(id)
                         model.show(id)
                     }
-                    let steps = Int((-g.translation.height / WheelFeel.displayTravelPerStep).rounded())
+                    let steps = Int((-g.translation.height / scale / WheelFeel.displayTravelPerStep).rounded())
                     if steps != 0 { moved = true }
                     if moved { model.set(id, model.stepped(id, from: dragStart ?? v, by: steps)) }
                 }
@@ -636,6 +832,7 @@ struct MenuDisplay: View {
     let width: CGFloat
     let label: String
     let groups: [(title: String, items: [(value: Int, label: String)])]
+    @Environment(\.editorScale) private var scale
 
     var body: some View {
         Menu {
@@ -647,17 +844,19 @@ struct MenuDisplay: View {
                 }
             }
         } label: {
-            Text(label).font(.system(size: 10, weight: .bold, design: .monospaced))
+            // plain modifiers on the Text: the borderless menu (mac) rebuilds
+            // its label from them, a `ui*` wrapper view would hide them
+            Text(label).font(PanelFont(size: 10, weight: .bold, design: .monospaced).font(scale))
                 .foregroundColor(theme.displayText).lineLimit(1)
-                .frame(width: width - 8, alignment: .leading)
+                .frame(width: (width - 8) * scale, alignment: .leading)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .menuOrder(.fixed)
-        .padding(.horizontal, 4)
-        .frame(width: width, height: 16)
-        .background(RoundedRectangle(cornerRadius: 2).fill(theme.displayFill))
-        .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
+        .uiPadding(.horizontal, 4)
+        .uiFrame(width: width, height: 16)
+        .background(RoundedRectangle(cornerRadius: 2 * scale).fill(theme.displayFill))
+        .overlay(RoundedRectangle(cornerRadius: 2 * scale).strokeBorder(Color.black.opacity(0.7), lineWidth: scale))
     }
 
     private func items(_ list: [(value: Int, label: String)]) -> some View {
@@ -677,17 +876,18 @@ struct SectionBox<Content: View>: View {
     let width: CGFloat
     let height: CGFloat
     @ViewBuilder let content: Content
+    @Environment(\.editorScale) private var scale
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             Rectangle().fill(theme.panel)
-            Text(title).font(.system(size: 12, weight: .semibold)).foregroundColor(theme.headerText)
-                .padding(.leading, 5)
-                .frame(width: width, height: 16, alignment: .leading)
+            Text(title).uiFont(12, weight: .semibold).foregroundColor(theme.headerText)
+                .uiPadding(.leading, 5)
+                .uiFrame(width: width, height: 16, alignment: .leading)
                 .background(theme.header)
-            content.frame(width: width, height: height)
+            content.uiFrame(width: width, height: height)
         }
-        .frame(width: width, height: height)
-        .overlay(Rectangle().strokeBorder(theme.edge, lineWidth: 1))
+        .uiFrame(width: width, height: height)
+        .overlay(Rectangle().strokeBorder(theme.edge, lineWidth: scale))
     }
 }

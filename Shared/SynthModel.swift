@@ -485,7 +485,8 @@ final class SynthModel: ObservableObject {
     /// A CC arrived (any channel): assign it to the armed control while
     /// learn mode is on; re-learning replaces the previous CC.
     private func incomingCC(_ cc: Int) {
-        guard learnActive, let id = learnSelection, (1...127).contains(cc), learnTable[id] != cc else { return }
+        // CC 1..119 = s2::IsLearnableCC (120..127: channel mode messages, e.g. a host's All Notes Off on stop)
+        guard learnActive, let id = learnSelection, (1...119).contains(cc), learnTable[id] != cc else { return }
         host.setMidiCC(id, cc)
         learnTable[id] = cc
         flash("MIDI LEARN: \(host.name(id)) = CC \(cc)")

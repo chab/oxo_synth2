@@ -49,7 +49,7 @@ enum ThemeColor: String, CaseIterable, Codable {
     }
 }
 
-struct RGB: Codable, Equatable {
+struct RGB: Codable, Hashable {
     var r: Double, g: Double, b: Double
 
     init(r: Double, g: Double, b: Double) { (self.r, self.g, self.b) = (r, g, b) }
@@ -79,7 +79,7 @@ struct RGB: Codable, Equatable {
     }
 }
 
-struct ThemePalette: Equatable {
+struct ThemePalette: Hashable {
     var colors: [ThemeColor: RGB]
 
     static let synth2 = ThemePalette(colors: Dictionary(uniqueKeysWithValues: ThemeColor.allCases.map {
@@ -295,7 +295,7 @@ enum Dlg {
     static let text = Color(white: 0.9)
     static let dim = Color(white: 0.6)
     static let accent = Color(red: 0.35, green: 0.65, blue: 0.91)
-    static let font = Font.system(size: 10)
+    static let font = PanelFont(size: 10)
 }
 
 /// The Themes dialog, drawn INSIDE the plugin panel (same on mac VST3 /
@@ -313,15 +313,17 @@ struct ThemeDialog: View {
     @State private var selected: ThemeColor = .panel
     @State private var name = ""
     @State private var dragStart: CGPoint?
+    /// Design points.
     @State private var height: CGFloat = 380
+    @Environment(\.editorScale) private var scale
 
     var body: some View {
         VStack(spacing: 0) {
             titleBar
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 8 * scale) {
                 // Theme name / Load / Save first: on iPad the keyboard covers
                 // the bottom of the panel, a field up here stays visible.
-                HStack(spacing: 6) {
+                HStack(spacing: 6 * scale) {
                     menu("Load") {
                         ForEach(ThemePalette.factory, id: \.name) { item in
                             Button(item.name == "Synth2" ? "Synth2 (default)" : item.name) {
@@ -344,48 +346,48 @@ struct ThemeDialog: View {
                     .opacity(store.userThemes.isEmpty ? 0.4 : 1)
                     Spacer()
                 }
-                HStack(spacing: 6) {
+                HStack(spacing: 6 * scale) {
                     TextField("theme name", text: $name)
-                        .textFieldStyle(.plain).font(Dlg.font).foregroundColor(Dlg.text)
-                        .padding(.horizontal, 6).frame(height: 20)
-                        .background(RoundedRectangle(cornerRadius: 3).fill(Dlg.field))
+                        .textFieldStyle(.plain).uiFont(Dlg.font).foregroundColor(Dlg.text)
+                        .uiPadding(.horizontal, 6).uiFrame(height: 20)
+                        .background(RoundedRectangle(cornerRadius: 3 * scale).fill(Dlg.field))
                         .onSubmit { store.save(model.palette, as: name) }
                     chip("Save") { store.save(model.palette, as: name) }
                         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1)
+                Rectangle().fill(Color.white.opacity(0.12)).uiFrame(height: 1)
                 swatches
                 ColorEditor(rgb: Binding(get: { model.palette[selected] }, set: { model.setThemeColor(selected, $0) }))
                     // fresh hue / saturation state per colour and per loaded theme
                     .id("\(selected.rawValue)#\(model.themeRevision)")
             }
-            .padding(10)
+            .uiPadding(.all, 10)
         }
-        .frame(width: Self.width)
-        .background(GeometryReader { g in Color.clear.onAppear { height = g.size.height } })
-        .background(RoundedRectangle(cornerRadius: 8).fill(Dlg.bg))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .shadow(color: .black.opacity(0.5), radius: 10, y: 4)
+        .uiFrame(width: Self.width)
+        .background(GeometryReader { g in Color.clear.onAppear { height = g.size.height / scale } })
+        .background(RoundedRectangle(cornerRadius: 8 * scale).fill(Dlg.bg))
+        .overlay(RoundedRectangle(cornerRadius: 8 * scale).strokeBorder(Color.black.opacity(0.7), lineWidth: scale))
+        .clipShape(RoundedRectangle(cornerRadius: 8 * scale))
+        .uiShadow(color: .black.opacity(0.5), radius: 10, y: 4)
         #if os(macOS)
         .background(WheelShield())
         #endif
-        .offset(x: position.x, y: position.y)
+        .uiOffset(x: position.x, y: position.y)
     }
 
     private var titleBar: some View {
         ZStack {
-            Text("Synth2 Themes").font(.system(size: 11, weight: .semibold)).foregroundColor(Dlg.text)
+            Text("Synth2 Themes").uiFont(11, weight: .semibold).foregroundColor(Dlg.text)
             HStack {
-                Circle().fill(Color(red: 1, green: 0.37, blue: 0.34)).frame(width: 11, height: 11)
-                    .overlay(Image(systemName: "xmark").font(.system(size: 6, weight: .bold)).foregroundColor(.black.opacity(0.6)))
-                    .padding(6)
+                Circle().fill(Color(red: 1, green: 0.37, blue: 0.34)).uiFrame(width: 11, height: 11)
+                    .overlay(Image(systemName: "xmark").uiFont(6, weight: .bold).foregroundColor(.black.opacity(0.6)))
+                    .uiPadding(.all, 6)
                     .contentShape(Rectangle())
                     .onTapGesture { model.showThemes = false }
                 Spacer()
             }
         }
-        .frame(height: 22)
+        .uiFrame(height: 22)
         .frame(maxWidth: .infinity)
         .background(Dlg.bar)
         .contentShape(Rectangle())
@@ -393,14 +395,14 @@ struct ThemeDialog: View {
             .onChanged { g in
                 let start = dragStart ?? position
                 dragStart = start
-                position = CGPoint(x: min(max(start.x + g.translation.width, 0), canvas.width - Self.width),
-                                   y: min(max(start.y + g.translation.height, 0), canvas.height - min(height, 60)))
+                position = CGPoint(x: min(max(start.x + g.translation.width / scale, 0), canvas.width - Self.width),
+                                   y: min(max(start.y + g.translation.height / scale, 0), canvas.height - min(height, 60)))
             }
             .onEnded { _ in dragStart = nil })
     }
 
     private var swatches: some View {
-        Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 4) {
+        Grid(alignment: .leading, horizontalSpacing: 10 * scale, verticalSpacing: 4 * scale) {
             ForEach(Array(stride(from: 0, to: ThemeColor.allCases.count, by: 2)), id: \.self) { i in
                 GridRow {
                     swatch(ThemeColor.allCases[i])
@@ -411,36 +413,36 @@ struct ThemeDialog: View {
     }
 
     private func swatch(_ c: ThemeColor) -> some View {
-        HStack(spacing: 6) {
-            RoundedRectangle(cornerRadius: 3).fill(model.palette[c].color)
-                .overlay(RoundedRectangle(cornerRadius: 3)
-                    .strokeBorder(selected == c ? Dlg.accent : Color.white.opacity(0.25), lineWidth: selected == c ? 2 : 1))
-                .frame(width: 34, height: 17)
-            Text(c.title).font(Dlg.font).foregroundColor(selected == c ? Dlg.text : Dlg.dim)
+        HStack(spacing: 6 * scale) {
+            RoundedRectangle(cornerRadius: 3 * scale).fill(model.palette[c].color)
+                .overlay(RoundedRectangle(cornerRadius: 3 * scale)
+                    .strokeBorder(selected == c ? Dlg.accent : Color.white.opacity(0.25), lineWidth: (selected == c ? 2 : 1) * scale))
+                .uiFrame(width: 34, height: 17)
+            Text(c.title).uiFont(Dlg.font).foregroundColor(selected == c ? Dlg.text : Dlg.dim)
         }
-        .frame(width: 150, alignment: .leading)
+        .uiFrame(width: 150, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { selected = c }
     }
 
     private func chip(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title).font(Dlg.font).foregroundColor(Dlg.text)
-                .frame(width: 56, height: 20)
-                .background(RoundedRectangle(cornerRadius: 3).fill(Dlg.bar))
+            Text(title).uiFont(Dlg.font).foregroundColor(Dlg.text)
+                .uiFrame(width: 56, height: 20)
+                .background(RoundedRectangle(cornerRadius: 3 * scale).fill(Dlg.bar))
         }
         .buttonStyle(.plain)
     }
 
     private func menu<C: View>(_ title: String, @ViewBuilder content: () -> C) -> some View {
         Menu(content: content) {
-            HStack(spacing: 4) {
-                Text(title).font(Dlg.font)
-                Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+            HStack(spacing: 4 * scale) {
+                Text(title).uiFont(Dlg.font)
+                Image(systemName: "chevron.down").uiFont(7, weight: .bold)
             }
             .foregroundColor(Dlg.text)
-            .frame(width: 70, height: 20)
-            .background(RoundedRectangle(cornerRadius: 3).fill(Dlg.bar))
+            .uiFrame(width: 70, height: 20)
+            .background(RoundedRectangle(cornerRadius: 3 * scale).fill(Dlg.bar))
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -488,14 +490,14 @@ struct LogoMenu: View {
                         row("s:\(p)", "\(p)%", active: p == size) { resize(Self.width(p)) }
                     }
                 }
-                Rectangle().fill(Color.white.opacity(0.12)).frame(width: 1).padding(.vertical, 6)
+                Rectangle().fill(Color.white.opacity(0.12)).uiFrame(width: 1).uiPadding(.vertical, 6)
             }
             column("Theme") {
                 ForEach(ThemePalette.factory, id: \.name) { t in
                     row("f:" + t.name, t.name, active: theme == "f:" + t.name) { model.applyTheme(t.palette) }
                 }
                 if !store.userThemes.isEmpty {
-                    Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1).padding(.vertical, 3)
+                    Rectangle().fill(Color.white.opacity(0.12)).uiFrame(height: 1).uiPadding(.vertical, 3)
                 }
                 ForEach(store.userThemes, id: \.name) { t in
                     row("u:" + t.name, t.name, active: theme == "u:" + t.name) { model.applyTheme(t.palette) }
@@ -503,33 +505,33 @@ struct LogoMenu: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true) // the divider is greedy
-        .padding(4)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Dlg.bg))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .shadow(color: .black.opacity(0.5), radius: 10, y: 4)
+        .uiPadding(.all, 4)
+        .background(RoundedRectangle(cornerRadius: 6 * scale).fill(Dlg.bg))
+        .overlay(RoundedRectangle(cornerRadius: 6 * scale).strokeBorder(Color.black.opacity(0.7), lineWidth: scale))
+        .clipShape(RoundedRectangle(cornerRadius: 6 * scale))
+        .uiShadow(color: .black.opacity(0.5), radius: 10, y: 4)
         #if os(macOS)
         .background(WheelShield())
         #endif
     }
 
     private func column<C: View>(_ title: String, @ViewBuilder content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(title).font(.system(size: 9, weight: .semibold)).foregroundColor(Dlg.dim)
-                .padding(.horizontal, 8).frame(height: 16)
+        VStack(alignment: .leading, spacing: scale) {
+            Text(title).uiFont(9, weight: .semibold).foregroundColor(Dlg.dim)
+                .uiPadding(.horizontal, 8).uiFrame(height: 16)
             content()
         }
-        .frame(width: 120, alignment: .leading)
-        .padding(.horizontal, 2)
+        .uiFrame(width: 120, alignment: .leading)
+        .uiPadding(.horizontal, 2)
     }
 
     private func row(_ id: String, _ title: String, active: Bool, action: @escaping () -> Void) -> some View {
-        Text(title).font(.system(size: 11, weight: active ? .semibold : .regular))
+        Text(title).uiFont(11, weight: active ? .semibold : .regular)
             .foregroundColor(active ? .white : Dlg.text)
             .lineLimit(1).truncationMode(.tail)
-            .padding(.horizontal, 8)
-            .frame(maxWidth: .infinity, minHeight: Self.rowHeight, maxHeight: Self.rowHeight, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 3)
+            .uiPadding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: Self.rowHeight * scale, maxHeight: Self.rowHeight * scale, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 3 * scale)
                 .fill(active ? Dlg.accent : hovered == id ? Color.white.opacity(0.1) : Color.clear))
             .contentShape(Rectangle())
             .onHover { inside in
@@ -550,6 +552,7 @@ private struct ColorEditor: View {
     @State private var s: Double
     @State private var v: Double
     @State private var hex: String
+    @Environment(\.editorScale) private var scale
 
     init(rgb: Binding<RGB>) {
         _rgb = rgb
@@ -561,20 +564,20 @@ private struct ColorEditor: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            VStack(spacing: 6) {
-                svSquare.frame(width: 210, height: 84)
-                hueBar.frame(width: 210, height: 12)
+        HStack(alignment: .top, spacing: 10 * scale) {
+            VStack(spacing: 6 * scale) {
+                svSquare.uiFrame(width: 210, height: 84)
+                hueBar.uiFrame(width: 210, height: 12)
             }
-            VStack(alignment: .leading, spacing: 6) {
-                RoundedRectangle(cornerRadius: 3).fill(rgb.color)
-                    .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
-                    .frame(width: 90, height: 56)
+            VStack(alignment: .leading, spacing: 6 * scale) {
+                RoundedRectangle(cornerRadius: 3 * scale).fill(rgb.color)
+                    .overlay(RoundedRectangle(cornerRadius: 3 * scale).strokeBorder(Color.white.opacity(0.25), lineWidth: scale))
+                    .uiFrame(width: 90, height: 56)
                 TextField("#RRGGBB", text: $hex)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 10, design: .monospaced)).foregroundColor(Dlg.text)
-                    .padding(.horizontal, 6).frame(width: 90, height: 20)
-                    .background(RoundedRectangle(cornerRadius: 3).fill(Dlg.field))
+                    .uiFont(10, design: .monospaced).foregroundColor(Dlg.text)
+                    .uiPadding(.horizontal, 6).uiFrame(width: 90, height: 20)
+                    .background(RoundedRectangle(cornerRadius: 3 * scale).fill(Dlg.field))
                     .onSubmit {
                         guard let c = RGB(hex: hex) else { return hex = rgb.hex }
                         rgb = c
@@ -596,9 +599,9 @@ private struct ColorEditor: View {
                 Color(hue: h, saturation: 1, brightness: 1)
                 LinearGradient(colors: [.white, .white.opacity(0)], startPoint: .leading, endPoint: .trailing)
                 LinearGradient(colors: [.black.opacity(0), .black], startPoint: .top, endPoint: .bottom)
-                Circle().strokeBorder(Color.white, lineWidth: 1.5)
-                    .background(Circle().strokeBorder(Color.black.opacity(0.5), lineWidth: 2.5))
-                    .frame(width: 10, height: 10)
+                Circle().strokeBorder(Color.white, lineWidth: 1.5 * scale)
+                    .background(Circle().strokeBorder(Color.black.opacity(0.5), lineWidth: 2.5 * scale))
+                    .uiFrame(width: 10, height: 10)
                     .position(x: s * g.size.width, y: (1 - v) * g.size.height)
             }
             .contentShape(Rectangle())
@@ -608,7 +611,7 @@ private struct ColorEditor: View {
                 push()
             })
         }
-        .clipShape(RoundedRectangle(cornerRadius: 3))
+        .clipShape(RoundedRectangle(cornerRadius: 3 * scale))
     }
 
     private var hueBar: some View {
@@ -616,9 +619,9 @@ private struct ColorEditor: View {
             ZStack(alignment: .leading) {
                 LinearGradient(colors: stride(from: 0.0, through: 1.0, by: 1.0 / 6).map { Color(hue: $0, saturation: 1, brightness: 1) },
                                startPoint: .leading, endPoint: .trailing)
-                RoundedRectangle(cornerRadius: 2).strokeBorder(Color.white, lineWidth: 1.5)
-                    .frame(width: 6, height: g.size.height + 2)
-                    .offset(x: h * (g.size.width - 6))
+                RoundedRectangle(cornerRadius: 2 * scale).strokeBorder(Color.white, lineWidth: 1.5 * scale)
+                    .frame(width: 6 * scale, height: g.size.height + 2 * scale)
+                    .offset(x: h * (g.size.width - 6 * scale))
             }
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { d in
@@ -626,6 +629,6 @@ private struct ColorEditor: View {
                 push()
             })
         }
-        .clipShape(RoundedRectangle(cornerRadius: 3))
+        .clipShape(RoundedRectangle(cornerRadius: 3 * scale))
     }
 }

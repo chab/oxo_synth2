@@ -697,7 +697,7 @@ void DesktopEditor::buildLearnRects() {
 void DesktopEditor::setLearn(bool on) {
     if(on && browser_) closeBrowser(); // SynthModel.toggleLearn
     midiLearn_=on;
-    learnTarget_=learnPrevTarget_=-1;
+    learnTarget_=-1;
     if(on) {
         if(hooks_.lastCC) lastCcToken_=hooks_.lastCC(hooks_.ctx);
         for(int id=0;id<kLearnCount;id++) learnCC_[size_t(id)]=hooks_.midiCC ? hooks_.midiCC(hooks_.ctx,id) : 0;
@@ -2011,19 +2011,16 @@ void DesktopEditor::mouseDown(float x,float y,bool doubleClick) {
     // Learn mode: a hotspot takes the click (the controls under it stop
     // taking input); the others (volume, ctrl src / assign menus) still work.
     if(const int id=midiLearn_ ? learnHit(x,y) : -1; id>=0) {
+        // A double click clears its CC; the control stays armed (the
+        // first click of the pair armed it), like the mac / iPad editor.
+        learnSelect(id);
         if(doubleClick) {
-            // The first click of the pair armed it: the mac's double tap
-            // leaves the selection as it was.
             if(learnCC_[size_t(id)] && hooks_.setMidiCC) {
                 hooks_.setMidiCC(hooks_.ctx,id,0);
                 flash(L"MIDI LEARN: "+toWide(hooks_.paramName ? hooks_.paramName(hooks_.ctx,id) : "")+L" cleared");
             }
             learnCC_[size_t(id)]=0;
-            learnSelect(learnPrevTarget_);
             invalidate(learnRects_[size_t(id)]);
-        } else {
-            learnPrevTarget_=learnTarget_;
-            learnSelect(id);
         }
         return;
     }
@@ -2052,6 +2049,7 @@ void DesktopEditor::mouseDown(float x,float y,bool doubleClick) {
             }
             dragId_=c.id;dragStartY_=y;dragStartValue_=value(c.id);
             if(hooks_.beginEdit)hooks_.beginEdit(hooks_.ctx,c.id);
+            show(c.id);
             SetCapture(window_);return;
         case Kind::Toggle:
         case Kind::Badge: setValueOnce(c.id,value(c.id)?0:1);return;
@@ -2410,13 +2408,13 @@ void DesktopEditor::tick() {
         }
     }
     // SynthModel.incomingCC: every new CC is consumed (none learned while
-    // nothing is armed), CC 1..127 only; the control stays armed.
+    // nothing is armed), CC 1..119 only (s2::IsLearnableCC); the control stays armed.
     if(midiLearn_ && hooks_.lastCC) {
         const int token=hooks_.lastCC(hooks_.ctx);
         if(token!=lastCcToken_ && token>0) {
             lastCcToken_=token;
             const int cc=token&127;
-            if(learnTarget_>=0 && learnTarget_<kLearnCount && cc>=1 && learnCC_[size_t(learnTarget_)]!=cc && hooks_.setMidiCC) {
+            if(learnTarget_>=0 && learnTarget_<kLearnCount && s2::IsLearnableCC(cc) && learnCC_[size_t(learnTarget_)]!=cc && hooks_.setMidiCC) {
                 hooks_.setMidiCC(hooks_.ctx,learnTarget_,cc);
                 learnCC_[size_t(learnTarget_)]=cc;
                 invalidate(learnRects_[size_t(learnTarget_)]);
