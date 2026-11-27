@@ -867,11 +867,18 @@ by CMake (major*65536 + minor*256 + patch, 65536 = 1.0); the iPad plist
   / `.font(.system(size: 11))` in the panel is a bug (fine at 100 %, wrong
   elsewhere). Exception: a `.borderlessButton` Menu label keeps PLAIN
   `.font` / `.frame` on its Text (AppKit rebuilds it from them; a `ui*`
-  wrapper hides them, `MenuDisplay`). Exception 2, by choice: `KnobFace`
-  (body, ticks, dial; not its label) is drawn at design size and
-  STRETCHED (`scaleEffect`) as before: laid out at scale, the 2 pt dial's
-  edges stepped visibly while it turned (user, 2026-11-26); +1 plain
-  layer per knob above 100 %, CPU unchanged. Check: `SNAP_W=770` snapshots are
+  wrapper hides them, `MenuDisplay`). `KnobFace` is drawn at scale too
+  (2026-11-27; it was stretched for a day: the crisp 2 pt dial's edges
+  stepped visibly while it turned, user); its DIAL alone gets a small blur
+  above 100 % (`KnobFace.dialFeather`, 0 at 100 % = byte-identical, ~half
+  the stretched edge's softness above). CPU per update = the stretched
+  version's (the bench below, 770 / 1155 / 1540 pt; the knob canvases
+  are not the cost, SwiftUI's update of the view graph is: splitting the
+  knob into a static face + a dial canvas or a rotated dial layer was
+  +5 %, more views). A snapshot (`cacheDisplay`) draws a `scaleEffect`
+  sharp: judge rendering on a LIVE capture, `CGWindowListCreateImage`
+  (via dlsym, obsoleted in the SDK) of the tool's own on-screen window
+  needs no screen-recording permission. Check: `SNAP_W=770` snapshots are
   byte-identical before / after a refactor (scale 1; the tool reads YOUR
   themes.json: pin `themeText = ThemePalette.synth2.stateText` in a temp
   copy of the mock when comparing across time), then compare

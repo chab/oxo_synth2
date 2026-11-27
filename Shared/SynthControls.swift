@@ -340,9 +340,10 @@ struct KnobView: View {
 /// ~12 layers + live CoreAnimation filters per knob, which Logic's
 /// out-of-process editor host composited again on every panel change (the
 /// voice grid while playing): Logic's own UI lagged.
-/// The one widget NOT laid out at scale: drawn at its design size and
-/// stretched (`scaleEffect`), as before issue #19 — crisp, the 2 pt dial's
-/// edges stepped visibly while it turned (user, 2026-11-26).
+/// Drawn at the size it is shown, like the rest (issue #19). Only the dial
+/// is feathered above 100 %: with a 1-pixel edge it stepped visibly while
+/// turning (user, 2026-11-26); `dialFeather` softens it about halfway to
+/// the old stretched rendering, nothing at 100 %.
 private struct KnobFace: View {
     let theme: Theme
     let size: CGFloat
@@ -352,7 +353,8 @@ private struct KnobFace: View {
     var body: some View {
         // ticks reach 0.65 x size from the centre, the shadow ~3 pt past the body
         let side = (size * 0.65 + 3) * 2
-        Canvas { ctx, box in
+        let feather = Self.dialFeather(scale)
+        PanelCanvas { ctx, box in
             let c = CGPoint(x: box.width / 2, y: box.height / 2)
             // Oxo Simple's 11-dot ring over the -140..+140 travel, at
             // 1.3 x the body radius, pulled in 1.5 pt.
@@ -377,13 +379,22 @@ private struct KnobFace: View {
                 dial.translateBy(x: c.x, y: c.y)
                 dial.rotate(by: .degrees(-140 + 280 * frac))
                 let h = size * 0.36
+                if feather > 0 { dial.addFilter(.blur(radius: feather)) }
                 dial.fill(Path(roundedRect: CGRect(x: -1, y: -size * 0.24 - h / 2, width: 2, height: h), cornerRadius: 1),
                           with: .color(theme.knobDial))
             }
         }
-        .frame(width: side, height: side)
-        .scaleEffect(scale)
+        .uiFrame(width: side, height: side)
         .uiFrame(width: size, height: size)
+    }
+
+    /// Blur radius of the dial in design points. The stretched rendering's
+    /// edge grew with the scale (a 1-pixel edge magnified), so does this:
+    /// 0 at 100 %, 0.10 at 150 %, 0.12 at 200 %, about half the stretched
+    /// edge's softness (0.15 ~ all of it at 200 %; measured on live window
+    /// captures, a snapshot's cacheDisplay draws scaleEffect sharp).
+    static func dialFeather(_ scale: CGFloat) -> CGFloat {
+        scale > 1 ? 0.14 * (scale * scale - 1).squareRoot() / scale : 0
     }
 }
 
