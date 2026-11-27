@@ -280,7 +280,7 @@ void OxoSynth2Controller::ThemeChanged(const std::string &theme) {
 }
 
 void OxoSynth2Controller::SetMidiCC(int id, int32_t cc) {
-    if (!s2::IsLearnable(id) || cc < 0 || cc > 127 || learnCc_[size_t(id)] == cc) return;
+    if (!s2::IsLearnable(id) || (cc != 0 && !s2::IsLearnableCC(cc)) || learnCc_[size_t(id)] == cc) return;
     learnCc_[size_t(id)] = cc;
     storage::SaveMidiLearn(learnCc_);
     if (Vst::IMessage *message = allocateMessage()) {

@@ -65,7 +65,7 @@ public:
     }
     int32_t MidiCC(int id) override { return id >= 0 && id < s2::kParamCount ? learnCc_[size_t(id)].load() : 0; }
     void SetMidiCC(int id, int32_t cc) override {
-        if (!s2::IsLearnable(id) || cc < 0 || cc > 127) return;
+        if (!s2::IsLearnable(id) || (cc != 0 && !s2::IsLearnableCC(cc))) return;
         learnCc_[size_t(id)] = cc;
         s2::MidiLearnTable t{};
         for (int i = 0; i < s2::kParamCount; ++i) t[size_t(i)] = learnCc_[size_t(i)];

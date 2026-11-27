@@ -38,3 +38,21 @@ OXO_TEST(MidiLearnRoundTrip) {
     OXO_EXPECT_EQ(DecodeMidiLearn("{\"bogus\": 3, \"filter_freq\": 300, \"pan\":10}")[kPan], 10);
     OXO_EXPECT_EQ(DecodeMidiLearn("{\"filter_freq\": 300}")[kFilterFreq], 0);
 }
+
+// Channel mode messages (120..127) are never learned: hosts send All Notes
+// Off (123) on stop, which took over the armed control.
+OXO_TEST(MidiLearnSkipsChannelModeMessages) {
+    OXO_EXPECT(!IsLearnableCC(0));
+    OXO_EXPECT(IsLearnableCC(1));
+    OXO_EXPECT(IsLearnableCC(119));
+    OXO_EXPECT(!IsLearnableCC(120));
+    OXO_EXPECT(!IsLearnableCC(123));
+    OXO_EXPECT(!IsLearnableCC(127));
+    MidiLearnTable t{};
+    t[kFilterFreq] = 123;
+    t[kFilterRes] = 119;
+    const MidiLearnTable back = DecodeMidiLearn(EncodeMidiLearn(t));
+    OXO_EXPECT_EQ(back[kFilterFreq], 0);
+    OXO_EXPECT_EQ(back[kFilterRes], 119);
+    OXO_EXPECT_EQ(DecodeMidiLearn("{\"filter_freq\": 123}")[kFilterFreq], 0);
+}

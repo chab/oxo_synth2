@@ -829,7 +829,7 @@ by CMake (major*65536 + minor*256 + patch, 65536 = 1.0); the iPad plist
   once, a double click clears its CC and it STAYS armed (all editors). SwiftUI: never `.onTapGesture(count: 2)` next to a single tap
   where the single one must be instant: SwiftUI holds it for the
   double-click interval (learn arming took ~0.5 s after the release);
-  detect the second press by hand (`Learnable`). The next CC (any channel, 1..127) is assigned, one CC
+  detect the second press by hand (`Learnable`). The next CC (any channel, 1..119, `IsLearnableCC`: 120..127 are channel mode messages hosts send by themselves, e.g. Live's All Notes Off on stop took the armed control) is assigned, one CC
   may drive several params; "Exit MIDI Learn" chip; never survives the
   editor. Table = PLUGIN-GLOBAL `midi_mappings.json` ({param key: cc}),
   empty by default. The controller owns + saves it and sends "OxoMidiLearn"

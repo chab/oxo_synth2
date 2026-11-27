@@ -2408,13 +2408,13 @@ void DesktopEditor::tick() {
         }
     }
     // SynthModel.incomingCC: every new CC is consumed (none learned while
-    // nothing is armed), CC 1..127 only; the control stays armed.
+    // nothing is armed), CC 1..119 only (s2::IsLearnableCC); the control stays armed.
     if(midiLearn_ && hooks_.lastCC) {
         const int token=hooks_.lastCC(hooks_.ctx);
         if(token!=lastCcToken_ && token>0) {
             lastCcToken_=token;
             const int cc=token&127;
-            if(learnTarget_>=0 && learnTarget_<kLearnCount && cc>=1 && learnCC_[size_t(learnTarget_)]!=cc && hooks_.setMidiCC) {
+            if(learnTarget_>=0 && learnTarget_<kLearnCount && s2::IsLearnableCC(cc) && learnCC_[size_t(learnTarget_)]!=cc && hooks_.setMidiCC) {
                 hooks_.setMidiCC(hooks_.ctx,learnTarget_,cc);
                 learnCC_[size_t(learnTarget_)]=cc;
                 invalidate(learnRects_[size_t(learnTarget_)]);
