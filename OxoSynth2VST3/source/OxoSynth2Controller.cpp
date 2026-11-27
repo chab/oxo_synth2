@@ -47,7 +47,7 @@ tresult PLUGIN_API OxoSynth2Controller::initialize(FUnknown *context) {
         const s2::ParamInfo &p = s2::kParams[i];
         Vst::String128 title;
         UString(title, str16BufferSize(Vst::String128)).fromAscii(p.name);
-        int32 flags = p.automatable ? Vst::ParameterInfo::kCanAutomate : Vst::ParameterInfo::kIsReadOnly;
+        int32 flags = p.automatable ? Vst::ParameterInfo::kCanAutomate : 0;
         if (p.max - p.min > 4096) flags |= Vst::ParameterInfo::kIsHidden;
         auto *param = new Vst::RangeParameter(title, Vst::ParamID(i), nullptr, p.min, p.max, p.def, p.max - p.min, flags);
         param->setPrecision(0);
