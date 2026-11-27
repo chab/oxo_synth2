@@ -222,6 +222,10 @@ by CMake (major*65536 + minor*256 + patch, 65536 = 1.0); the iPad plist
   folder>`, library = the desktop's Documents (`XDG_DOCUMENTS_DIR` in
   user-dirs.dirs, else ~/Documents). Compile check of our Linux files:
   `-Wall -Wextra` clean, GCC 12+.
+- `CHANGELOG.md` — release notes, newest first: `## <version> (<build>) — <date>`
+  with short user-facing lines (platform prefix when not all); one section per
+  shipped build (= the GitHub Release text). Add the entry with the version
+  bump.
 - `docs/images/` — README pictures (`synth2_preview.jpg`).
 - `third_party/` — submodules `vst3sdk` v3.8.1_build_84 (MIT) +
   `AudioUnitSDK` 1.4.0 (Apache 2.0); remaining patches: auwrapper hidden
