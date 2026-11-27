@@ -142,28 +142,37 @@ public:
         if (type != type_) snap_ = true, type_ = type;
         if (type == 4) return;
         const int knot = hz > kFastHz ? 32 : 64;
-        for (int i = 0; i < n; ++i, ++at) {
-            const int o = int(at & 255);
-            if (type == 2 || type == 3) {
+        if (type == 2 || type == 3) {
+            // a linear ramp to the target, ending at the next boundary: its
+            // step is computed when the target (or the block) changes
+            for (int i = 0; i < n; ++i, ++at) {
+                const int o = int(at & 255);
                 if (o == 0 || snap_) latch_ = v[i];
                 const double target = o < knot ? latch_ : v[i];
-                if (snap_) cur_ = target, snap_ = false;
-                cur_ += (target - cur_) / double(std::max<int64_t>(1, std::min<int64_t>(256 - o, blockEnd - at)));
-                v[i] = cur_;
-            } else {
-                if ((at & (knot - 1)) == 0 || snap_) {
-                    from_ = snap_ ? v[i] : from_ + (to_ - from_) * std::min(1.0, since_ / len_);
-                    to_ = v[i], since_ = 0, len_ = knot, snap_ = false;
+                if (snap_) cur_ = target_ = target, left_ = 0, snap_ = false;
+                if (target != target_ || o == 0) {
+                    left_ = std::max<int64_t>(1, std::min<int64_t>(256 - o, blockEnd - at));
+                    step_ = (target - cur_) / double(left_), target_ = target;
                 }
-                v[i] = from_ + (to_ - from_) * std::min(1.0, since_++ / len_);
+                if (left_ > 0) cur_ = --left_ ? cur_ + step_ : target_;
+                v[i] = cur_;
             }
+            return;
+        }
+        for (int i = 0; i < n; ++i, ++at) {
+            if ((at & (knot - 1)) == 0 || snap_) {
+                from_ = snap_ ? v[i] : since_ < len_ ? from_ + step_ * since_ : to_;
+                to_ = v[i], since_ = 0, len_ = knot, step_ = (to_ - from_) / knot, snap_ = false;
+            }
+            v[i] = since_ < len_ ? from_ + step_ * since_++ : to_;
         }
     }
 
 private:
     bool snap_ = true;
-    double cur_ = 0, latch_ = 0, from_ = 0, to_ = 0, since_ = 0, len_ = 32;
-    int type_ = -1;
+    double cur_ = 0, latch_ = 0, target_ = 0, step_ = 0, from_ = 0, to_ = 0;
+    int64_t left_ = 0;
+    int since_ = 0, len_ = 32, type_ = -1;
 };
 
 } // namespace oxo::s2
