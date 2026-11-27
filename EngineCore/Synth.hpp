@@ -168,8 +168,8 @@ private:
     }
 
     void KeySyncRestart() {
-        if (values_[kLfo1KeySync]) lfo_[0].Restart();
-        if (values_[kLfo2KeySync]) lfo_[1].Restart();
+        if (values_[kLfo1KeySync]) lfo_[0].Restart(), lfoAmp_[0].Snap();
+        if (values_[kLfo2KeySync]) lfo_[1].Restart(), lfoAmp_[1].Snap();
     }
 
     // (measured) key sync restarts the LFOs when no key was held; arp steps
@@ -469,6 +469,11 @@ public:
                                pitch ? lfoSteps_[k] : nullptr, Lfo::PitchSteps(values_[k ? kLfo2Depth : kLfo1Depth]),
                                dest == 4);
                 if (values_[k ? kLfo2On : kLfo1On]) lfo[k] = lfoBuf_[k];
+                // (on amp: the original's control grid, see LfoAmpShaper)
+                if (lfo[k] && dest == 4 && values_[k ? kLfo2Depth : kLfo1Depth] > 0)
+                    lfoAmp_[k].Process(lfoBuf_[k], n, values_[k ? kLfo2Type : kLfo1Type], hz, blockPos_ + pos, blockEnd_);
+                else
+                    lfoAmp_[k].Snap();
                 lfoSteps[k] = pitch ? lfoSteps_[k] : nullptr;
             }
             const bool sounding = std::any_of(voices_.begin(), voices_.end(), [](const Voice &v) { return v.Active(); });
@@ -703,6 +708,7 @@ private:
     bool heard_ = false; // a voice sounded at the end of the last Render (gain glide)
     double volume_ = 1.0, volumeTarget_ = 1.0; // VolumeGain, ramped per Render
     Lfo lfo_[2];
+    LfoAmpShaper lfoAmp_[2];
     TempoDelay delay_;
     Chorus chorus_;
     static constexpr int kEchoChunk = 256;

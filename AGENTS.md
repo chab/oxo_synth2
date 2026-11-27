@@ -1273,6 +1273,23 @@ original AU; keeps both renders for listening).
   cutoff / FM / pw / pan = the law on the depth-weighted SUM (Σ d·u for
   cutoff / FM, Σ d·lfo for pw / pan; pan unclamped, pw clamps); amp =
   PRODUCT of the per-LFO gains.
+- AN LFO ON AMP MOVES ON A CONTROL GRID (2026-11-27, `LfoAmpShaper` in
+  Lfo.hpp, pulse-probe gain = render with the LFO / without, key 24 pw 64:
+  flat plateaus): knots every N samples of the host block, N = 64 up to
+  10.00 Hz, 32 above (10.05 Hz;
+  in Hz, tempo sync too; samples, same at 48 / 96 kHz). Saw / tri / sine:
+  a knot's value is reached at the next knot, linearly (N lag, the saw's
+  jump = an N ramp, the tri's corners cut; slow ones now within 0.001
+  of s1, were 0.05 off). Square / S&H: a step at t ramps linearly from t
+  (sample-exact) to the next 256 boundary (AmpGain's grid); a step in a
+  256 block's first N samples starts at N. Ours jumped in one sample:
+  the audible clicks of a fast square on amp (user patch, square 19.8 Hz
+  depth 106: HF above 5 kHz -67 dB vs s1's -76, now -75.5). Key-sync
+  restart = no ramp. Smooth random unchanged (its amp-form jumps ramp
+  over N samples or to the boundary, sometimes 155: rule not found).
+  Cutoff with a square: no such ramp (s1 jumps too). OPEN (seen there):
+  at speed ≥ ~115 s1's LFO is a little faster than `SpeedHz` (square half
+  period -0.15 % at 120, 127 = exactly 176.000 samples vs 176.36).
 - Phase knobs: osc phase (91) 0 = FREE: a voice SLOT's oscillators are
   never reset, they carry on from the slot's last note (frozen while idle)
   from per-slot values set at instance creation (`measure_slot_phase.py` →

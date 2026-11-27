@@ -79,3 +79,41 @@ OXO_TEST(LfoRandomRestartDrawsANewValue) {
     OXO_EXPECT_EQ(q[0], -b);
     OXO_EXPECT(std::fabs(q[1] - -(a + b) / 2) < 1e-12);
 }
+
+// On amp (measured, pulse-probe gain): a square / S&H step ramps linearly to
+// the next 256-sample boundary (a step before the first knot starts there);
+// saw / triangle / sine reach each knot's value at the next knot (32 samples
+// above 10 Hz, 64 up to it); a restart snaps.
+OXO_TEST(LfoOnAmpMovesOnTheControlGrid) {
+    std::vector<double> v(512);
+    const auto run = [&](LfoAmpShaper &s, int type, double hz, double before, int step, double after) {
+        for (int i = 0; i < 512; ++i) v[size_t(i)] = i < step ? before : after;
+        s.Process(v.data(), 512, type, hz, 0, 512);
+    };
+    LfoAmpShaper sq;
+    run(sq, 2, 20.0, 1.0, 156, -1.0); // a step at 156: 100 samples to the boundary
+    OXO_EXPECT_EQ(v[155], 1.0);
+    OXO_EXPECT(std::fabs(v[156] - (1.0 - 2.0 / 100)) < 1e-12);
+    OXO_EXPECT(std::fabs(v[205] - 0.0) < 1e-12);
+    OXO_EXPECT(std::fabs(v[255] - -1.0) < 1e-12);
+    OXO_EXPECT_EQ(v[300], -1.0);
+    LfoAmpShaper early, earlySlow;
+    run(early, 2, 20.0, -1.0, 10, 1.0); // before the first knot (32 at 20 Hz): from 32
+    OXO_EXPECT_EQ(v[31], -1.0);
+    OXO_EXPECT(std::fabs(v[32] - (-1.0 + 2.0 / 224)) < 1e-12);
+    run(earlySlow, 3, 2.0, -1.0, 10, 1.0); // 64 at 2 Hz
+    OXO_EXPECT_EQ(v[63], -1.0);
+    OXO_EXPECT(std::fabs(v[64] - (-1.0 + 2.0 / 192)) < 1e-12);
+    LfoAmpShaper saw, slowSaw;
+    run(saw, 0, 20.0, -1.0, 40, 1.0); // a jump at 40: knot 64 takes it, reached at 96
+    OXO_EXPECT_EQ(v[63], -1.0);
+    OXO_EXPECT_EQ(v[64], -1.0);
+    OXO_EXPECT(std::fabs(v[80] - 0.0) < 1e-12);
+    OXO_EXPECT_EQ(v[96], 1.0);
+    run(slowSaw, 0, 2.0, -1.0, 40, 1.0); // 64-sample knots: 64 .. 128
+    OXO_EXPECT(std::fabs(v[96] - 0.0) < 1e-12);
+    OXO_EXPECT_EQ(v[128], 1.0);
+    sq.Snap();
+    run(sq, 2, 20.0, 0.5, 0, 0.5);
+    OXO_EXPECT_EQ(v[0], 0.5);
+}
